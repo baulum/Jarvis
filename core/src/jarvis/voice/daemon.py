@@ -41,8 +41,9 @@ from jarvis.voice.wakeword import CHUNK, RATE, WakeWordDetector
 
 logger = logging.getLogger("jarvis.voice")
 PLAY_RATE = 24000
-_END_PHRASES = re.compile(r"\b(danke,? das war'?s|das wär'?s|das war alles|stopp|ende|tschüss|thanks,? that'?s all)\b",
-                          re.I)
+_END_PHRASES = re.compile(
+    r"\b(danke,? das war'?s|das wär'?s|das war alles|stopp|ende|tschüss|thanks,? that'?s all)\b", re.I
+)
 
 
 @dataclass
@@ -59,8 +60,9 @@ class VoiceDaemon:
         self.cfg = settings.voice
         self.base = f"http://127.0.0.1:{settings.server.port}"
         self.token = (settings.paths.data_dir / "voice.token").read_text().strip()
-        self.http = httpx.AsyncClient(base_url=self.base, headers={"Authorization": f"Bearer {self.token}"},
-                                      timeout=httpx.Timeout(120, connect=5))
+        self.http = httpx.AsyncClient(
+            base_url=self.base, headers={"Authorization": f"Bearer {self.token}"}, timeout=httpx.Timeout(120, connect=5)
+        )
         self.detector = WakeWordDetector(settings.paths.data_dir / "models", threshold=self.cfg.wake_threshold)
         self.loop: asyncio.AbstractEventLoop | None = None
         self.mic_q: asyncio.Queue[npt.NDArray[np.int16]] = asyncio.Queue(maxsize=200)
@@ -89,8 +91,9 @@ class VoiceDaemon:
 
     def open_mic(self) -> None:
         if self.stream is None:
-            self.stream = sd.InputStream(samplerate=RATE, channels=1, dtype="int16", blocksize=CHUNK,
-                                         callback=self._callback)
+            self.stream = sd.InputStream(
+                samplerate=RATE, channels=1, dtype="int16", blocksize=CHUNK, callback=self._callback
+            )
             self.stream.start()
 
     def close_mic(self) -> None:
@@ -110,9 +113,17 @@ class VoiceDaemon:
             return
         self._last_status = now
         try:
-            await self.http.post("/api/voice/status", json={
-                "state": self.state, "muted": self.muted, "wake_word": True, "level": round(self._level, 3),
-                "mic_permission": "granted" if self.stream is not None or self.muted else "unknown", "detail": detail})
+            await self.http.post(
+                "/api/voice/status",
+                json={
+                    "state": self.state,
+                    "muted": self.muted,
+                    "wake_word": True,
+                    "level": round(self._level, 3),
+                    "mic_permission": "granted" if self.stream is not None or self.muted else "unknown",
+                    "detail": detail,
+                },
+            )
         except httpx.HTTPError:
             pass
 
@@ -127,7 +138,7 @@ class VoiceDaemon:
                     logger.info("Connected to core event stream")
                     async for raw in ws:
                         await self._on_event(json.loads(raw))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("Event stream lost (%s); reconnecting", e)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30)
@@ -190,9 +201,9 @@ class VoiceDaemon:
 
         def cb(outdata: Any, frames: int, time_info: Any, status: Any) -> None:
             nonlocal pos
-            chunk = audio[pos:pos + frames]
-            outdata[:len(chunk), 0] = chunk
-            outdata[len(chunk):, 0] = 0
+            chunk = audio[pos : pos + frames]
+            outdata[: len(chunk), 0] = chunk
+            outdata[len(chunk) :, 0] = 0
             pos += frames
             if pos >= len(audio) and self.loop is not None:
                 self.loop.call_soon_threadsafe(done.set)
@@ -260,8 +271,9 @@ class VoiceDaemon:
                 await self._post_status()
                 collected.append(pcm)
             return np.concatenate(collected) if collected else None
-        vad = EnergyVAD(RATE, silence_ms=self.cfg.end_of_turn_silence_ms, max_utterance_s=self.cfg.max_utterance_s,
-                        min_rms=250)
+        vad = EnergyVAD(
+            RATE, silence_ms=self.cfg.end_of_turn_silence_ms, max_utterance_s=self.cfg.max_utterance_s, min_rms=250
+        )
         started = time.monotonic()
         while True:
             pcm = await self.mic_q.get()
@@ -280,8 +292,9 @@ class VoiceDaemon:
     async def handle_turn(self, audio: npt.NDArray[np.int16]) -> bool:
         """Returns True if the conversation should continue (follow-up window)."""
         await self.set_state("thinking")
-        r = await self.http.post("/api/voice/stt", content=pcm_to_wav(audio, RATE),
-                                 headers={"Content-Type": "audio/wav"})
+        r = await self.http.post(
+            "/api/voice/stt", content=pcm_to_wav(audio, RATE), headers={"Content-Type": "audio/wav"}
+        )
         text = r.json().get("text", "").strip() if r.status_code == 200 else ""
         if not text:
             await self.set_state("idle", "Nichts verstanden")
@@ -292,8 +305,9 @@ class VoiceDaemon:
             return False
         self.turn = Turn()
         try:
-            r = await self.http.post("/api/chat", json={"message": text, "session_id": self.session_id,
-                                                        "channel": "voice"})
+            r = await self.http.post(
+                "/api/chat", json={"message": text, "session_id": self.session_id, "channel": "voice"}
+            )
             r.raise_for_status()
             self.turn.session_id = self.session_id = r.json()["session_id"]
             speaker = asyncio.create_task(self.speak_stream(self.turn))
@@ -318,7 +332,7 @@ class VoiceDaemon:
         events = asyncio.create_task(self.events())
         try:
             self.open_mic()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error("Microphone unavailable: %s", e)
             await self.set_state("error", f"Mikrofon nicht verfügbar: {e}")
         await self.set_state("idle")
@@ -357,7 +371,7 @@ class VoiceDaemon:
 def _earcon() -> None:
     sound = Path("/System/Library/Sounds/Tink.aiff")
     if sound.exists():
-        subprocess.Popen(["afplay", "-v", "0.4", str(sound)])  # noqa: S603
+        subprocess.Popen(["afplay", "-v", "0.4", str(sound)])
 
 
 def main() -> None:

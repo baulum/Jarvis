@@ -11,6 +11,7 @@ VPS-hosted model, ...) can be added without touching the orchestrator.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -92,8 +93,7 @@ class OllamaClient:
         if json_schema is not None:
             body["format"] = json_schema
         t0 = time.perf_counter()
-        r = await self._http.post("/api/chat", json=body)
-        r.raise_for_status()
+        r = await self._post_retry("/api/chat", body)
         data = r.json()
         await record_usage(
             "ollama",
@@ -142,11 +142,25 @@ class OllamaClient:
                         (time.perf_counter() - t0) * 1000,
                     )
 
+    async def _post_retry(self, path: str, body: dict[str, Any], attempts: int = 3) -> httpx.Response:
+        """POST with retries: under memory pressure Ollama may kill/reload a runner (HTTP 500)."""
+        for i in range(attempts):
+            try:
+                r = await self._http.post(path, json=body)
+                if r.status_code < 500 or i == attempts - 1:
+                    r.raise_for_status()
+                    return r
+            except (httpx.ConnectError, httpx.RemoteProtocolError):
+                if i == attempts - 1:
+                    raise
+            logger.warning("Ollama %s failed (attempt %d), retrying", path, i + 1)
+            await asyncio.sleep(1.5 * (i + 1))
+        raise RuntimeError("unreachable")
+
     async def embed(self, model: str, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        r = await self._http.post("/api/embed", json={"model": model, "input": texts, "keep_alive": self.keep_alive})
-        r.raise_for_status()
+        r = await self._post_retry("/api/embed", {"model": model, "input": texts, "keep_alive": self.keep_alive})
         return [list(map(float, v)) for v in r.json()["embeddings"]]
 
     async def warm(self, model: str) -> None:

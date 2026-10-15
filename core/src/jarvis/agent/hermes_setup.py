@@ -14,8 +14,8 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from urllib.parse import urlparse
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import httpx
 import yaml
@@ -165,8 +165,16 @@ class HermesSupervisor:
         env = {k: v for k, v in os.environ.items() if not k.startswith("JARVIS_SECRET")}
         env["PATH"] = f"{Path.home() / '.local/bin'}:{env.get('PATH', '')}"
         return await asyncio.create_subprocess_exec(
-            exe, "gateway", "run", "--replace", stdin=asyncio.subprocess.DEVNULL, stdout=log, stderr=log, env=env,
-            start_new_session=True)
+            exe,
+            "gateway",
+            "run",
+            "--replace",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            env=env,
+            start_new_session=True,
+        )
 
     async def _run(self) -> None:
         await self._wait_core_ready()

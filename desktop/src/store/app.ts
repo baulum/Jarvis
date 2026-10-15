@@ -72,6 +72,8 @@ interface AppState {
   versions: Record<Topic, number>;
   taskInputFields: Record<string, string[]>;
   codingLive: Record<string, CodingLogLine[]>;
+  /** approval id -> chat session id (the REST approval rows do not carry the session). */
+  approvalSessions: Record<string, string>;
   unread: number;
 
   setView: (v: ViewId) => void;
@@ -117,6 +119,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
   taskInputFields: {},
   codingLive: {},
+  approvalSessions: {},
   unread: 0,
 
   setView: (view) => set({ view }),
@@ -155,7 +158,14 @@ export const useApp = create<AppState>((set, get) => ({
   refreshUnread: async () => {
     try {
       const rows = await api.notifications(true);
-      set({ unread: rows.length });
+      // recover approval -> session links from approval notifications
+      const links: Record<string, string> = {};
+      for (const n of rows) {
+        const aid = n.data?.approval_id;
+        const sid = n.data?.session_id;
+        if (typeof aid === "string" && typeof sid === "string") links[aid] = sid;
+      }
+      set((s) => ({ unread: rows.length, approvalSessions: { ...links, ...s.approvalSessions } }));
     } catch {
       // non-critical badge
     }
@@ -223,6 +233,9 @@ export function handleBusEvent(ev: BusEvent): void {
     void st.refreshApprovals();
     debounce("status", 300, () => void st.refreshStatus());
     if (type === "approval.requested") {
+      if (typeof d.approval_id === "string" && typeof d.session_id === "string") {
+        useApp.setState((s) => ({ approvalSessions: { ...s.approvalSessions, [d.approval_id as string]: d.session_id as string } }));
+      }
       st.pushToast({
         tone: "warn",
         title: "Freigabe erforderlich",

@@ -288,6 +288,10 @@ async def skills(st: AppState = StateDep, p: Principal = Reader) -> dict[str, An
             hermes_skills = await st.hermes.skills()
         except Exception as e:
             error = str(e)[:200]
+    if not hermes_skills:
+        # Fallback: read SKILL.md frontmatter from the profile directly — Hermes' /v1/skills
+        # currently fails upstream (TypeError in _find_all_skills, Hermes v0.22.1).
+        hermes_skills = _read_skill_dirs(st.settings.hermes.profile)
     return {
         "hermes": hermes_skills,
         "hermes_error": error,
@@ -295,6 +299,31 @@ async def skills(st: AppState = StateDep, p: Principal = Reader) -> dict[str, An
             {"name": pb.name, "title": pb.title, "description": pb.description} for pb in st.tasks.playbooks.values()
         ],
     }
+
+
+def _read_skill_dirs(profile: str) -> list[dict[str, Any]]:
+    import yaml
+
+    from jarvis.agent.hermes_setup import profile_dir
+
+    out: list[dict[str, Any]] = []
+    for md in sorted(profile_dir(profile).joinpath("skills").glob("**/SKILL.md")):
+        text = md.read_text(encoding="utf-8", errors="replace")
+        meta: dict[str, Any] = {}
+        if text.startswith("---"):
+            try:
+                loaded = yaml.safe_load(text.split("---", 2)[1]) or {}
+                meta = loaded if isinstance(loaded, dict) else {}
+            except yaml.YAMLError:
+                meta = {}
+        out.append(
+            {
+                "name": str(meta.get("name") or md.parent.name),
+                "description": str(meta.get("description") or "")[:300],
+                "category": md.parent.parent.name if md.parent.parent.name != "skills" else "",
+            }
+        )
+    return out
 
 
 @router.get("/connectors")
