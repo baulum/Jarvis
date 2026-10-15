@@ -20,6 +20,8 @@ dependencies = [
     "python-multipart>=0.0.18",
     "playwright>=1.49",
     "psutil>=6.1",
+    "psycopg[binary]>=3.2",
+    "jsonschema>=4.23",
 ]
 
 [project.optional-dependencies]
@@ -30,7 +32,7 @@ voice = [
 ]
 
 [project.scripts]
-jarvis = "jarvis.cli:main"
+jarvisctl = "jarvis.cli:main"
 
 [dependency-groups]
 dev = [

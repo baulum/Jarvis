@@ -1,0 +1,102 @@
+# Roles, tool risk levels and approval rules.
+#
+# Risk levels: read < low < medium < high < critical
+#   read      – no side effects (search, list, status)
+#   low       – local, reversible side effects (open app, write a note)
+#   medium    – changes in external systems that are not yet visible to third parties
+#               (Lexware contact, invoice DRAFT, calendar event, git commit on a branch)
+#   high      – visible to third parties or hard to undo (send e-mail, send invoice,
+#               push/PR, phone call, UI automation typing into other apps, shell commands)
+#   critical  – money, deletion, credentials, production changes
+#
+# A tool call is executed directly when its risk <= the actor's auto_approve level
+# AND the session is not tainted by untrusted content; otherwise an approval is created.
+
+roles:
+  owner:
+    description: Besitzer (gepaartes Desktop-Gerät, CLI)
+    max_risk: critical
+    auto_approve: low
+    can_approve: true
+  operator:
+    description: Weiteres vertrautes Gerät
+    max_risk: high
+    auto_approve: low
+    can_approve: false
+  viewer:
+    description: Nur lesen (z. B. Dashboard auf zweitem Gerät)
+    max_risk: read
+    auto_approve: read
+    can_approve: false
+  telegram_owner:
+    description: Besitzer über verifizierten Telegram-Chat
+    max_risk: high
+    auto_approve: low
+    can_approve: true          # approve via inline buttons (not for critical)
+  phone_owner:
+    description: Besitzer am Telefon, nach PIN-Prüfung
+    max_risk: high
+    auto_approve: low
+    can_approve: true          # spoken confirmation + PIN (not for critical)
+  phone_unverified:
+    description: Anrufer ohne PIN-Prüfung
+    max_risk: read
+    auto_approve: read
+    can_approve: false
+  system:
+    description: Scheduler / interne Jobs
+    max_risk: high
+    auto_approve: low
+    can_approve: false
+
+# Only these roles may approve critical actions (and only from a paired desktop device).
+critical_approval_roles: [owner]
+
+# When untrusted content (web pages, e-mails, documents) entered a session,
+# every non-read tool requires approval for the rest of the session.
+taint_requires_approval: true
+
+approval_ttl_minutes: 1440
+
+# Per-tool overrides (glob patterns). Connector manifests define defaults.
+tools:
+  "shell.*":
+    risk: high
+  "gmail.send*":
+    risk: high
+  "lexware.finalize_invoice":
+    risk: critical
+  "lexware.send_invoice":
+    risk: high
+  "mac.applescript":
+    enabled: false
+  "files.delete*":
+    risk: critical
+
+# Shell connector allowlist: executables Jarvis may run (arguments are passed as an
+# argv list, never through a shell). Anything else is refused.
+shell_allowlist:
+  - ls
+  - pwd
+  - git
+  - npm
+  - pnpm
+  - node
+  - python3
+  - uv
+  - brew
+  - df
+  - du
+  - uptime
+  - sw_vers
+  - mdfind
+  - open
+  - say
+  - pmset
+  - networksetup
+
+rate_limits:
+  tool_calls_per_minute: 60
+  high_risk_per_hour: 30
+  api_requests_per_minute: 600
+  login_attempts_per_hour: 10

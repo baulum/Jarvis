@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>de</string>
+	<key>CFBundleExecutable</key>
+	<string>JarvisBridge</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.jarvis.bridge</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>JarvisBridge</string>
+	<key>CFBundleDisplayName</key>
+	<string>J.A.R.V.I.S. Bridge</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>J.A.R.V.I.S. Bridge steuert auf deinen Wunsch andere Apps per AppleScript, z. B. um Fenster zu öffnen oder Aktionen auszuführen.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>J.A.R.V.I.S. Bridge erstellt auf deine Anfrage Bildschirmfotos, damit der Assistent sehen kann, was auf dem Bildschirm passiert.</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>J.A.R.V.I.S. Bridge liest Bedienelemente anderer Apps und führt Klicks und Tastatureingaben aus, wenn du den Assistenten darum bittest.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>J.A.R.V.I.S. Bridge organisiert auf deine Anfrage Dateien auf dem Schreibtisch.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>J.A.R.V.I.S. Bridge organisiert auf deine Anfrage Dateien im Dokumente-Ordner.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>J.A.R.V.I.S. Bridge organisiert auf deine Anfrage Dateien im Downloads-Ordner.</string>
+</dict>
+</plist>

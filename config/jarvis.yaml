@@ -1,0 +1,116 @@
+# J.A.R.V.I.S. main configuration.
+# Secrets never live here: they are stored in the macOS Keychain (service "jarvis")
+# and managed with `jarvisctl secret set <name>` or the Connector Hub in the app.
+# Every value can be overridden with an environment variable JARVIS__SECTION__KEY
+# (e.g. JARVIS__SERVER__PORT=9000).
+
+server:
+  host: 127.0.0.1          # keep loopback-only locally; on a VPS put a TLS reverse proxy in front
+  port: 8765
+  public_base_url: ""      # e.g. https://jarvis.example.com — required for Twilio webhooks
+  cors_origins:
+    - tauri://localhost
+    - http://tauri.localhost
+    - http://localhost:1420
+    - http://127.0.0.1:1420
+
+paths:
+  data_dir: ~/Library/Application Support/Jarvis
+  log_dir: ~/Library/Logs/Jarvis
+  vault_dir: ~/Documents/Jarvis Vault           # Obsidian vault (plain Markdown)
+  workspaces_dir: ~/Developer/Jarvis-Workspaces # coding jobs / git worktrees
+  projects_dir: ~/Developer/Projects            # customer projects created by playbooks
+
+database:
+  host: localhost
+  port: 5432
+  name: jarvis
+  user: jarvis
+  password_secret: postgres   # Keychain account holding the DB password
+
+llm:
+  ollama_url: http://127.0.0.1:11434
+  # Agentic model used by Hermes (Modelfile alias of qwen3.5:4b with num_ctx 65536)
+  agent_model: jarvis-brain
+  # Fast model for internal tasks (memory extraction, summaries) — same model to avoid swapping
+  utility_model: jarvis-brain
+  embedding_model: qwen3-embedding:0.6b
+  embedding_dimensions: 1024
+  keep_alive: 30m
+
+hermes:
+  enabled: true
+  profile: jarvis
+  api_url: http://127.0.0.1:8642
+  api_key_secret: hermes-api-key
+  request_timeout_s: 300
+
+session:
+  idle_timeout_minutes: 120   # sessions expire after inactivity
+  max_history_messages: 30
+
+voice:
+  enabled: true
+  language: de
+  wake_word: hey_jarvis
+  wake_threshold: 0.5
+  stt:
+    provider: whisper_cpp
+    server_url: http://127.0.0.1:8178
+    model: ggml-large-v3-turbo-q5_0.bin
+  tts:
+    provider: macos            # macos | fish_audio
+    macos_voice: Anna          # `say -v '?'` lists installed voices
+    rate: 185
+    fish_audio:
+      api_key_secret: fish-audio-api-key
+      reference_id: ""         # Fish Audio voice model id
+      model: s1
+  end_of_turn_silence_ms: 900
+  max_utterance_s: 30
+  followup_window_s: 6         # keep listening after a reply without wake word
+
+telephony:
+  enabled: true
+  provider: twilio             # twilio | local_test
+  owner_numbers: []            # E.164 numbers of the owner (used for outbound + caller hints only)
+  pin_secret: phone-pin        # Keychain account with the caller PIN (caller ID alone never authenticates)
+  max_calls_per_hour: 10
+  twilio:
+    account_sid_secret: twilio-account-sid
+    auth_token_secret: twilio-auth-token
+    from_number: ""
+
+notifications:
+  default_channels: [desktop]
+  quiet_hours: {start: "22:30", end: "07:00"}
+  rules:
+    - event: task.completed
+      channels: [desktop, telegram]
+    - event: task.failed
+      channels: [desktop, telegram]
+    - event: approval.requested
+      channels: [desktop, telegram]
+    - event: coding.finished
+      channels: [desktop, telegram]
+    - event: system.critical
+      channels: [desktop, telegram, phone]
+      bypass_quiet_hours: true
+
+coding:
+  claude_binary: claude
+  max_parallel_jobs: 1
+  job_timeout_minutes: 60
+  allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm:*)", "Bash(npx:*)", "Bash(pnpm:*)",
+                  "Bash(node:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git add:*)",
+                  "Bash(git commit:*)", "Bash(ls:*)", "Bash(mkdir:*)", "Bash(python3:*)", "Bash(uv:*)"]
+  sandbox: true
+
+browser:
+  headless: true
+  default_timeout_ms: 20000
+  max_content_chars: 12000
+
+scheduler:
+  enabled: true
+  tick_seconds: 20
