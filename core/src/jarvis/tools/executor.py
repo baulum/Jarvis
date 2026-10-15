@@ -32,6 +32,7 @@ from jarvis.events import bus
 from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
 from jarvis.security.guards import KillSwitch, rate_limiter
+from jarvis.tools.approval_mode import ApprovalPolicy
 from jarvis.tools.registry import ToolContext, ToolRegistry, ToolSpec
 
 logger = logging.getLogger(__name__)
@@ -67,10 +68,17 @@ def args_hash(tool: str, args: dict[str, Any]) -> str:
 
 
 class ToolExecutor:
-    def __init__(self, registry: ToolRegistry, permissions: Permissions, kill_switch: KillSwitch) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        permissions: Permissions,
+        kill_switch: KillSwitch,
+        approval_policy: ApprovalPolicy | None = None,
+    ) -> None:
         self.registry = registry
         self.permissions = permissions
         self.kill_switch = kill_switch
+        self.approval_policy = approval_policy
 
     # ------------------------------------------------------------------ public API
     async def execute(self, name: str, args: dict[str, Any] | None, ctx: ToolContext) -> ToolResult:
@@ -116,23 +124,36 @@ class ToolExecutor:
             return ToolResult("denied", name, message="Rate-Limit für Aktionen mit hohem Risiko erreicht.")
 
         if not ctx.approved:
-            reason = await self._approval_reason(spec, risk, ctx)
-            if reason:
+            decision, reason = await self._approval_decision(spec, risk, ctx)
+            if decision == "deny":
+                await audit(ctx.principal.label, f"tool.{name}", outcome="denied_policy", details={"risk": risk})
+                return ToolResult("denied", name, message=reason)
+            if decision == "ask":
                 return await self._request_approval(spec, args, risk, reason, ctx)
 
         return await self._run(spec, args, risk, ctx)
 
     # ------------------------------------------------------------------ approvals
-    async def _approval_reason(self, spec: ToolSpec, risk: str, ctx: ToolContext) -> str | None:
+    async def _tainted(self, ctx: ToolContext) -> bool:
+        if not ctx.session_id:
+            return False
+        async with session_scope() as s:
+            sess = await s.get(ChatSession, ctx.session_id)
+            return bool(sess is not None and sess.tainted)
+
+    async def _approval_decision(self, spec: ToolSpec, risk: str, ctx: ToolContext) -> tuple[str, str]:
+        """auto / ask / deny for this call, from the approval mode (or the role defaults without one)."""
+        if RISK_ORDER[risk] == RISK_ORDER["read"]:
+            return "auto", ""
+        tainted = self.permissions.taint_requires_approval and await self._tainted(ctx)
+        if self.approval_policy is not None:
+            return self.approval_policy.decide(spec.name, risk, tainted)
         role = self.permissions.roles[ctx.principal.role]
         if RISK_ORDER[risk] > RISK_ORDER[role.auto_approve]:
-            return f"Risikostufe {risk}"
-        if RISK_ORDER[risk] > RISK_ORDER["read"] and self.permissions.taint_requires_approval and ctx.session_id:
-            async with session_scope() as s:
-                sess = await s.get(ChatSession, ctx.session_id)
-                if sess is not None and sess.tainted:
-                    return "Sitzung enthält nicht vertrauenswürdige externe Inhalte"
-        return None
+            return "ask", f"Risikostufe {risk}"
+        if tainted:
+            return "ask", "Sitzung enthält nicht vertrauenswürdige externe Inhalte"
+        return "auto", ""
 
     async def _request_approval(
         self, spec: ToolSpec, args: dict[str, Any], risk: str, reason: str, ctx: ToolContext

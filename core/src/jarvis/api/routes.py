@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -182,6 +182,30 @@ async def approvals(status: str = "pending", st: AppState = StateDep, p: Princip
 class DecisionBody(BaseModel):
     approve: bool
     note: str | None = None
+
+
+class ApprovalModeBody(BaseModel):
+    mode: Literal["yolo", "block_dangerous", "block_everything", "custom"] | None = None
+    custom_levels: dict[str, Literal["auto", "ask"]] | None = None
+    tool_overrides: dict[str, Literal["auto", "ask", "deny"]] | None = None
+    taint_strict: bool | None = None
+
+
+@router.get("/approvals/mode")
+async def approval_mode(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    return st.approval_policy.to_dict()
+
+
+@router.put("/approvals/mode")
+async def set_approval_mode(body: ApprovalModeBody, st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    before = st.approval_policy.mode
+    try:
+        result = st.approval_policy.update(body.model_dump(exclude_none=True))
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    await audit(p.label, "approvals.mode", details={"from": before, **body.model_dump(exclude_none=True)})
+    await bus.publish("approval.mode", **result)
+    return result
 
 
 @router.post("/approvals/{aid}")

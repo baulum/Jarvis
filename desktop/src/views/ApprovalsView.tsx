@@ -1,6 +1,7 @@
 import { ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ApprovalCard } from "../components/ApprovalCard";
+import { ApprovalModePanel } from "../components/ApprovalModePanel";
 import { EmptyState, ErrorState, Skeleton, Tabs } from "../components/ui";
 import { useQuery } from "../hooks/useQuery";
 import { api, useApp } from "../store/app";
@@ -30,10 +31,11 @@ export function ApprovalsView() {
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-[56rem] flex-col gap-3 px-8 py-6">
+          {tab === "pending" && <ApprovalModePanel />}
           {tab === "pending" &&
             (pending.length === 0 ? (
               <EmptyState icon={<ShieldCheck className="size-6" />} title="Nichts wartet auf deine Freigabe.">
-                Aktionen mit mittlerem oder höherem Risiko erscheinen hier, bevor J.A.R.V.I.S. sie ausführt.
+                Aktionen, die laut Freigabe-Modus deine Zustimmung brauchen, erscheinen hier, bevor J.A.R.V.I.S. sie ausführt.
               </EmptyState>
             ) : (
               pending.map((a) => <ApprovalCard key={a.id} approval={a} />)

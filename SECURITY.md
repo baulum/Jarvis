@@ -23,6 +23,22 @@ Risikostufen: `read` < `low` < `medium` (externe Änderung, noch nicht für Drit
 E-Mail-Versand, Rechnungsversand, PR, Anrufe, UI-Eingaben, Shell) < `critical` (Geld, endgültige Rechnungen, Löschungen).
 Overrides in `permissions.yaml` können Risiken nur **erhöhen**.
 
+## Freigabe-Modi (Desktop-App › Freigaben)
+
+| Modus | Läuft sofort | Braucht Freigabe |
+|---|---|---|
+| **YOLO** | alles | nur kritische Aktionen in Sitzungen mit externen Inhalten |
+| **Gefährliches blockieren** (Standard) | read, low, medium | high, critical |
+| **Alles blockieren** | nur read | jede Aktion mit Auswirkung |
+| **Eigene Regeln** | pro Risikostufe „Sofort“/„Fragen“, pro Werkzeug „Sofort“/„Fragen“/„Sperren“ (Glob-Muster möglich) | ebenso |
+
+- Gespeichert in `~/Library/Application Support/Jarvis/approval-mode.json`; ändern darf nur die Rolle **owner**
+  (`PUT /api/approvals/mode`), weder der Agent noch Stimme, Telegram oder Telefon. Jeder Wechsel steht im Audit-Log.
+- Unabhängig vom Modus: Not-Aus, `max_risk` jeder Rolle (z. B. Anrufer ohne PIN nur lesend), Rate-Limits, Audit.
+- Taint: In „Gefährliches/Alles blockieren“ braucht nach externen Inhalten jede Aktion mit Auswirkung eine Freigabe;
+  in „Eigene Regeln“ abschaltbar; in YOLO bleiben nur kritische Aktionen geschützt.
+- Hinweis zu YOLO: Per „Hey Jarvis“ kann jeder im Raum Aktionen auslösen, die dann ohne Rückfrage laufen.
+
 ## Prompt-Injection
 - Alle externen Inhalte (Webseiten, E-Mails, Drive, GitHub-Issues, Zwischenablage, Bildschirminhalt, Webhooks, externe MCP-Server)
   werden mit `wrap_untrusted` eingezäunt; Fence-Fälschungen im Inhalt werden neutralisiert, Injektionsmuster gemeldet.

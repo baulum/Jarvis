@@ -39,6 +39,8 @@
 - Fish Audio: Stimme „Jarvis (MCU)“, Synthese 0,87 s, Ausgabe über Voice-Daemon; 402 (kein API-Guthaben) wird klar gemeldet
 - macOS: Bildschirmaufnahme erteilt → Screenshot-Analyse (Claude) live korrekt; Bedienungshilfen noch offen
 - Voice: echtes Mikrofon, Wake Word, Whisper, Antwort, Folgefrage; Barge-in live (zurück ins Zuhören)
+- macOS-Steuerung: Bedienungshilfen erteilt → Jarvis tippt im Rechner 12*12= und liest 144 aus dem UI-Baum (Bridge startet sich nach Rechte-Erteilung selbst neu)
+- Freigabe-Modi YOLO / Gefährliches blockieren / Alles blockieren / Eigene Regeln (nur Owner, auditiert)
 - GitHub: angemeldet als baulum, Repos (30, inkl. PJE-Systems) über Jarvis gelistet
 
 ### Funktioniert – real getestet

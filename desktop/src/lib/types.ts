@@ -452,3 +452,13 @@ export interface AgentModelStatus {
   session_override: string | null;
   models: { alias: string; id: string; label: string }[];
 }
+
+export type ApprovalModeName = "yolo" | "block_dangerous" | "block_everything" | "custom";
+export type RiskLevel = "low" | "medium" | "high" | "critical";
+export interface ApprovalMode {
+  mode: ApprovalModeName;
+  custom_levels: Record<RiskLevel, "auto" | "ask">;
+  tool_overrides: Record<string, "auto" | "ask" | "deny">;
+  taint_strict: boolean;
+  effective_levels: Record<RiskLevel, "auto" | "ask">;
+}

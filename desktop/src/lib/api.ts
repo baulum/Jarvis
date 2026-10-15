@@ -1,5 +1,6 @@
 // Typed REST client for the J.A.R.V.I.S. core. Every endpoint the desktop uses lives here.
 import type {
+  ApprovalMode,
   AgentModelStatus,
   Approval,
   ChatAccepted,
@@ -142,6 +143,7 @@ export function createApi(opts: ApiOptions) {
   const get = <T>(path: string, query?: Query) => json<T>("GET", path, undefined, query);
   const post = <T>(path: string, body: unknown = {}) => json<T>("POST", path, body);
   const del = <T>(path: string) => json<T>("DELETE", path);
+  const put = <T>(path: string, body: unknown = {}) => json<T>("PUT", path, body);
   const id = encodeURIComponent;
 
   return {
@@ -161,6 +163,9 @@ export function createApi(opts: ApiOptions) {
 
     // approvals
     approvals: (status: "pending" | "all" | string = "pending") => get<Approval[]>("/approvals", { status }),
+    approvalMode: () => get<ApprovalMode>("/approvals/mode"),
+    setApprovalMode: (body: Partial<Pick<ApprovalMode, "mode" | "custom_levels" | "tool_overrides" | "taint_strict">>) =>
+      put<ApprovalMode>("/approvals/mode", body),
     decideApproval: (aid: string, approve: boolean, note?: string) =>
       post<{ status: string; result?: unknown }>(`/approvals/${id(aid)}`, { approve, note: note || null }),
 

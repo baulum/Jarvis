@@ -46,6 +46,7 @@ from jarvis.secrets import secret_store
 from jarvis.security.audit import audit
 from jarvis.security.guards import KillSwitch
 from jarvis.telephony.service import TelephonyService
+from jarvis.tools.approval_mode import ApprovalPolicy
 from jarvis.tools.executor import ToolExecutor
 from jarvis.tools.registry import ToolRegistry
 from jarvis.voice.speech import STTService, TTSService
@@ -74,7 +75,8 @@ class AppState:
 
         self.kill_switch = KillSwitch(settings.paths.data_dir)
         self.registry = ToolRegistry(self.permissions)
-        self.executor = ToolExecutor(self.registry, self.permissions, self.kill_switch)
+        self.approval_policy = ApprovalPolicy(settings.paths.data_dir / "approval-mode.json")
+        self.executor = ToolExecutor(self.registry, self.permissions, self.kill_switch, self.approval_policy)
         self.ollama = OllamaClient(settings.llm.ollama_url, settings.llm.keep_alive)
         self.hermes: HermesClient | None = None
         self.hermes_supervisor = HermesSupervisor(self)

@@ -92,13 +92,19 @@ async def test_barge_in_returns_to_listening() -> None:
     run = asyncio.create_task(daemon.run())
     await asyncio.sleep(1.5)
     silence = np.zeros(RATE, dtype=np.int16)
-    question = np.concatenate([silence, synth("Hey Jarvis", "Samantha"), silence,
-                               synth("Erzähl mir ausführlich in zehn Sätzen etwas über die Geschichte von Hamburg."),
-                               np.zeros(RATE * 3, dtype=np.int16)])
+    question = np.concatenate(
+        [
+            silence,
+            synth("Hey Jarvis", "Samantha"),
+            silence,
+            synth("Erzähl mir ausführlich in zehn Sätzen etwas über die Geschichte von Hamburg."),
+            np.zeros(RATE * 3, dtype=np.int16),
+        ]
+    )
 
     async def feed(audio: np.ndarray) -> None:
         for i in range(0, len(audio), CHUNK):
-            await daemon.mic_q.put(audio[i:i + CHUNK])
+            await daemon.mic_q.put(audio[i : i + CHUNK])
             await asyncio.sleep(CHUNK / RATE)
 
     await feed(question)

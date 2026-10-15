@@ -6,6 +6,7 @@ import JarvisBridgeCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var runtime: BridgeRuntime?
     private var signalSources: [DispatchSourceSignal] = []
+    private var permissionTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let runtime: BridgeRuntime
@@ -23,6 +24,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         installSignalHandlers()
+        relaunchWhenAccessibilityGranted()
+    }
+
+    /// macOS only lets a process post synthetic key/mouse events if it was trusted when it started:
+    /// granting Accessibility to a running bridge makes AXIsProcessTrusted() true, but typing still
+    /// silently goes nowhere. So when the grant appears, the bridge relaunches itself once.
+    private func relaunchWhenAccessibilityGranted() {
+        guard !AXIsProcessTrusted() else { return }
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            guard AXIsProcessTrusted() else { return }
+            MainActor.assumeIsolated {
+                self?.permissionTimer?.invalidate()
+                BridgeLog.info("Accessibility granted; relaunching so input events take effect")
+                let relaunch = Process()
+                relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
+                relaunch.arguments = ["-c", "sleep 1; /usr/bin/open -g \"$0\"", Bundle.main.bundlePath]
+                try? relaunch.run()
+                self?.runtime?.stop()
+                exit(0)
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
