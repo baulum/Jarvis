@@ -175,7 +175,10 @@ class ConnectorManager:
         conn = self.connectors[cid]
         if settings is not None:
             merged = {**conn.settings, **settings}
-            jsonschema.validate(merged, conn.manifest.settings_schema)
+            # "required" only determines whether the connector counts as configured; partial
+            # configuration (e.g. token first, pairing later) must be possible.
+            schema = {k: v for k, v in conn.manifest.settings_schema.items() if k != "required"}
+            jsonschema.validate(merged, schema)
             conn.settings = merged
         allowed = {s.name for s in conn.manifest.secrets}
         for name, value in (secrets or {}).items():

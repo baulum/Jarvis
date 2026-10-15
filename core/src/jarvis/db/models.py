@@ -65,6 +65,7 @@ class ChatSession(Base, TimestampMixin):
     taint_sources: Mapped[list[Any]] = mapped_column(default=list)
     last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     closed: Mapped[bool] = mapped_column(Boolean, default=False)
+    hermes_session_id: Mapped[str | None] = mapped_column(String(120))
     messages: Mapped[list[ChatMessage]] = relationship(
         back_populates="session", cascade="all, delete-orphan", order_by="ChatMessage.created_at"
     )

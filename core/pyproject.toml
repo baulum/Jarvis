@@ -13,7 +13,7 @@ dependencies = [
     "alembic>=1.14",
     "pgvector>=0.3.6",
     "httpx>=0.28",
-    "mcp>=1.9",
+    "mcp>=2.3",
     "keyring>=25",
     "croniter>=5",
     "watchfiles>=1.0",
@@ -22,11 +22,11 @@ dependencies = [
     "psutil>=6.1",
     "psycopg[binary]>=3.2",
     "jsonschema>=4.23",
+    "numpy>=2.1",
 ]
 
 [project.optional-dependencies]
 voice = [
-    "numpy>=2.1",
     "sounddevice>=0.5",
     "onnxruntime>=1.20",
 ]

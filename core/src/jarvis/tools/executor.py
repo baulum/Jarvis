@@ -139,7 +139,7 @@ class ToolExecutor:
             if existing is not None and existing.status in ("pending", "approved", "executed"):
                 return ToolResult(
                     "approval_required" if existing.status == "pending" else "duplicate", spec.name,
-                    approval_id=existing.id, data=existing.result or None,
+                    approval_id=existing.id, data=(existing.result or {}).get("data"),
                     message=_approval_message(existing.status, summary),
                 )
             if existing is not None:  # rejected/expired/failed -> allow a fresh request

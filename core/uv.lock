@@ -647,6 +647,7 @@ dependencies = [
     { name = "jsonschema" },
     { name = "keyring" },
     { name = "mcp" },
+    { name = "numpy" },
     { name = "pgvector" },
     { name = "playwright" },
     { name = "psutil" },
@@ -661,7 +662,6 @@ dependencies = [
 
 [package.optional-dependencies]
 voice = [
-    { name = "numpy" },
     { name = "onnxruntime" },
     { name = "sounddevice" },
 ]
@@ -684,8 +684,8 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "jsonschema", specifier = ">=4.23" },
     { name = "keyring", specifier = ">=25" },
-    { name = "mcp", specifier = ">=1.9" },
-    { name = "numpy", marker = "extra == 'voice'", specifier = ">=2.1" },
+    { name = "mcp", specifier = ">=2.3" },
+    { name = "numpy", specifier = ">=2.1" },
     { name = "onnxruntime", marker = "extra == 'voice'", specifier = ">=1.20" },
     { name = "pgvector", specifier = ">=0.3.6" },
     { name = "playwright", specifier = ">=1.49" },
