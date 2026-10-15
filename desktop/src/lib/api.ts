@@ -122,7 +122,7 @@ export function createApi(opts: ApiOptions) {
       clearTimeout(timer);
     }
     if (!res.ok) {
-      let parsed: unknown = null;
+      let parsed: unknown;
       try {
         parsed = await res.json();
       } catch {

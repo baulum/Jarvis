@@ -25,8 +25,11 @@ def synth(text: str, voice: str = "Anna") -> np.ndarray:
     with tempfile.TemporaryDirectory() as td:
         path = f"{td}/a.aiff"
         subprocess.run(["say", "-v", voice, "-o", path, text], check=True)
-        raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", path, "-ar", str(RATE), "-ac", "1", "-f",
-                              "s16le", "-"], capture_output=True, check=True).stdout
+        raw = subprocess.run(
+            ["ffmpeg", "-loglevel", "error", "-i", path, "-ar", str(RATE), "-ac", "1", "-f", "s16le", "-"],
+            capture_output=True,
+            check=True,
+        ).stdout
     return np.frombuffer(raw, dtype=np.int16)
 
 
@@ -43,12 +46,13 @@ async def test_full_voice_turn() -> None:
     daemon._play = fake_play  # type: ignore[method-assign]
     silence = np.zeros(RATE, dtype=np.int16)
     noise = (np.random.default_rng(1).standard_normal(RATE * 8) * 40).astype(np.int16)
-    audio = np.concatenate([silence, synth("Hey Jarvis", "Samantha"), silence,
-                            synth("Wie viel ist sieben mal acht?"), noise])
+    audio = np.concatenate(
+        [silence, synth("Hey Jarvis", "Samantha"), silence, synth("Wie viel ist sieben mal acht?"), noise]
+    )
     run = asyncio.create_task(daemon.run())
     await asyncio.sleep(1.5)  # event stream connects
     for i in range(0, len(audio), CHUNK):
-        await daemon.mic_q.put(audio[i:i + CHUNK])
+        await daemon.mic_q.put(audio[i : i + CHUNK])
         await asyncio.sleep(CHUNK / RATE / 4)
     for _ in range(240):
         if played and daemon.state in ("idle", "listening") and daemon.turn is None:
@@ -61,5 +65,9 @@ async def test_full_voice_turn() -> None:
     assert total_s > 0.5
     r = await daemon.http.get(f"/api/sessions/{daemon.session_id}/messages")
     msgs = r.json()
-    assert msgs[0]["role"] == "user" and re.search(r"7|sieben", msgs[0]["content"]) and re.search(r"8|acht", msgs[0]["content"])
+    assert (
+        msgs[0]["role"] == "user"
+        and re.search(r"7|sieben", msgs[0]["content"])
+        and re.search(r"8|acht", msgs[0]["content"])
+    )
     assert "56" in msgs[-1]["content"] or "sechsundfünfzig" in msgs[-1]["content"].lower()

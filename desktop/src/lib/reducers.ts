@@ -256,7 +256,7 @@ export function applyTaskEvent(tasks: Task[], ev: BusEvent): { tasks: Task[]; un
   const idx = tasks.findIndex((t) => t.id === tid);
   if (idx < 0) return { tasks, unknown: ev.type.startsWith("task.") };
   const cur = tasks[idx] as Task;
-  let next: Task = cur;
+  let next: Task;
   if (ev.type === "task.updated") {
     next = {
       ...cur,

@@ -14,6 +14,10 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs.recommended.rules,
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
+      // React Compiler rules: this app does not use the compiler; the latest-ref and
+      // fetch-in-effect patterns they flag are correct here. Keep them visible as warnings.
+      "react-hooks/refs": "warn",
+      "react-hooks/set-state-in-effect": "warn",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
     },
   },

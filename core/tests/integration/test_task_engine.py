@@ -28,8 +28,15 @@ def make_engine(stack) -> TaskEngine:
             ctx.ask("Ort fehlt", ["city"])
         return {"city": ctx.params["city"]}
 
-    eng.register(Playbook("demo", "Demo", "d", {"type": "object", "properties": {"city": {"type": "string"}}},
-                          [StepDef("low", s1), StepDef("medium", s2), StepDef("input", s3)]))
+    eng.register(
+        Playbook(
+            "demo",
+            "Demo",
+            "d",
+            {"type": "object", "properties": {"city": {"type": "string"}}},
+            [StepDef("low", s1), StepDef("medium", s2), StepDef("input", s3)],
+        )
+    )
     return eng
 
 
@@ -52,8 +59,11 @@ async def test_playbook_with_approval_and_input(stack) -> None:
         task = await eng.create("demo", {}, OWNER)
         t = await wait_status(eng, task.id, {"waiting_approval"})
         approval_id = t.steps[1].approval_id
-        await stack.executor.decide(approval_id, True, Principal(id="desk", role="owner", channel="device",
-                                                                 device_id=__import__("uuid").uuid4()))
+        await stack.executor.decide(
+            approval_id,
+            True,
+            Principal(id="desk", role="owner", channel="device", device_id=__import__("uuid").uuid4()),
+        )
         t = await wait_status(eng, task.id, {"waiting_input"})
         assert t.pending_question == "Ort fehlt"
         await eng.provide_input(task.id, {"city": "Soltau"}, "pytest")

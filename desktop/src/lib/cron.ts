@@ -55,8 +55,8 @@ export function describeCron(expr: string): string {
     if (dow === "1-5") return `werktags (Mo–Fr) ${at}`;
     if (dow === "0,6" || dow === "6,0") return `am Wochenende ${at}`;
     if (isNum(dow)) return `jeden ${WEEKDAYS[Number(dow)]} ${at}`;
-    const days = dow.split(",");
-    if (days.every(isNum)) return `${days.map((d) => WEEKDAYS[Number(d)]).join(", ")} ${at}`;
+    const days: string[] = String(dow).split(",");
+    if (days.every(isNum)) return `${days.map((d: string) => WEEKDAYS[Number(d)]).join(", ")} ${at}`;
   }
   if (at && isNum(dom) && mon === "*" && dow === "*") return `am ${dom}. jedes Monats ${at}`;
   if (at && isNum(dom) && isNum(mon) && dow === "*") return `jährlich am ${dom}.${mon}. ${at}`;

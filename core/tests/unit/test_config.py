@@ -10,7 +10,9 @@ def test_shipped_configs_validate() -> None:
 
 
 def test_env_override_parses_yaml_scalars() -> None:
-    data = _apply_env_overrides({"server": {"port": 1}}, {"JARVIS__SERVER__PORT": "9000", "JARVIS__VOICE__ENABLED": "false"})
+    data = _apply_env_overrides(
+        {"server": {"port": 1}}, {"JARVIS__SERVER__PORT": "9000", "JARVIS__VOICE__ENABLED": "false"}
+    )
     assert data["server"]["port"] == 9000
     assert data["voice"]["enabled"] is False
 

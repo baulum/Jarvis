@@ -22,16 +22,19 @@ async def mem(tmp_path: Path):
 
 
 async def test_remember_dedup_search_correct_forget(mem: MemoryService) -> None:
-    a = await mem.remember("Präferenz Rechnungsversand", "Sir möchte Rechnungen immer als PDF per E-Mail versenden.",
-                           "preference")
+    a = await mem.remember(
+        "Präferenz Rechnungsversand", "Sir möchte Rechnungen immer als PDF per E-Mail versenden.", "preference"
+    )
     assert a["status"] == "created" and (mem.vault.root / a["path"]).exists()
-    dup = await mem.remember("Präferenz Rechnungsversand", "Sir möchte Rechnungen immer als PDF per E-Mail versenden.",
-                             "preference")
+    dup = await mem.remember(
+        "Präferenz Rechnungsversand", "Sir möchte Rechnungen immer als PDF per E-Mail versenden.", "preference"
+    )
     assert dup["status"] == "duplicate"
     upd = await mem.remember("Präferenz Rechnungsversand", "Zahlungsziel standardmäßig 14 Tage.", "preference")
     assert upd["status"] == "updated" and "14 Tage" in (mem.vault.root / a["path"]).read_text()
-    await mem.remember("Müller Gebäudereinigung", "Kunde aus Soltau, Ansprechpartner Herr Müller.", "customer",
-                       entities=["Soltau"])
+    await mem.remember(
+        "Müller Gebäudereinigung", "Kunde aus Soltau, Ansprechpartner Herr Müller.", "customer", entities=["Soltau"]
+    )
     hits = await mem.search("Wie verschicke ich Rechnungen?", limit=3)
     assert hits[0]["title"] == "Präferenz Rechnungsversand"
     corr = await mem.correct(uuid.UUID(a["id"]), "Rechnungen gehen ab sofort per Post raus.", "pytest")
@@ -65,6 +68,8 @@ async def test_external_edit_is_reindexed(mem: MemoryService) -> None:
 
 
 async def test_llm_extraction(mem: MemoryService) -> None:
-    facts = await mem.extract("Merke dir bitte: Unser neuer Kunde heißt Bäckerei Schmidt aus Celle, "
-                              "Ansprechpartnerin ist Frau Schmidt.", "Notiert, Sir.")
+    facts = await mem.extract(
+        "Merke dir bitte: Unser neuer Kunde heißt Bäckerei Schmidt aus Celle, Ansprechpartnerin ist Frau Schmidt.",
+        "Notiert, Sir.",
+    )
     assert facts and any("Schmidt" in f["title"] or "Schmidt" in f["content"] for f in facts)

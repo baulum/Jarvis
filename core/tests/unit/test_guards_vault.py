@@ -37,8 +37,12 @@ async def test_killswitch_file(tmp_path: Path) -> None:
 def test_note_roundtrip_and_links(tmp_path: Path) -> None:
     v = Vault(tmp_path)
     v.ensure()
-    n = Note(title="Müller Gebäudereinigung", body="Kunde seit 2026. Projekt [[Website Müller]].", kind="customer",
-             entities=["Soltau"])
+    n = Note(
+        title="Müller Gebäudereinigung",
+        body="Kunde seit 2026. Projekt [[Website Müller]].",
+        kind="customer",
+        entities=["Soltau"],
+    )
     rel = v.write(n)
     assert rel == "Kunden/Müller Gebäudereinigung.md"
     back = v.read(rel)

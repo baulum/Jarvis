@@ -37,7 +37,7 @@ async def current_principal(request: Request) -> Principal:
 def require(min_risk: str = "read") -> Callable[..., Coroutine[Any, Any, Principal]]:
     """Require a principal whose role ceiling is at least ``min_risk``."""
 
-    async def dep(request: Request, principal: Principal = Depends(current_principal)) -> Principal:  # noqa: B008
+    async def dep(request: Request, principal: Principal = Depends(current_principal)) -> Principal:
         state = get_state(request)
         role = state.permissions.roles[principal.role]
         if RISK_ORDER[role.max_risk] < RISK_ORDER[min_risk]:
@@ -47,7 +47,7 @@ def require(min_risk: str = "read") -> Callable[..., Coroutine[Any, Any, Princip
     return dep
 
 
-async def require_owner(principal: Principal = Depends(current_principal)) -> Principal:  # noqa: B008
+async def require_owner(principal: Principal = Depends(current_principal)) -> Principal:
     if principal.role != "owner":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "owner only")
     return principal

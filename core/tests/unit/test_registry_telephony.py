@@ -25,8 +25,11 @@ def test_tool_name_validation() -> None:
 
 def test_permission_overrides_only_raise_risk() -> None:
     reg = ToolRegistry(load_permissions())
-    for s in (spec("shell_run", "low", "shell"), spec("mac_applescript", "high", "mac"),
-              spec("lexware_finalize_invoice", "medium", "lexware")):
+    for s in (
+        spec("shell_run", "low", "shell"),
+        spec("mac_applescript", "high", "mac"),
+        spec("lexware_finalize_invoice", "medium", "lexware"),
+    ):
         reg.register(s)
     assert reg.effective_risk(reg.get("shell_run")) == "high"  # type: ignore[arg-type]
     assert reg.effective_risk(reg.get("lexware_finalize_invoice")) == "critical"  # type: ignore[arg-type]
@@ -63,9 +66,9 @@ def test_twilio_signature_algorithm() -> None:
     from jarvis.telephony.service import TwilioProvider
 
     class FakeState:
-        class settings:  # noqa: N801
-            class telephony:  # noqa: N801
-                class twilio:  # noqa: N801
+        class settings:
+            class telephony:
+                class twilio:
                     account_sid_secret = "a"
                     auth_token_secret = "b"
 

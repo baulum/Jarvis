@@ -69,7 +69,7 @@ select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S", "RUF"]
 ignore = ["S101", "S603", "S607", "RUF001", "RUF002", "RUF003", "ASYNC240"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S", "B"]
+"tests/**" = ["S", "B", "E501", "RUF059", "ASYNC109"]
 "src/jarvis/config.py" = ["S105"]
 "src/jarvis/api/*.py" = ["B008"]
 

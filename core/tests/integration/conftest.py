@@ -14,8 +14,20 @@ from jarvis.security.guards import KillSwitch
 from jarvis.tools.executor import ToolExecutor
 from jarvis.tools.registry import ToolContext, ToolRegistry, ToolSpec
 
-TABLES = ["approvals", "tool_executions", "audit_log", "task_steps", "tasks", "chat_messages", "chat_sessions",
-          "devices", "memory_items", "memory_links", "notifications", "schedules"]
+TABLES = [
+    "approvals",
+    "tool_executions",
+    "audit_log",
+    "task_steps",
+    "tasks",
+    "chat_messages",
+    "chat_sessions",
+    "devices",
+    "memory_items",
+    "memory_links",
+    "notifications",
+    "schedules",
+]
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -49,12 +61,25 @@ def stack(tmp_path: Path) -> SimpleNamespace:
     ks = KillSwitch(tmp_path)
     ex = ToolExecutor(reg, perms, ks)
     counters = {}
-    for name, risk, writes, untrusted in [("t_read", "read", False, False), ("t_low", "low", True, False),
-                                          ("t_medium", "medium", True, False), ("t_critical", "critical", True, False),
-                                          ("t_web", "read", False, True)]:
+    for name, risk, writes, untrusted in [
+        ("t_read", "read", False, False),
+        ("t_low", "low", True, False),
+        ("t_medium", "medium", True, False),
+        ("t_critical", "critical", True, False),
+        ("t_web", "read", False, True),
+    ]:
         c = Counter()
         counters[name] = c
-        reg.register(ToolSpec(name, name, {"type": "object", "properties": {"x": {"type": "integer"}},
-                                           "additionalProperties": False}, c, risk, "test", writes=writes,  # type: ignore[arg-type]
-                              untrusted_output=untrusted))
+        reg.register(
+            ToolSpec(
+                name,
+                name,
+                {"type": "object", "properties": {"x": {"type": "integer"}}, "additionalProperties": False},
+                c,
+                risk,
+                "test",
+                writes=writes,  # type: ignore[arg-type]
+                untrusted_output=untrusted,
+            )
+        )
     return SimpleNamespace(registry=reg, executor=ex, kill_switch=ks, counters=counters, permissions=perms)
