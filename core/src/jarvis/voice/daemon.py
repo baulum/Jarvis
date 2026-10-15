@@ -286,7 +286,11 @@ class VoiceDaemon:
                 collected.append(pcm)
             return np.concatenate(collected) if collected else None
         vad = EnergyVAD(
-            RATE, silence_ms=self.cfg.end_of_turn_silence_ms, max_utterance_s=self.cfg.max_utterance_s, min_rms=250
+            RATE,
+            silence_ms=self.cfg.end_of_turn_silence_ms,
+            max_utterance_s=self.cfg.max_utterance_s,
+            min_rms=self.cfg.vad_min_rms,
+            ratio=2.5,
         )
         started = time.monotonic()
         while True:

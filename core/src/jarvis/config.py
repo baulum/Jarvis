@@ -115,7 +115,8 @@ class VoiceCfg(_Strict):
     wake_threshold: float = 0.5
     stt: SttCfg = Field(default_factory=SttCfg)
     tts: TtsCfg = Field(default_factory=TtsCfg)
-    end_of_turn_silence_ms: int = 900
+    end_of_turn_silence_ms: int = 1600
+    vad_min_rms: float = 180
     max_utterance_s: int = 30
     followup_window_s: int = 6
 

@@ -80,7 +80,8 @@ voice:
       api_key_secret: fish-audio-api-key
       reference_id: ""         # Fish Audio voice model id
       model: s1
-  end_of_turn_silence_ms: 900
+  end_of_turn_silence_ms: 1600   # Stille, ab der eine Äußerung als beendet gilt (höher = mehr Zeit für Denkpausen)
+  vad_min_rms: 180               # Mindestpegel für Sprache (niedriger = leise Silben zählen als Sprache)
   max_utterance_s: 30
   followup_window_s: 6         # keep listening after a reply without wake word
 
