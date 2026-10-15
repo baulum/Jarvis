@@ -71,3 +71,46 @@ async def test_full_voice_turn() -> None:
         and re.search(r"8|acht", msgs[0]["content"])
     )
     assert "56" in msgs[-1]["content"] or "sechsundfünfzig" in msgs[-1]["content"].lower()
+
+
+async def test_barge_in_returns_to_listening() -> None:
+    """'Hey Jarvis' while Jarvis is speaking stops playback at once and the daemon listens again."""
+    daemon = VoiceDaemon(get_settings())
+    played: list[int] = []
+
+    async def fake_play(pcm: bytes) -> bool:  # simulates real-time playback that honours the stop event
+        played.append(len(pcm))
+        for _ in range(int(len(pcm) / 2 / 24000 / 0.05) + 1):
+            if daemon._stop_playback.is_set():
+                return False
+            await asyncio.sleep(0.05)
+        return True
+
+    daemon.open_mic = lambda: setattr(daemon, "stream", object())  # type: ignore[method-assign]
+    daemon.close_mic = lambda: None  # type: ignore[method-assign]
+    daemon._play = fake_play  # type: ignore[method-assign]
+    run = asyncio.create_task(daemon.run())
+    await asyncio.sleep(1.5)
+    silence = np.zeros(RATE, dtype=np.int16)
+    question = np.concatenate([silence, synth("Hey Jarvis", "Samantha"), silence,
+                               synth("Erzähl mir ausführlich in zehn Sätzen etwas über die Geschichte von Hamburg."),
+                               np.zeros(RATE * 3, dtype=np.int16)])
+
+    async def feed(audio: np.ndarray) -> None:
+        for i in range(0, len(audio), CHUNK):
+            await daemon.mic_q.put(audio[i:i + CHUNK])
+            await asyncio.sleep(CHUNK / RATE)
+
+    await feed(question)
+    for _ in range(120):  # wait until Jarvis speaks
+        if daemon.speaking:
+            break
+        await feed(np.zeros(CHUNK * 4, dtype=np.int16))
+    assert daemon.speaking, "Jarvis never started speaking"
+    await feed(np.concatenate([synth("Hey Jarvis", "Samantha"), silence]))
+    for _ in range(40):
+        if not daemon.speaking and daemon.state in ("listening", "idle", "recording", "thinking"):
+            break
+        await feed(np.zeros(CHUNK * 2, dtype=np.int16))
+    run.cancel()
+    assert not daemon.speaking, f"still speaking after barge-in (state={daemon.state})"

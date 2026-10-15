@@ -19,9 +19,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import faulthandler
 import json
 import logging
 import re
+import signal
 import subprocess
 import tempfile
 import time
@@ -255,7 +257,15 @@ class VoiceDaemon:
         prod = asyncio.create_task(producer())
         try:
             while True:
-                audio = await audio_q.get()
+                # Wait for the next sentence OR an interrupt: never block on synthesis after a barge-in.
+                get_task = asyncio.create_task(audio_q.get())
+                stop_task = asyncio.create_task(self._stop_playback.wait())
+                await asyncio.wait({get_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+                stop_task.cancel()
+                if not get_task.done():
+                    get_task.cancel()
+                    break
+                audio = get_task.result()
                 if audio is None:
                     break
                 if self.state != "speaking":
@@ -339,10 +349,16 @@ class VoiceDaemon:
                     pcm = await asyncio.wait_for(self.mic_q.get(), timeout=0.2)
                 except TimeoutError:
                     continue
+                self._level = min(1.0, rms(pcm) / 6000)
+                await self._post_status()
                 if self.detector.feed(pcm):
                     logger.info("Barge-in")
                     await self.interrupt()
-                    await speaker
+                    try:
+                        await asyncio.wait_for(speaker, timeout=3)
+                    except TimeoutError:
+                        speaker.cancel()
+                    self.detector.reset()
                     return True
             interrupted = self._stop_playback.is_set()
         finally:
@@ -400,6 +416,7 @@ def _earcon() -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    faulthandler.register(signal.SIGUSR1)  # `kill -USR1 <pid>` dumps all stacks to the log (hang diagnosis)
     asyncio.run(VoiceDaemon(get_settings()).run())
 
 
