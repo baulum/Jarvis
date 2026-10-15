@@ -225,19 +225,32 @@ class TTSService:
         self.cfg = cfg
         self.macos = MacSayTTS(cfg.macos_voice, cfg.rate)
         self.fish = FishAudioTTS(cfg.fish_audio.api_key_secret, cfg.fish_audio.reference_id, cfg.fish_audio.model)
+        # Set by the Fish Audio connector: when it is active, its settings win over config/jarvis.yaml.
+        self.fish_connector_active = False
+
+    def configure_fish(self, active: bool, reference_id: str | None = None, model: str | None = None) -> None:
+        self.fish_connector_active = active
+        if reference_id is not None:
+            self.fish.reference_id = reference_id
+        if model:
+            self.fish.model = model
+
+    @property
+    def wanted(self) -> str:
+        return "fish_audio" if self.fish_connector_active or self.cfg.provider == "fish_audio" else "macos"
 
     async def provider(self) -> TTSProvider:
-        if self.cfg.provider == "fish_audio" and await self.fish.available():
+        if self.wanted == "fish_audio" and await self.fish.available():
             return self.fish
         return self.macos
 
     async def status(self) -> dict[str, object]:
         p = await self.provider()
         return {
-            "configured": self.cfg.provider,
+            "configured": self.wanted,
             "active": p.name,
             "fish_audio_ready": await self.fish.available(),
-            "fallback": p.name != self.cfg.provider,
+            "fallback": p.name != self.wanted,
         }
 
     async def stream(self, text: str, sample_rate: int) -> AsyncIterator[bytes]:

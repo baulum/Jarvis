@@ -23,6 +23,7 @@ from jarvis.config import Permissions, Personality, Settings, load_permissions, 
 from jarvis.connectors.base import ConnectorManager
 from jarvis.connectors.browser import BrowserConnector, BrowserService
 from jarvis.connectors.coding import CodingConnector
+from jarvis.connectors.fish_audio import FishAudioConnector
 from jarvis.connectors.generic import HttpApiConnector, ShellConnector, WebhookConnector
 from jarvis.connectors.github import GitHubConnector
 from jarvis.connectors.google import GoogleConnector
@@ -113,6 +114,7 @@ class AppState:
             GitHubConnector,
             HttpApiConnector,
             WebhookConnector,
+            FishAudioConnector,
         ):
             self.connectors.add(conn_cls(self))
         self._register_phone_tool()

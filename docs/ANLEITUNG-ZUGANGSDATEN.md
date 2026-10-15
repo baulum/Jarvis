@@ -103,17 +103,11 @@ Für `git push` aus Coding-Jobs nutzt git deine normalen Zugangsdaten (z. B. `gh
 3. Stimme auswählen: in der Bibliothek <https://fish.audio/discovery> eine Stimme öffnen (oder eine eigene klonen).
    Die **Voice-ID** ist die Zeichenkette nach `/m/` in der Adresse, z. B. `https://fish.audio/m/ca3007f96ae7499ab87d27ea3599956a`
    → `ca3007f96ae7499ab87d27ea3599956a`.
-4. API-Key eintragen: `uv run jarvisctl secret set fish-audio-api-key`
-5. In `config/jarvis.yaml` unter `voice.tts` setzen:
-   ```yaml
-   tts:
-     provider: fish_audio
-     fish_audio:
-       reference_id: "<deine Voice-ID>"
-       model: s1
-   ```
-6. Jarvis neu starten (`scripts/stop.sh && scripts/start.sh`). Systemstatus › *Sprachausgabe* zeigt „TTS aktiv: fish_audio“.
-   Fällt Fish Audio aus, nutzt Jarvis automatisch die macOS-Stimme.
+4. In Jarvis eintragen: Connector **Fish Audio (Stimme)** › *Einrichten* › **Fish Audio API-Key** und Feld
+   **reference_id** (= Voice-ID) ausfüllen, optional `model` (Standard `s1`) › **Speichern**.
+5. **Aktiv** einschalten › **Testen** → „Stimme: \<Name der Stimme\>“. Ab sofort spricht Jarvis (Mac, Telefon) mit dieser Stimme;
+   Systemstatus › *Sprachausgabe* zeigt „TTS aktiv: fish_audio“. Ist der Connector aus oder Fish Audio nicht erreichbar,
+   spricht Jarvis automatisch mit der macOS-Stimme.
 
 Preise/Kontingent: <https://fish.audio/plan/>
 

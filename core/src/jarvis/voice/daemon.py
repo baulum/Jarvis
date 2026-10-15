@@ -136,6 +136,10 @@ class VoiceDaemon:
                 async with websockets.connect(url, ping_interval=20) as ws:
                     backoff = 1.0
                     logger.info("Connected to core event stream")
+                    if self.turn is not None:  # events of a turn in flight were lost → end it cleanly
+                        logger.warning("Core reconnected during a turn; aborting it")
+                        await self.turn.sentences.put(None)
+                        self.turn.done.set()
                     async for raw in ws:
                         await self._on_event(json.loads(raw))
             except Exception as e:
@@ -226,7 +230,11 @@ class VoiceDaemon:
         async def producer() -> None:
             try:
                 while not self._stop_playback.is_set():
-                    sentence = await turn.sentences.get()
+                    try:
+                        sentence = await asyncio.wait_for(turn.sentences.get(), timeout=90)
+                    except TimeoutError:
+                        logger.warning("No reply within 90 s; ending turn")
+                        break
                     if sentence is None:
                         break
                     text = speakable(sentence)
