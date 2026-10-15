@@ -102,9 +102,13 @@ function ConnectorCard({ c, refetch }: { c: Connector; refetch: () => Promise<vo
         )}
         {c.id === "google" && (
           <Button size="sm" variant="ghost" icon={<ExternalLink className="size-3.5" />}
-                  onClick={() => void act.run("oauth", () => api.googleOAuthStart()).then((r) => r && openExternal(r.auth_url))}>Mit Google verbinden</Button>
+                  onClick={() => void act.run("oauth", async () => {
+                    const r = await api.googleOAuthStart();
+                    await openExternal(r.auth_url); // errors surface as a toast via act.run
+                    return r;
+                  }, "Google-Anmeldung im Browser geöffnet")}>Mit Google verbinden</Button>
         )}
-        {c.docs_url && <Button size="sm" variant="quiet" onClick={() => void openExternal(c.docs_url)}>Doku</Button>}
+        {c.docs_url && <Button size="sm" variant="quiet" onClick={() => void act.run("docs", () => openExternal(c.docs_url))}>Doku</Button>}
       </footer>
       {configuring && <ConfigureDialog c={c} onClose={() => setConfiguring(false)} onSaved={() => void refetch()} />}
     </article>
