@@ -183,7 +183,7 @@ def parse_note(text: str, rel: str) -> Note:
         updated=str(fm.get("updated") or ""),
         sensitivity=str(fm.get("sensitivity") or "normal"),
         status=str(fm.get("status") or "active"),
-        source=fm.get("source") if isinstance(fm.get("source"), dict) else {},
+        source=dict(fm["source"]) if isinstance(fm.get("source"), dict) else {},
         entities=[str(e) for e in (fm.get("entities") or []) if e],
         tags=[str(t) for t in (fm.get("tags") or []) if t],
         extra={k: v for k, v in fm.items() if k not in known},

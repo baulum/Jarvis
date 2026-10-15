@@ -169,8 +169,8 @@ def cmd_phone_test(args: argparse.Namespace) -> None:
         with wave.open(args.wav) as w:
             import numpy as np
 
-            pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
-            utterances.append(resample(pcm, w.getframerate(), 8000).tobytes())
+            wav_pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+            utterances.append(resample(wav_pcm, w.getframerate(), 8000).tobytes())
 
     async def run() -> None:
         import numpy as np

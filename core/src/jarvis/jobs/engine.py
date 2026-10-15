@@ -262,12 +262,18 @@ class TaskEngine:
                     continue
                 t = asyncio.create_task(self._execute(claimed))
                 self._running[claimed] = t
-                t.add_done_callback(lambda _t, tid=claimed: self._running.pop(tid, None))
+                t.add_done_callback(self._forget_running(claimed))
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("Task loop error")
                 await asyncio.sleep(5)
+
+    def _forget_running(self, tid: uuid.UUID) -> Callable[[asyncio.Task[None]], None]:
+        def done(_t: asyncio.Task[None]) -> None:
+            self._running.pop(tid, None)
+
+        return done
 
     async def _claim(self) -> uuid.UUID | None:
         if self.state.kill_switch.engaged:

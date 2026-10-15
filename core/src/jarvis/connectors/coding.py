@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from jarvis.coding.runner import CodingError, slug
+from jarvis.coding.runner import CodingError, CodingRunner, slug
 from jarvis.connectors.base import Connector, Health, Manifest
 from jarvis.tools.executor import ToolUserError
 from jarvis.tools.registry import ToolContext, ToolSpec
@@ -34,7 +34,9 @@ class CodingConnector(Connector):
         return Health("error", st.get("error") or "nicht angemeldet")
 
     def tools(self) -> list[ToolSpec]:
-        runner = lambda: self.state.coding  # noqa: E731
+        def runner() -> CodingRunner:
+            return self.state.coding
+
         S = "coding"
 
         async def project_create(ctx: ToolContext, a: dict[str, Any]) -> Any:

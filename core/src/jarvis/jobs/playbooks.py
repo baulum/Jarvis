@@ -84,7 +84,7 @@ async def create_invoice(ctx: StepContext) -> dict[str, Any]:
             "title": "Rechnung",
         },
     )
-    return res
+    return dict(res)
 
 
 async def create_project(ctx: StepContext) -> dict[str, Any]:
@@ -127,7 +127,7 @@ async def write_brief(ctx: StepContext) -> dict[str, Any]:
 
 async def start_coding(ctx: StepContext) -> dict[str, Any]:
     if ctx.context.get("step_6", {}).get("job_id"):
-        return ctx.context["step_6"]
+        return dict(ctx.context["step_6"])
     path = ctx.context["step_4"]["path"]
     res = await ctx.tool(
         "coding_start_job",
@@ -154,6 +154,9 @@ async def await_tests(ctx: StepContext) -> dict[str, Any]:
         )
     status = await ctx.tool("coding_job_status", {"job_id": job_id})
     tests = (status.get("result") or {}).get("tests") or {}
+    if status["status"] != "completed" or not tests.get("passed"):
+        verdict = "bestanden" if tests.get("passed") else "NICHT bestanden"
+        ctx.context.setdefault("_warnings", []).append(f"Website-Entwicklung: Job {status['status']}, Tests {verdict}")
     return {
         "job_status": status["status"],
         "tests_passed": tests.get("passed"),

@@ -6,8 +6,7 @@
 
 servers:
   github_official:
-    description: Offizieller GitHub-MCP-Server (Remote). ~50 Tools – für das lokale 4B-Modell
-      standardmäßig aus; der eingebaute GitHub-Connector deckt die Kernabläufe ab.
+    description: Offizieller GitHub-MCP-Server (Remote). ~50 Tools – standardmäßig aus; der eingebaute GitHub-Connector deckt die Kernabläufe ab.
     enabled: false
     url: https://api.githubcopilot.com/mcp/
     headers:

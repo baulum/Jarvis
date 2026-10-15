@@ -110,7 +110,8 @@ class MacConnector(Connector):
         return Health("ok", "Bridge verbunden", details=h)
 
     def tools(self) -> list[ToolSpec]:
-        b = lambda: self.bridge  # noqa: E731 - resolved lazily (bridge created at startup)
+        def b() -> BridgeClient:  # resolved lazily (bridge created at startup)
+            return self.bridge
 
         async def list_apps(ctx: ToolContext, a: dict[str, Any]) -> Any:
             apps = await b().request("GET", "/apps")

@@ -470,7 +470,7 @@ class MemoryService:
             item = await s.get(MemoryItem, item_id)
             if item is None or item.status != "pending":
                 raise LookupError("Kein ausstehender Eintrag")
-            data = {
+            data: dict[str, Any] = {
                 "title": item.title,
                 "content": item.content,
                 "kind": item.kind,

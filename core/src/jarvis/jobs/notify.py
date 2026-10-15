@@ -127,7 +127,7 @@ class Notifier:
                 ev.type, str(d.get("title", "Kritisches Ereignis")), str(d.get("body", "")), level="critical", data=d
             )
 
-    async def list(self, unread_only: bool = False, limit: int = 100) -> list[Notification]:
+    async def recent(self, unread_only: bool = False, limit: int = 100) -> list[Notification]:
         q = select(Notification).order_by(Notification.created_at.desc()).limit(limit)
         if unread_only:
             q = q.where(Notification.read.is_(False))

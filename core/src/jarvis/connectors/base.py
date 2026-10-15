@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -123,6 +124,13 @@ class Connector:
         return self.enabled and self.configured
 
 
+def _gate(conn: Connector) -> Callable[[], bool]:
+    def active() -> bool:
+        return conn.active
+
+    return active
+
+
 class ConnectorManager:
     def __init__(self, state: AppState) -> None:
         self.state = state
@@ -138,7 +146,7 @@ class ConnectorManager:
             if spec.connector != cid:
                 raise ValueError(f"Tool {spec.name} declares connector {spec.connector}, expected {cid}")
             self.state.registry.register(spec)
-        self.state.registry.set_connector_gate(cid, lambda c=connector: c.active)
+        self.state.registry.set_connector_gate(cid, _gate(connector))
 
     async def load(self) -> None:
         async with session_scope() as s:

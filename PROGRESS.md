@@ -56,11 +56,11 @@ Hermes-Latenz: Kaltstart ~20 s (Modell laden), danach ~2–7 s je Turn (Prompt-C
 - Eine VS-Code-Erweiterung committet automatisch in dieses Repo (Commits „Implement …“ unter Pauls Namen) – nicht von Claude.
 
 ### Offen / nächste Schritte
-- [ ] Desktop-App visuell prüfen (Screenshot benötigt Bildschirmaufnahme-Recht fürs Terminal)
-- [ ] Playbook: fehlgeschlagene Tests als Warnung im Abschluss hervorheben
+- [x] Desktop-App visuell geprüft (Chat, Systemstatus, Aufgaben inkl. Schrittansicht, Connectoren) – über Vite-Dev + Viewer-Token
+- [x] Playbook: fehlgeschlagene Tests erscheinen als Warnung im Abschluss
+- [x] mypy strict: 0 Befunde (60 Dateien); dabei echter Fehler gefunden (Notifier.list überschattete `list`)
 - [ ] Voice-Daemon mit echtem Mikrofon (benötigt Mikrofon-Freigabe)
 - [ ] Connectoren mit echten Zugangsdaten verifizieren (Lexware, Google, Telegram, GitHub, Fish Audio, Twilio)
-- [ ] mypy strict über den Core laufen lassen und Befunde beheben
 
 ### Benötigt von Sir
 - macOS: Bedienungshilfen + Bildschirmaufnahme für JarvisBridge.app, Mikrofon für den Voice-Daemon

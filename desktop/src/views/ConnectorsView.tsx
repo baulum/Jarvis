@@ -82,7 +82,7 @@ function ConnectorCard({ c, refetch }: { c: Connector; refetch: () => Promise<vo
         {h?.message && <span className="text-ink-dim">{h.message}</span>}
         {h?.checked_at && <span className="text-ink-faint">· geprüft {formatRelative(h.checked_at)}</span>}
       </div>
-      {c.missing.length > 0 && <p className="text-xs text-ember">Fehlt: {c.missing.join(", ")}</p>}
+      {c.missing.length > 0 && h?.status !== "not_configured" && <p className="text-xs text-ember">Fehlt: {c.missing.join(", ")}</p>}
       {c.mcp_note && <p className="text-xs text-ink-faint">MCP: {c.mcp_note}</p>}
       {pairCode && <p className="rounded-md border border-arc-dim/40 bg-arc-deep/40 px-3 py-2 text-sm text-arc">Sende deinem Bot: <span className="type-data">/pair {pairCode}</span> (10 Minuten gültig)</p>}
       <details className="text-xs">

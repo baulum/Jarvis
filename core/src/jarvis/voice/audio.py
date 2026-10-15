@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import wave
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -40,13 +41,13 @@ def ulaw_encode(pcm: npt.NDArray[np.int16]) -> bytes:
     exponent = np.clip(exponent, 0, 7)
     mantissa = (x >> (exponent + 3)) & 0x0F
     u = ~(sign | (exponent << 4) | mantissa) & 0xFF
-    return u.astype(np.uint8).tobytes()
+    return bytes(u.astype(np.uint8).tobytes())
 
 
 def resample(pcm: npt.NDArray[np.int16], src_rate: int, dst_rate: int) -> npt.NDArray[np.int16]:
     if src_rate == dst_rate or pcm.size == 0:
         return pcm
-    x = pcm.astype(np.float32)
+    x: npt.NDArray[np.floating[Any]] = pcm.astype(np.float32)
     if dst_rate < src_rate:  # crude anti-aliasing: moving average over the decimation factor
         k = max(1, round(src_rate / dst_rate))
         if k > 1:
@@ -54,7 +55,8 @@ def resample(pcm: npt.NDArray[np.int16], src_rate: int, dst_rate: int) -> npt.ND
     n_out = round(len(x) * dst_rate / src_rate)
     src_idx = np.linspace(0, len(x) - 1, n_out, dtype=np.float32)
     out = np.interp(src_idx, np.arange(len(x), dtype=np.float32), x)
-    return np.clip(out, -32768, 32767).astype(np.int16)
+    result: npt.NDArray[np.int16] = np.clip(out, -32768, 32767).astype(np.int16)
+    return result
 
 
 def pcm_to_wav(pcm: npt.NDArray[np.int16] | bytes, rate: int) -> bytes:

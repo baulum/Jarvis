@@ -592,7 +592,7 @@ async def notifications(unread: bool = False, st: AppState = StateDep, p: Princi
             "created_at": n.created_at.isoformat(),
             "data": n.data,
         }
-        for n in await st.notifier.list(unread)
+        for n in await st.notifier.recent(unread)
     ]
 
 

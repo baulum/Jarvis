@@ -1,7 +1,7 @@
 """GitHub via REST API v3 (fine-grained personal access token).
 
 The official GitHub MCP server (https://api.githubcopilot.com/mcp/) exists and can be added
-in ``config/mcp_servers.yaml``; it exposes ~50 tools, which overwhelms a 4B local model, so
+in ``config/mcp_servers.yaml``; it exposes ~50 tools (large prompt, coarse risk control), so
 Jarvis ships this focused connector for the core workflows.
 """
 
@@ -40,8 +40,8 @@ class GitHubConnector(Connector):
                 "(read/write), Pull requests (read/write), Issues (read/write), Metadata (read).",
             )
         ],
-        mcp_note="Offizieller GitHub-MCP-Server verfügbar (optional in config/mcp_servers.yaml); für das lokale "
-        "4B-Modell nutzt Jarvis standardmäßig diesen fokussierten Connector.",
+        mcp_note="Offizieller GitHub-MCP-Server verfügbar (optional in config/mcp_servers.yaml, ~50 Tools); "
+        "Jarvis nutzt standardmäßig diesen fokussierten Connector mit klaren Risikostufen.",
     )
 
     async def _api(self, method: str, path: str, **kw: Any) -> Any:
@@ -100,7 +100,7 @@ class GitHubConnector(Connector):
         async def commits(ctx: ToolContext, a: dict[str, Any]) -> Any:
             params = {"per_page": min(int(a.get("limit", 10)), 30)}
             if a.get("branch"):
-                params["sha"] = a["branch"]  # type: ignore[assignment]
+                params["sha"] = a["branch"]
             data = await self._api("GET", f"/repos/{a['repo']}/commits", params=params)
             return [
                 {

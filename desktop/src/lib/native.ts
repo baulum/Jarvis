@@ -12,6 +12,11 @@ export const inTauri = (): boolean => {
 
 export async function loadCoreToken(): Promise<string> {
   if (!inTauri()) {
+    // Development only (stripped from production builds): `pnpm dev` + ?devtoken=<viewer token> for UI review.
+    if (import.meta.env.DEV) {
+      const t = new URLSearchParams(window.location.search).get("devtoken");
+      if (t) return t;
+    }
     throw new Error("Das Geräte-Token kann nur in der Desktop-App gelesen werden (pnpm tauri dev).");
   }
   return invoke<string>("get_core_token");

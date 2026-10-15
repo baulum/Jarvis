@@ -12,8 +12,9 @@ import contextlib
 import json
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx2
 import yaml
@@ -21,7 +22,7 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
-from jarvis.config import CONFIG_DIR, RISK_ORDER
+from jarvis.config import CONFIG_DIR, RISK_ORDER, RiskLevel
 from jarvis.secrets import secret_store
 from jarvis.security.guards import wrap_untrusted
 from jarvis.tools.executor import ToolUserError
@@ -113,6 +114,13 @@ class ExternalServer:
         return out
 
 
+def _summary(server: str, tool: str) -> Callable[[dict[str, Any]], str]:
+    def summarize(a: dict[str, Any]) -> str:
+        return f"MCP {server}.{tool}({json.dumps(a)[:150]})"
+
+    return summarize
+
+
 class MCPClientHub:
     def __init__(self, state: AppState, path: Path | None = None) -> None:
         self.state = state
@@ -164,11 +172,11 @@ class MCPClientHub:
                         description=f"[{srv.name}] {t.description or t.name}"[:1000],
                         parameters=schema,
                         handler=handler,
-                        risk=risk,
+                        risk=cast(RiskLevel, risk),
                         connector="mcp",
                         writes=risk != "read",
                         untrusted_output=True,
-                        summarize=lambda a, _n=t.name, _s=srv.name: f"MCP {_s}.{_n}({json.dumps(a)[:150]})",
+                        summarize=_summary(srv.name, t.name),
                     )
                 )
             except ValueError as e:
