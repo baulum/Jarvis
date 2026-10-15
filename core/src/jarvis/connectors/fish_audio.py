@@ -58,6 +58,8 @@ class FishAudioConnector(Connector):
         if r.status_code >= 400:
             return Health("error", f"Fish Audio antwortet mit {r.status_code}")
         title = r.json().get("title", ref) if r.headers.get("content-type", "").startswith("application/json") else ref
+        if self.state.tts.fish_last_error:
+            return Health("degraded", f"Stimme: {title} – {self.state.tts.fish_last_error}")
         return Health("ok", f"Stimme: {title}")
 
     def tools(self) -> list[ToolSpec]:

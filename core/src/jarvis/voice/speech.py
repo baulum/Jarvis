@@ -218,6 +218,14 @@ class FishAudioTTS(TTSProvider):
         return b"".join([chunk async for chunk in self.stream(text, sample_rate)])
 
 
+def _fish_error(text: str) -> str:
+    if "402" in text:
+        return "Kein Fish-Audio-API-Guthaben (API-Guthaben ist getrennt vom Plattform-Guthaben: https://fish.audio/app/developers)"
+    if "401" in text:
+        return "Fish Audio lehnt den API-Key ab"
+    return text[:200]
+
+
 class TTSService:
     """Selects the configured provider and falls back to macOS ``say`` when it is unavailable."""
 
@@ -227,6 +235,7 @@ class TTSService:
         self.fish = FishAudioTTS(cfg.fish_audio.api_key_secret, cfg.fish_audio.reference_id, cfg.fish_audio.model)
         # Set by the Fish Audio connector: when it is active, its settings win over config/jarvis.yaml.
         self.fish_connector_active = False
+        self.fish_last_error: str | None = None
 
     def configure_fish(self, active: bool, reference_id: str | None = None, model: str | None = None) -> None:
         self.fish_connector_active = active
@@ -250,7 +259,8 @@ class TTSService:
             "configured": self.wanted,
             "active": p.name,
             "fish_audio_ready": await self.fish.available(),
-            "fallback": p.name != self.wanted,
+            "fallback": p.name != self.wanted or (self.wanted == "fish_audio" and self.fish_last_error is not None),
+            "fish_audio_error": self.fish_last_error,
         }
 
     async def stream(self, text: str, sample_rate: int) -> AsyncIterator[bytes]:
@@ -258,9 +268,13 @@ class TTSService:
         try:
             async for chunk in p.stream(text, sample_rate):
                 yield chunk
-        except Exception:
+            if p is self.fish:
+                self.fish_last_error = None
+        except Exception as e:
             if p is self.macos:
                 raise
+            if p is self.fish:
+                self.fish_last_error = _fish_error(str(e))
             logger.warning("TTS provider %s failed; falling back to macOS say", p.name, exc_info=True)
             yield await self.macos.synthesize(text, sample_rate)
 
