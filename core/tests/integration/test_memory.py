@@ -15,7 +15,16 @@ pytestmark = pytest.mark.integration
 async def mem(tmp_path: Path):
     s = get_settings()
     client = OllamaClient(s.llm.ollama_url)
-    svc = MemoryService(Vault(tmp_path / "vault"), client, s.llm.embedding_model, s.llm.utility_model)
+    from types import SimpleNamespace
+
+    from jarvis.agent.claude_agent import ClaudeOneShot
+
+    oneshot = ClaudeOneShot(SimpleNamespace(settings=s))  # type: ignore[arg-type]
+
+    async def structured(system: str, prompt: str, schema: dict) -> object:
+        return await oneshot.run(prompt, schema=schema, system=system)
+
+    svc = MemoryService(Vault(tmp_path / "vault"), client, s.llm.embedding_model, structured)
     svc.vault.ensure()
     yield svc
     await client.close()

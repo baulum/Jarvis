@@ -155,6 +155,7 @@ class TaskEngine:
         pb = self.playbooks.get(playbook)
         if pb is None:
             raise ValueError(f"Unbekanntes Playbook: {playbook}")
+        params = _with_defaults(params, pb.params_schema)
         jsonschema.validate(params, pb.params_schema)
         async with session_scope() as s:
             if idempotency_key:
@@ -163,13 +164,8 @@ class TaskEngine:
                 ).scalar_one_or_none()
                 if existing is not None:
                     return existing
-            title = (
-                pb.title_template.format(
-                    **{k: v for k, v in params.items() if isinstance(v, str | int | float)}, name=pb.title
-                )
-                if "{" in pb.title_template
-                else pb.title_template
-            )
+            fields = {k: v for k, v in params.items() if isinstance(v, str | int | float)}
+            title = pb.title_template.format_map(_DefaultDict(fields, name=pb.title))
             task = Task(
                 title=title[:300],
                 kind=playbook,
@@ -489,6 +485,20 @@ class TaskEngine:
                     woke = True
         if woke:
             self._wake.set()
+
+
+class _DefaultDict(dict[str, Any]):
+    def __missing__(self, key: str) -> str:
+        return "?"
+
+
+def _with_defaults(params: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    """Apply JSON-schema ``default`` values for missing top-level parameters."""
+    out = dict(params)
+    for key, prop in (schema.get("properties") or {}).items():
+        if key not in out and isinstance(prop, dict) and "default" in prop:
+            out[key] = prop["default"]
+    return out
 
 
 def _jsonable(value: Any) -> Any:

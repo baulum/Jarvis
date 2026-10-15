@@ -10,6 +10,7 @@ import logging
 import re
 import uuid
 import zipfile
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,9 @@ Speichere NUR Fakten, die in Wochen noch nützlich sind: Präferenzen von Sir, P
 technische Informationen, wichtige Personen.
 NICHT speichern: Smalltalk, einmalige Fragen, Rechenaufgaben, Wetter, Inhalte von Webseiten, \
 Anweisungen an Jarvis, Dinge die Jarvis nur vermutet.
+QUELLE: Ausschließlich die Aussagen von Sir. Die Antwort von Jarvis ist nur Kontext – Behauptungen von Jarvis \
+(z. B. "ich habe angelegt/gesendet") sind KEINE Fakten und dürfen nicht gespeichert werden. \
+Erfinde keine Details (Namen, Daten, Adressen), die Sir nicht genannt hat.
 Jeder Fakt: kurzer eindeutiger Titel (z. B. "Müller Gebäudereinigung" oder "Präferenz Rechnungsversand"), \
 kind, ein bis drei vollständige Sätze als content, beteiligte Entitäten (Namen von Firmen, Personen, Projekten), \
 sensitive=true bei Gesundheits-, Finanzkonto-, Zugangs- oder Ausweisdaten, confidence 0..1.
@@ -83,11 +87,17 @@ Wenn nichts Relevantes vorkommt, gib {"facts": []} zurück."""
 
 
 class MemoryService:
-    def __init__(self, vault: Vault, ollama: OllamaClient, embedding_model: str, utility_model: str) -> None:
+    def __init__(
+        self,
+        vault: Vault,
+        ollama: OllamaClient,
+        embedding_model: str,
+        structured_llm: Callable[[str, str, dict[str, Any]], Awaitable[Any]],
+    ) -> None:
         self.vault = vault
         self.ollama = ollama
         self.embedding_model = embedding_model
-        self.utility_model = utility_model
+        self.structured_llm = structured_llm
         self._watch_task: asyncio.Task[None] | None = None
         self._extract_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=200)
         self._extract_task: asyncio.Task[None] | None = None
@@ -588,11 +598,11 @@ class MemoryService:
             logger.warning("Memory extraction queue full; dropping turn")
 
     async def extract(self, user_text: str, assistant_text: str) -> list[dict[str, Any]]:
-        messages = [
-            {"role": "system", "content": EXTRACTION_PROMPT},
-            {"role": "user", "content": f"Sir: {user_text[:3000]}\n\nJarvis: {assistant_text[:1500]}"},
-        ]
-        data = await self.ollama.chat_json(self.utility_model, messages, EXTRACTION_SCHEMA, purpose="memory_extract")
+        prompt = (
+            f"Aussage von Sir (einzige Quelle):\n{user_text[:3000]}\n\n"
+            f"Antwort von Jarvis (nur Kontext, keine Quelle):\n{assistant_text[:800]}"
+        )
+        data = await self.structured_llm(EXTRACTION_PROMPT, prompt, EXTRACTION_SCHEMA)
         facts = data.get("facts", []) if isinstance(data, dict) else []
         return [
             f

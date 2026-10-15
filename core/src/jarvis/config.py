@@ -67,6 +67,15 @@ class LlmCfg(_Strict):
     keep_alive: str = "30m"
 
 
+class AgentCfg(_Strict):
+    provider: Literal["claude_code", "hermes"] = "claude_code"
+    claude_binary: str = "claude"
+    model: Literal["sonnet", "opus", "haiku"] = "sonnet"
+    utility_model: Literal["sonnet", "opus", "haiku"] = "haiku"
+    auto_downgrade: bool = True
+    idle_timeout_minutes: int = 15
+
+
 class HermesCfg(_Strict):
     enabled: bool = True
     profile: str = "jarvis"
@@ -169,6 +178,7 @@ class Settings(_Strict):
     paths: PathsCfg
     database: DatabaseCfg = Field(default_factory=DatabaseCfg)
     llm: LlmCfg = Field(default_factory=LlmCfg)
+    agent: AgentCfg = Field(default_factory=AgentCfg)
     hermes: HermesCfg = Field(default_factory=HermesCfg)
     session: SessionCfg = Field(default_factory=SessionCfg)
     voice: VoiceCfg = Field(default_factory=VoiceCfg)

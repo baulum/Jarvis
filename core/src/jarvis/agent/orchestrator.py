@@ -19,11 +19,14 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
+from jarvis.agent.claude_agent import ClaudeUnavailable
 from jarvis.agent.llm import AgentEvent, HermesError
-from jarvis.agent.persona import render_soul, turn_instructions
+from jarvis.agent.model_router import MODELS, parse_command
+from jarvis.agent.persona import turn_instructions
 from jarvis.db import session_scope
 from jarvis.db.models import ChatMessage, ChatSession
 from jarvis.events import bus
+from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
 
 if TYPE_CHECKING:
@@ -49,6 +52,7 @@ class TurnResult:
     tools: list[dict[str, Any]]
     error: str | None = None
     provider: str = "hermes"
+    model: str | None = None
 
 
 class Orchestrator:
@@ -134,11 +138,20 @@ class Orchestrator:
             if on_event:
                 await on_event(ev)
 
-        if self.state.kill_switch.engaged:
+        model, model_reason, confirmation, agent_text = await self._model_for_turn(sess, principal, channel, text)
+
+        if confirmation is not None:
+            await emit(AgentEvent("delta", text=confirmation))
+            result = TurnResult(sess.id, confirmation, [], provider="system")
+        elif self.state.kill_switch.engaged:
             reply = "Der Not-Aus ist aktiv, Sir. Ich führe derzeit keine Aktionen aus."
             await emit(AgentEvent("delta", text=reply))
             result = TurnResult(sess.id, reply, [], provider="system")
-        elif self.state.hermes is not None and await self.state.hermes.health():
+        elif self.state.agent is not None and self.state.agent.available():
+            await bus.publish("chat.model", session_id=str(sess.id), model=model, reason=model_reason)
+            result = await self._run_claude(sess, principal, agent_text, instructions, emit, model)
+            result.model = model
+        elif self.state.hermes is not None and await self._hermes_ready():
             result = await self._run_hermes(sess, principal, text, instructions, emit, images)
         else:
             result = await self._run_fallback(sess, text, instructions, emit)
@@ -147,10 +160,15 @@ class Orchestrator:
             sess.id,
             "assistant",
             result.text,
-            {"tools": result.tools, "provider": result.provider, "error": result.error},
+            {"tools": result.tools, "provider": result.provider, "error": result.error, "model": result.model},
         )
         await bus.publish(
-            "chat.done", session_id=str(sess.id), text=result.text, error=result.error, provider=result.provider
+            "chat.done",
+            session_id=str(sess.id),
+            text=result.text,
+            error=result.error,
+            provider=result.provider,
+            model=result.model,
         )
         if (
             result.text
@@ -232,24 +250,125 @@ class Orchestrator:
         sess.hermes_session_id = hsid
         return hsid
 
+    async def _hermes_ready(self, wait_s: float = 60.0) -> bool:
+        """Healthy now, or wait while the supervised gateway is (re)starting."""
+        hermes = self.state.hermes
+        assert hermes is not None
+        if await hermes.health():
+            return True
+        if not self.state.hermes_supervisor.is_running():
+            return False
+        deadline = asyncio.get_running_loop().time() + wait_s
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(1.5)
+            if await hermes.health():
+                return True
+        return False
+
+    async def _model_for_turn(
+        self, sess: ChatSession, principal: Principal, channel: str, text: str
+    ) -> tuple[str, str, str | None, str]:
+        """Apply model-switch commands; returns (model, reason, confirmation-or-None, text for the agent)."""
+        router = self.state.model_router
+        cmd = parse_command(text)
+        turn_model: str | None = None
+        if cmd is not None:
+            if cmd.scope == "turn":
+                turn_model = cmd.model
+            elif principal.role in ("owner", "voice_owner", "telegram_owner", "phone_owner"):
+                router.set(cmd.model, cmd.scope, str(sess.id))
+                await audit(principal.label, "agent.model", details={"model": cmd.model, "scope": cmd.scope})
+                await bus.publish("agent.model", **router.status(str(sess.id)))
+            if not cmd.remainder:
+                label = MODELS[cmd.model]["label"] if cmd.model else "automatische Modellwahl"
+                where = {
+                    "default": "ab sofort als Standard",
+                    "session": "für dieses Gespräch",
+                    "turn": "für die nächste Antwort",
+                }[cmd.scope]
+                if cmd.scope == "turn" and cmd.model:
+                    router.next_turn[str(sess.id)] = cmd.model  # a bare "only once" means: the next answer
+                return (cmd.model or "sonnet", "Befehl", f"Sehr wohl, Sir – {label} {where}.", text)
+            text = cmd.remainder
+        model, reason = router.choose(text, channel, str(sess.id), turn_model)
+        return model, reason, None, text
+
+    async def _run_claude(
+        self,
+        sess: ChatSession,
+        principal: Principal,
+        text: str,
+        instructions: str,
+        emit: EventCallback,
+        model: str | None = None,
+    ) -> TurnResult:
+        agent = self.state.agent
+        assert agent is not None
+        tools: list[dict[str, Any]] = []
+        chunks: list[str] = []
+        final_text = ""
+        async with self._run_lock:
+            ctx = RunContext(principal=principal, session_id=sess.id)
+            self.active_run = ctx
+            try:
+                async for ev in agent.chat_stream(sess.id, sess.hermes_session_id, text, instructions, model):
+                    if ev.type == "run_started":
+                        ctx.run_id = str(ev.data.get("run_id") or "") or None
+                        await self._remember_agent_session(sess, ctx.run_id)
+                        continue
+                    if ev.type == "delta":
+                        chunks.append(ev.text)
+                    elif ev.type == "assistant_completed":
+                        final_text = ev.text or final_text
+                        continue
+                    elif ev.type in ("tool_started", "tool_completed", "tool_failed"):
+                        tools.append(
+                            {"event": ev.type, "name": ev.data.get("name"), "ts": datetime.now(UTC).isoformat()}
+                        )
+                    elif ev.type == "failed":
+                        reply = self._error_reply(ev.text)
+                        await emit(AgentEvent("delta", text=reply))
+                        return TurnResult(sess.id, reply, tools, error=ev.text, provider="claude_code")
+                    elif ev.type == "completed":
+                        await self._remember_agent_session(sess, ev.data.get("session_id"))
+                        break
+                    await emit(ev)
+            except (ClaudeUnavailable, OSError) as e:
+                logger.exception("Claude Code run failed")
+                reply = self._error_reply(str(e))
+                await emit(AgentEvent("delta", text=reply))
+                return TurnResult(sess.id, reply, tools, error=str(e)[:500], provider="claude_code")
+            finally:
+                self.active_run = None
+        if ctx.cancelled:
+            return TurnResult(
+                sess.id,
+                ("".join(chunks)).strip() or "Abgebrochen, Sir.",
+                tools,
+                error="cancelled",
+                provider="claude_code",
+            )
+        return TurnResult(sess.id, (final_text or "".join(chunks)).strip(), tools, provider="claude_code")
+
+    async def _remember_agent_session(self, sess: ChatSession, agent_session_id: str | None) -> None:
+        if not agent_session_id or sess.hermes_session_id == agent_session_id:
+            return
+        sess.hermes_session_id = agent_session_id  # column stores the agent provider's session id
+        async with session_scope() as s:
+            row = await s.get(ChatSession, sess.id)
+            if row is not None:
+                row.hermes_session_id = agent_session_id
+
     async def _run_fallback(self, sess: ChatSession, text: str, instructions: str, emit: EventCallback) -> TurnResult:
-        """Direct local LLM without tools — used only when Hermes is down. Says so honestly."""
-        notice = "(Hinweis: Der Agent-Dienst Hermes ist nicht erreichbar – ich antworte ohne Werkzeuge.) "
-        history = await self.history(sess.id, limit=12)
-        messages = [{"role": "system", "content": render_soul(self.state.personality) + "\n\n" + instructions}]
-        messages += [
-            {"role": m["role"], "content": m["content"]} for m in history if m["role"] in ("user", "assistant")
-        ]
-        chunks = [notice]
-        await emit(AgentEvent("delta", text=notice))
-        try:
-            async for piece in self.state.ollama.chat_stream(self.state.settings.llm.agent_model, messages):
-                chunks.append(piece)
-                await emit(AgentEvent("delta", text=piece))
-        except Exception as e:
-            logger.exception("Fallback LLM failed")
-            return TurnResult(sess.id, self._error_reply(str(e)), [], error=str(e), provider="ollama")
-        return TurnResult(sess.id, "".join(chunks).strip(), [], provider="ollama")
+        """No agent available: answer honestly and deterministically — never pretend to have acted."""
+        reason = (self.state.agent.last_error if self.state.agent is not None else None) or "nicht erreichbar"
+        reply = (
+            f"Mein Sprachmodell (Claude Code) ist gerade nicht verfügbar, Sir ({reason[:160]}). "
+            "Ich kann deshalb im Moment weder antworten noch Aktionen ausführen – es wurde nichts angelegt, gesendet "
+            "oder gestartet."
+        )
+        await emit(AgentEvent("delta", text=reply))
+        return TurnResult(sess.id, reply, [], error="agent_unavailable", provider="system")
 
     def _error_reply(self, detail: str) -> str:
         base = (self.state.personality.error_phrases or ["Das hat leider nicht funktioniert, Sir."])[0]
@@ -260,7 +379,9 @@ class Orchestrator:
         if run is None:
             return False
         run.cancelled = True
-        if run.run_id and self.state.hermes is not None:
+        if self.state.agent is not None:
+            await self.state.agent.interrupt(run.session_id)
+        elif run.run_id and self.state.hermes is not None:
             try:
                 await self.state.hermes.stop_run(run.run_id)
             except Exception:

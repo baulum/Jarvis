@@ -199,9 +199,7 @@ class BrowserConnector(Connector):
                 },
                 {"role": "user", "content": f"Felder: {', '.join(fields)}\n\n{page_data['content'][:9000]}"},
             ]
-            data = await self.state.ollama.chat_json(
-                self.state.settings.llm.utility_model, messages, schema, purpose="web_extract"
-            )
+            data = await self.state.structured_llm(messages[0]["content"], messages[1]["content"], schema)
             return {
                 "url": page_data["url"],
                 "fields": data,

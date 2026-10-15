@@ -30,10 +30,10 @@ fi
 step "Python-Umgebung"
 (cd "$ROOT/core" && uv sync --all-extras && uv run playwright install chromium && uv run alembic upgrade head)
 
-step "Ollama-Modelle"
-ollama list | grep -q "qwen3.5:4b" || ollama pull qwen3.5:4b
+step "Ollama-Modelle (Embeddings; lokales Agent-Modell nur mit JARVIS_WITH_HERMES=1)"
 ollama list | grep -q "qwen3-embedding:0.6b" || ollama pull qwen3-embedding:0.6b
-if ! ollama list | grep -q "jarvis-brain"; then
+if [ "${JARVIS_WITH_HERMES:-0}" = 1 ] && ! ollama list | grep -q "jarvis-brain"; then
+  ollama list | grep -q "qwen3.5:4b" || ollama pull qwen3.5:4b
   printf 'FROM qwen3.5:4b\nPARAMETER num_ctx 65536\nPARAMETER temperature 0.4\n' > /tmp/jarvis-Modelfile
   ollama create jarvis-brain -f /tmp/jarvis-Modelfile && rm /tmp/jarvis-Modelfile
 fi
@@ -46,7 +46,11 @@ for f in melspectrogram.onnx embedding_model.onnx hey_jarvis_v0.1.onnx; do
   [ -f "$MODELS/$f" ] || curl -fL -o "$MODELS/$f" "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/$f"
 done
 
-step "Hermes Agent"
+step "Claude Code (Agent-Gehirn)"
+env -u ANTHROPIC_API_KEY claude auth status | grep -q '"loggedIn": true' || echo "⚠ Claude Code nicht angemeldet: im Terminal 'claude' starten und /login ausführen"
+
+if [ "${JARVIS_WITH_HERMES:-0}" = 1 ]; then
+step "Hermes Agent (optional)"
 if ! command -v hermes >/dev/null; then
   echo "Installiere Hermes Agent über den offiziellen Installer (ohne eigene Browser-/Computer-Use-Tools)…"
   curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh
@@ -54,8 +58,7 @@ if ! command -v hermes >/dev/null; then
 fi
 [ -d "$HOME/.hermes/profiles/jarvis" ] || hermes profile create jarvis --description "J.A.R.V.I.S. (local Ollama + Jarvis MCP tools)"
 
-step "Jarvis-Geräte und Hermes-Anbindung"
-(cd "$ROOT/core" && uv run jarvisctl init && uv run jarvisctl setup-hermes)
+(cd "$ROOT/core" && uv run jarvisctl setup-hermes)
 (cd "$ROOT/core" && uv run python - <<'PY'
 from pathlib import Path
 from jarvis.agent.hermes_setup import _update_env_file
@@ -66,6 +69,10 @@ _update_env_file(Path.home() / ".hermes/.env", {"API_SERVER_ENABLED": "true", "A
 print("✓ Hermes-API-Listener (127.0.0.1:8642) aktiviert")
 PY
 )
+fi
+
+step "Jarvis-Geräte"
+(cd "$ROOT/core" && uv run jarvisctl init)
 
 step "macOS Bridge (Swift)"
 (cd "$ROOT/bridge" && ./scripts/build-app.sh)

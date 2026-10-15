@@ -1,5 +1,6 @@
 // Typed REST client for the J.A.R.V.I.S. core. Every endpoint the desktop uses lives here.
 import type {
+  AgentModelStatus,
   Approval,
   ChatAccepted,
   ChatMessageRow,
@@ -224,6 +225,9 @@ export function createApi(opts: ApiOptions) {
     // coding
     codingJobs: () => get<CodingJob[]>("/coding/jobs"),
     codingLog: (jid: string, lines = 400) => get<CodingLogLine[]>(`/coding/jobs/${id(jid)}/log`, { lines }),
+    agentModel: (sessionId?: string | null) => get<AgentModelStatus>("/agent/model", { session_id: sessionId ?? undefined }),
+    setAgentModel: (body: { model: string | null; scope: "default" | "session"; session_id?: string | null; auto_downgrade?: boolean }) =>
+      post<AgentModelStatus>("/agent/model", body),
     codingCancel: (jid: string) => post<{ cancelled: boolean }>(`/coding/jobs/${id(jid)}/cancel`),
   };
 }

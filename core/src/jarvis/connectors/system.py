@@ -67,6 +67,12 @@ class SystemConnector(Connector):
                 "status": task.status,
                 "steps": [s.name for s in task.steps],
                 "note": "Die Aufgabe läuft im Hintergrund; Fortschritt in der App oder per task_status.",
+                "nicht_eingerichtet": [
+                    conn.manifest.name
+                    for cid, conn in st.connectors.connectors.items()
+                    if cid in ("lexware", "google", "telegram", "github") and not conn.active
+                ],
+                "hinweis": "Schritte mit nicht eingerichteten Connectoren werden übersprungen – sag Sir das ehrlich.",
             }
 
         async def task_status(ctx: ToolContext, a: dict[str, Any]) -> Any:

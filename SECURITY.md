@@ -35,7 +35,11 @@ Overrides in `permissions.yaml` können Risiken nur **erhöhen**.
 - macOS-Schlüsselbund (Dienst `jarvis`) über `keyring`; auf Servern alternativ `JARVIS_SECRET_<NAME>`-Umgebungsvariablen.
 - API liefert nur „gesetzt/fehlt“, nie Werte. Logs und Audit schwärzen token-artige Zeichenketten und sensible Schlüssel.
 - Gerätetokens: nur SHA-256-Hash in der DB; Klartext einmalig bei der Kopplung bzw. als 0600-Datei für lokale Komponenten.
-- Hermes: eigener API-Key pro Profil (`.env`, 0600), Jarvis-MCP-Token mit Rolle `agent` (nur `/mcp`, keine REST-API).
+- Agent: Claude Code läuft mit `--restricted` (keine Benutzer-/Projekt-Settings, Hooks, Plugins), `--tools ""` (kein Datei-/
+  Shell-Zugriff), `--strict-mcp-config` mit ausschließlich dem Jarvis-MCP-Server und `--allowedTools mcp__jarvis`.
+  Das MCP-Token (Rolle `agent`, nur `/mcp`) liegt in einer 0600-Datei, nicht in der Prozess-Kommandozeile.
+- Nutzung der Subscription: unveränderte CLI, eigener Login, rein persönliche Automatisierung auf dem eigenen Mac.
+  Jeder Turn verbraucht Kontingent; bei Erschöpfung meldet Jarvis das ehrlich.
 - Claude Code: offizielle Subscription-Anmeldung. Der Runner entfernt `ANTHROPIC_API_KEY` & Co. aus der Umgebung und prüft
   `claude auth status`. Es werden keine OAuth-Tokens gelesen oder weitergegeben.
 

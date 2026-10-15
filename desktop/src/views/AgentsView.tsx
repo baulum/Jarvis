@@ -23,11 +23,14 @@ export function AgentsView() {
     <div className="h-full overflow-y-auto">
       <div className="mx-auto grid max-w-[76rem] gap-6 px-8 py-6 lg:grid-cols-[1fr_1.3fr]">
         <div className="flex flex-col gap-6">
-          <Section title="Hermes-Agent" meta="lokales Modell über Ollama">
+          <Section title="Agent" meta="Claude Code · Subscription">
             <div className="p-4">
               <KeyValue rows={[
-                ["Status", <span key="h" className="flex items-center gap-2"><Dot tone={status?.components.hermes === "ok" ? "ok" : "bad"} />{status?.components.hermes ?? "–"}</span>],
-                ["Neustarts", String(status?.hermes_restarts ?? 0)],
+                ["Status", <span key="h" className="flex items-center gap-2"><Dot tone={status?.components.agent === "ok" ? "ok" : "bad"} />{status?.components.agent ?? "–"}</span>],
+                ["Aktive Gespräche", String(status?.agent?.active_sessions ?? 0)],
+                ["Bereitschaftsprozess", status?.agent?.standby_ready ? "bereit" : "startet"],
+                ["Modellwahl", status?.agent?.routing ? (status.agent.routing.default === "sonnet" && status.agent.routing.auto_downgrade ? "Auto (Sonnet, einfach → Haiku)" : status.agent.routing.default) : "–"],
+                ["Letzter Fehler", status?.agent?.last_error ?? "–"],
                 ["Offene Aufgaben", String(status?.open_tasks ?? 0)],
               ]} />
             </div>

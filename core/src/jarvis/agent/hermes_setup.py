@@ -196,6 +196,9 @@ class HermesSupervisor:
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
+    def is_running(self) -> bool:
+        return self._task is not None and not self._task.done() and not self._stopping
+
     async def restart(self) -> None:
         """Restart to refresh Hermes' MCP tool cache (e.g. after a connector was enabled)."""
         if self.proc and self.proc.returncode is None:

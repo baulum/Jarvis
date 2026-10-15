@@ -14,6 +14,15 @@
 - Playwright Chromium (headless shell)
 - Aufgeräumt (mit Freigabe): npm-Cache, Ollama-Modell qwen3.6
 
+### Architekturwechsel (2026-10-15, auf Wunsch von Sir)
+- Agent-Gehirn ist jetzt die **Claude Code CLI mit Sirs Subscription** (nicht mehr Hermes + lokales Modell).
+  Ein Prozess je Gespräch (stream-json), Bereitschaftsprozess, Idle-Stop + `--resume`.
+- **Modellrouter:** Sonnet 5.5 Standard, einfache Anfragen → Haiku 5.5, Opus 5.5 nur auf Befehl/manuell;
+  Wechsel ohne Neustart per Control-Request (gemessen 1–2 s). Getestet: Haiku → „Nimm Opus“ → Opus → auto → Sonnet.
+- Hilfsaufgaben (Wissensextraktion, Web-Extraktion, Screenshot-Analyse) über Claude Haiku.
+- Lokal bleiben nur Embeddings (qwen3-embedding, Gedächtnissuche) und Whisper (STT). Hermes bleibt als Option (`agent.provider: hermes`).
+- Gemessen: „Welche Programme laufen?“ 4,0 s inkl. Tool; Neukunden-Satz → Playbook korrekt gestartet in 5,5 s.
+
 ### Funktioniert – real getestet
 | Bereich | Nachweis |
 |---|---|
@@ -27,9 +36,11 @@
 | Gedächtnis | Integrationstests: Anlegen, Duplikat, Ergänzung, Korrektur, Löschen, Graph, sensible Bestätigung, Vault-Fremdänderung, LLM-Extraktion |
 | Executor/Task-Engine | Integrationstests: exactly-once nach Freigabe, Idempotenz, Rollen, Not-Aus, Taint, Audit-Manipulation erkannt, Wiederaufnahme nach Crash, Pause für Eingaben |
 | macOS Bridge | 47 Swift-Tests + Live-Checks |
-| Desktop-App | `pnpm build`, `pnpm lint` (0 Fehler), 11 Vitest-Tests |
+| Desktop-App | `pnpm build`, `pnpm lint` (0 Fehler), 11 Vitest-Tests, Release-.app verbindet sich (WS als owner) |
+| Coding-Runner | Echte Jobs: Python-Modul (3 Tests grün) und Müller-Website (Vite/TS, `npm run build` grün, Commit) |
+| Neukunden-Playbook | Satz aus dem Master-Prompt → Playbook; Lexware-Schritte ohne Key ehrlich übersprungen; Website gebaut |
 
-Testsummen: Core 22 Unit + 16 Integration + 1 E2E; Desktop 11; Bridge 47.
+Testsummen: Core 25 Unit + 17 Integration + 1 E2E; Desktop 11; Bridge 47.
 
 ### Modellwahl (scripts/bench/tool_calling_bench.py)
 | Modell | Tool-Calling | Median | RAM | 64k Kontext |
@@ -45,9 +56,8 @@ Hermes-Latenz: Kaltstart ~20 s (Modell laden), danach ~2–7 s je Turn (Prompt-C
 - Eine VS-Code-Erweiterung committet automatisch in dieses Repo (Commits „Implement …“ unter Pauls Namen) – nicht von Claude.
 
 ### Offen / nächste Schritte
-- [ ] Desktop-App: Release-Bundle bauen und visuell prüfen (in Arbeit)
-- [ ] Playbook `new_customer_project` E2E bis inkl. Claude-Code-Job (Lexware-Schritte werden ohne Key übersprungen)
-- [ ] Coding-Runner Live-Test mit echtem Claude-Code-Job (Sandbox-Settings verifizieren)
+- [ ] Desktop-App visuell prüfen (Screenshot benötigt Bildschirmaufnahme-Recht fürs Terminal)
+- [ ] Playbook: fehlgeschlagene Tests als Warnung im Abschluss hervorheben
 - [ ] Voice-Daemon mit echtem Mikrofon (benötigt Mikrofon-Freigabe)
 - [ ] Connectoren mit echten Zugangsdaten verifizieren (Lexware, Google, Telegram, GitHub, Fish Audio, Twilio)
 - [ ] mypy strict über den Core laufen lassen und Befunde beheben

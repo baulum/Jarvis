@@ -90,6 +90,12 @@ class CodingRunner:
         env = {k: v for k, v in os.environ.items() if k not in _STRIP_ENV and not k.startswith("JARVIS_SECRET")}
         env["PATH"] = os.environ.get("PATH", "") + ":/opt/homebrew/bin:/usr/local/bin"
         env["GIT_TERMINAL_PROMPT"] = "0"
+        # Package-manager caches live in a dedicated, sandbox-writable directory (not ~/.npm etc.).
+        cache = self.workspaces / ".cache"
+        env["npm_config_cache"] = str(cache / "npm")
+        env["UV_CACHE_DIR"] = str(cache / "uv")
+        env["PIP_CACHE_DIR"] = str(cache / "pip")
+        env["PNPM_HOME"] = str(cache / "pnpm")
         return env
 
     async def auth_status(self) -> dict[str, Any]:
@@ -134,6 +140,23 @@ class CodingRunner:
             await self._git(path, "add", "-A")
             await self._git(
                 path, "-c", "user.name=Jarvis", "-c", "user.email=jarvis@localhost", "commit", "-m", "Initial commit"
+            )
+
+    async def _commit_pending(self, repo: Path) -> None:
+        """Jarvis-managed projects: commit prepared files (e.g. BRIEF.md) so the job's worktree sees them."""
+        if not repo.resolve().is_relative_to(self.state.settings.paths.projects_dir.resolve()):
+            return  # never touch Sir's other repositories
+        if await self._git(repo, "status", "--porcelain", check=False):
+            await self._git(repo, "add", "-A")
+            await self._git(
+                repo,
+                "-c",
+                "user.name=Jarvis",
+                "-c",
+                "user.email=jarvis@localhost",
+                "commit",
+                "-m",
+                "Jarvis: Projektunterlagen vorbereitet",
             )
 
     async def clone(self, url: str, name: str | None = None) -> Path:
@@ -265,6 +288,7 @@ class CodingRunner:
                     branch = f"jarvis/{slug(title, 30)}-{str(job_id)[:8]}"
                     wt = self.workspaces / f"{slug(repo.name, 30)}-{str(job_id)[:8]}"
                     wt.parent.mkdir(parents=True, exist_ok=True)
+                    await self._commit_pending(repo)
                     await self._git(repo, "worktree", "add", "-b", branch, str(wt), "HEAD")
                     worktree = str(wt)
                 self.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -341,6 +365,7 @@ class CodingRunner:
                 "allowUnsandboxedCommands": False,
                 "autoAllowBashIfSandboxed": False,
                 "network": {"allowedDomains": NETWORK_ALLOWLIST, "strictAllowlist": True},
+                "filesystem": {"allowWrite": [str(self.workspaces / ".cache")]},
             }
         argv = [
             exe,

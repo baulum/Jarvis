@@ -91,3 +91,15 @@ async def test_resume_after_crash(stack) -> None:
         assert t.attempts >= 1 and t.steps[0].status == "completed"
     finally:
         await eng.stop()
+
+
+async def test_schema_defaults_applied_for_title(stack) -> None:
+    from jarvis.jobs.playbooks import NEW_CUSTOMER_PROJECT
+
+    eng = TaskEngine(SimpleNamespace(executor=stack.executor, kill_switch=stack.kill_switch))  # type: ignore[arg-type]
+    eng.register(NEW_CUSTOMER_PROJECT)
+    task = await eng.create(
+        "new_customer_project", {"customer_name": "Müller Gebäudereinigung", "price_eur": 499}, OWNER
+    )
+    assert task.title == "Neukunde Müller Gebäudereinigung: Website (499 EUR)"
+    assert task.params["project_type"] == "Website"

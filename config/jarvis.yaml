@@ -29,6 +29,7 @@ database:
   password_secret: postgres   # Keychain account holding the DB password
 
 llm:
+  # With agent.provider=claude_code Ollama is only used for the local embedding model (semantic memory search).
   ollama_url: http://127.0.0.1:11434
   # Agentic model used by Hermes (Modelfile alias of qwen3.5:4b with num_ctx 65536)
   agent_model: jarvis-brain
@@ -38,8 +39,20 @@ llm:
   embedding_dimensions: 1024
   keep_alive: 30m
 
+agent:
+  # Agent brain. "claude_code": official Claude Code CLI with Sir's subscription (default).
+  # "hermes": Hermes Agent + local Ollama model (kept as an optional alternative).
+  provider: claude_code
+  claude_binary: claude
+  model: sonnet            # default for conversations: sonnet | opus | haiku  (= Claude * 5.5)
+  auto_downgrade: true     # simple requests (small talk, short questions, simple actions) use haiku
+  utility_model: haiku     # memory extraction, web extraction, screenshot analysis
+  # Switch by command ("nimm Opus", "ab jetzt Haiku", "nur diesmal Opus …", "automatische Modellwahl"),
+  # in the desktop app or via POST /api/agent/model. Opus is only used when asked for.
+  idle_timeout_minutes: 15 # idle conversation processes are stopped and resumed later
+
 hermes:
-  enabled: true
+  enabled: false
   profile: jarvis
   # Hermes runs ONE multiplexing host gateway for all profiles; this profile is served under /p/<profile>
   api_url: http://127.0.0.1:8642/p/jarvis

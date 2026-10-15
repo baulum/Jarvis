@@ -12,8 +12,10 @@ from typing import Any
 import psutil
 from sqlalchemy import func, select
 
+from jarvis.agent.claude_agent import ClaudeCodeAgent, ClaudeOneShot
 from jarvis.agent.hermes_setup import HermesSupervisor, sync_soul
 from jarvis.agent.llm import HermesClient, OllamaClient
+from jarvis.agent.model_router import ModelRouter
 from jarvis.agent.orchestrator import Orchestrator
 from jarvis.coding.runner import CodingRunner
 from jarvis.config import Permissions, Personality, Settings, load_permissions, load_personality
@@ -47,7 +49,8 @@ from jarvis.tools.registry import ToolRegistry
 from jarvis.voice.speech import STTService, TTSService
 
 logger = logging.getLogger(__name__)
-VERSION = "0.1.0"
+VERSION = "0.2.0"
+AGENT_MCP_SECRET = "agent-mcp-token"  # noqa: S105 - Keychain account name
 
 
 class AppState:
@@ -73,8 +76,13 @@ class AppState:
         self.ollama = OllamaClient(settings.llm.ollama_url, settings.llm.keep_alive)
         self.hermes: HermesClient | None = None
         self.hermes_supervisor = HermesSupervisor(self)
+        self.oneshot = ClaudeOneShot(self)
+        self.model_router = ModelRouter(
+            settings.agent.model, settings.agent.auto_downgrade, settings.paths.data_dir / "agent-model.json"
+        )
+        self.agent: ClaudeCodeAgent | None = ClaudeCodeAgent(self) if settings.agent.provider == "claude_code" else None
         self.memory = MemoryService(
-            Vault(settings.paths.vault_dir), self.ollama, settings.llm.embedding_model, settings.llm.utility_model
+            Vault(settings.paths.vault_dir), self.ollama, settings.llm.embedding_model, self.structured_llm
         )
         self.bridge = BridgeClient(settings.paths.data_dir)
         self.browser = BrowserService(settings.browser.headless, settings.browser.default_timeout_ms)
@@ -145,10 +153,10 @@ class AppState:
     async def start(self) -> None:
         init_engine(self.settings)
         await self.connectors.load()
-        try:
-            await self.ollama.warm(self.settings.llm.agent_model)
+        try:  # only the small local embedding model is used (semantic memory search)
+            await self.ollama.embed(self.settings.llm.embedding_model, ["warm-up"])
         except Exception:
-            logger.warning("Ollama warm-up failed (is Ollama running?)", exc_info=True)
+            logger.warning("Embedding warm-up failed (is Ollama running?)", exc_info=True)
         try:
             await self.memory.start()
         except Exception:
@@ -158,7 +166,9 @@ class AppState:
         await self.scheduler.start()
         self.notifier.start()
         await self.mcp_hub.start()
-        if self.settings.hermes.enabled:
+        if self.agent is not None:
+            await self._start_claude_agent()
+        elif self.settings.hermes.enabled:
             sync_soul(self)
             key = secret_store.get(self.settings.hermes.api_key_secret)
             if key:
@@ -169,7 +179,27 @@ class AppState:
         bus.subscribe("system.killswitch", self._on_killswitch)
         await audit("system", "core.start", details={"version": VERSION})
 
+    async def _start_claude_agent(self) -> None:
+        from jarvis.security.auth import create_device
+
+        token = secret_store.get(AGENT_MCP_SECRET) or secret_store.get("hermes-mcp-token")
+        if not token:
+            _, token = await create_device("claude-code-agent", "agent")
+            secret_store.set(AGENT_MCP_SECRET, token)
+        assert self.agent is not None
+        self.agent.write_mcp_config(token)
+        await self.agent.start()
+
+    async def structured_llm(self, system: str, prompt: str, schema: dict[str, Any]) -> Any:
+        """Structured completion for utility tasks — Claude (subscription) or, with provider=hermes, Ollama."""
+        if self.agent is not None:
+            return await self.oneshot.run(prompt, schema=schema, system=system)
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+        return await self.ollama.chat_json(self.settings.llm.utility_model, messages, schema)
+
     async def stop(self) -> None:
+        if self.agent is not None:
+            await self.agent.stop()
         await self.hermes_supervisor.stop()
         await self.tasks.stop()
         await self.scheduler.stop()
@@ -200,11 +230,18 @@ class AppState:
             comps["ollama"] = "ok"
         except Exception:
             comps["ollama"] = "down"
-        comps["hermes"] = (
-            "ok"
-            if self.hermes and await self.hermes.health()
-            else ("not_configured" if self.hermes is None else "down")
-        )
+        if self.agent is not None:
+            comps["agent"] = (
+                "ok"
+                if self.agent.available() and not self.agent.last_error
+                else ("degraded" if self.agent.available() else "down")
+            )
+        else:
+            comps["hermes"] = (
+                "ok"
+                if self.hermes and await self.hermes.health()
+                else ("not_configured" if self.hermes is None else "down")
+            )
         try:
             async with session_scope() as s:
                 await s.execute(select(1))
@@ -293,6 +330,11 @@ class AppState:
         out["mcp_servers"] = self.mcp_hub.status()
         out["voice"] = self.voice_state
         out["hermes_restarts"] = self.hermes_supervisor.restarts
+        out["agent"] = (
+            {**self.agent.status(), "routing": self.model_router.status()}
+            if self.agent is not None
+            else {"provider": "hermes"}
+        )
         return out
 
 

@@ -44,13 +44,21 @@ In der Desktop-App unter **Connectoren** oder per CLI (`cd core && uv run jarvis
 Twilio: Voice-Webhook der Rufnummer → `POST https://<public_base_url>/api/telephony/twilio/voice`.
 Lokaler Test ohne Twilio: `uv run jarvisctl phone-test --say "eins zwei drei vier" --say "Wie spät ist es?"` (benötigt eine PIN).
 
-## 5. Persönlichkeit & Verhalten anpassen
+## 5. Sprachmodell (Claude 5.5)
+- Standard: **Sonnet 5.5**; einfache Anfragen automatisch **Haiku 5.5**; **Opus 5.5** nur auf Wunsch.
+- Per Sprache/Chat: „Nimm Opus“ (dieses Gespräch), „Ab jetzt Haiku“ (Standard), „Nur diesmal Opus: …“ (eine Antwort),
+  „Zurück zur automatischen Modellwahl“.
+- In der Desktop-App: Umschalter über dem Eingabefeld (Auto / Haiku / Sonnet / Opus).
+- Konfiguration: `agent.model`, `agent.auto_downgrade`, `agent.utility_model` in `config/jarvis.yaml`.
+- Alternative ohne Subscription: `agent.provider: hermes` (Hermes + lokales Ollama-Modell, siehe unten).
+
+## 6. Persönlichkeit & Verhalten anpassen
 - `config/personality.yaml` – Anrede, Charakterzüge, Humor, Begrüßungen (wird beim Core-Start als Hermes-SOUL.md übernommen)
 - `config/permissions.yaml` – Rollen, Risikostufen, Shell-Allowlist, Rate-Limits
 - `config/jarvis.yaml` – Modelle, Stimme, Benachrichtigungsregeln, Ruhezeiten, Pfade
 - `config/mcp_servers.yaml` – externe MCP-Server
 
-## 6. Tests
+## 7. Tests
 ```bash
 cd core
 uv run pytest tests/unit                       # ohne Infrastruktur
@@ -63,7 +71,7 @@ cd ../bridge && swift test
 ## Fehlerbehebung
 - `jarvisctl doctor` prüft Binärdateien, Secrets, Tokens und Modelle.
 - Logs: `~/Library/Logs/Jarvis/` (`core.jsonl`, `hermes-gateway.log`, `whisper.log`, `voice.log`, `bridge.log`).
-- Hermes nutzt **ein** Host-Gateway für alle Profile; Jarvis startet es als Kindprozess (`hermes gateway run --replace`),
+- Nur bei `agent.provider: hermes`: Hermes nutzt **ein** Host-Gateway für alle Profile; Jarvis startet es als Kindprozess (`hermes gateway run --replace`),
   sobald der MCP-Endpunkt erreichbar ist. Der API-Listener wird über das Default-Profil (`~/.hermes/.env`) aktiviert.
-- Wenig Arbeitsspeicher (16 GB): Agent-Modell ≈ 5,5 GB, Whisper ≈ 1 GB, Embeddings ≈ 0,7 GB. Speicherintensive Apps
+- Arbeitsspeicher: Whisper ≈ 1 GB, Embeddings ≈ 0,7 GB, je Claude-Code-Prozess ≈ 0,3 GB (mit Hermes-Option zusätzlich ≈ 5,5 GB). Speicherintensive Apps
   (Xcode, Simulator, Rust-Builds) können Ollama-Fehler „Compute error“ auslösen; der Core wiederholt solche Anfragen.

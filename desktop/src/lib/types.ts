@@ -90,6 +90,7 @@ export interface SystemStatus {
   mcp_servers?: McpServer[];
   voice?: VoiceState;
   hermes_restarts?: number;
+  agent?: { provider: string; model?: string; active_sessions?: number; standby_ready?: boolean; last_error?: string | null; routing?: AgentModelStatus };
 }
 
 export interface ChatSessionInfo {
@@ -434,4 +435,11 @@ export interface BusEvent<T = Record<string, unknown>> {
   type: string;
   ts: string;
   data: T;
+}
+
+export interface AgentModelStatus {
+  default: "haiku" | "sonnet" | "opus" | string;
+  auto_downgrade: boolean;
+  session_override: string | null;
+  models: { alias: string; id: string; label: string }[];
 }

@@ -92,6 +92,35 @@ async def chat(body: ChatBody, st: AppState = StateDep, p: Principal = Actor) ->
     return {"session_id": str(sess.id), "accepted": True}
 
 
+class ModelBody(BaseModel):
+    model: str | None = None  # haiku | sonnet | opus | None (= automatic)
+    scope: str = "default"  # default | session
+    session_id: str | None = None
+    auto_downgrade: bool | None = None
+
+
+@router.get("/agent/model")
+async def agent_model(session_id: str | None = None, st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    return st.model_router.status(session_id)
+
+
+@router.post("/agent/model")
+async def agent_model_set(body: ModelBody, st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
+    if body.scope not in ("default", "session"):
+        raise HTTPException(400, "scope must be default or session")
+    try:
+        if body.auto_downgrade is not None:
+            st.model_router.set_auto_downgrade(body.auto_downgrade)
+        if body.model is not None or body.auto_downgrade is None:
+            st.model_router.set(body.model, body.scope, body.session_id)  # type: ignore[arg-type]
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    await audit(p.label, "agent.model", details=body.model_dump())
+    status = st.model_router.status(body.session_id)
+    await bus.publish("agent.model", **status)
+    return status
+
+
 @router.post("/chat/interrupt")
 async def chat_interrupt(st: AppState = StateDep, p: Principal = Actor) -> dict[str, bool]:
     return {"interrupted": await st.orchestrator.interrupt()}

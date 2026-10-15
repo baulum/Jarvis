@@ -13,9 +13,9 @@
                     │                                   │  Connectors · MCP-Server   │
                     │      ┌────────── /mcp ◄───────────┤  Audit (Hash-Kette)        │
                     │      ▼                            └──┬───────┬────────┬────────┘
-                    │  Hermes Agent (Host-Gateway :8642, │       │        │
-                    │  Profil /p/jarvis) ──► Ollama      │       │        │
-                    │  (jarvis-brain = qwen3.5:4b, 64k)  │       │        │
+                    │  Claude Code CLI (Subscription),   │       │        │
+                    │  1 Prozess je Gespräch, Modell-    │       │        │
+                    │  router Haiku/Sonnet/Opus 5.5      │       │        │
                     │                                    ▼       ▼        ▼
                     │       JarvisBridge (Swift :8766)  PostgreSQL  whisper.cpp  Claude Code CLI
                     │       AX · ScreenCaptureKit ·     +pgvector   (:8178)      (Worktrees,
@@ -28,11 +28,13 @@
 | Komponente | Ort | Aufgabe |
 |---|---|---|
 | **Jarvis Core** | `core/src/jarvis` | Zentrale Orchestrierung, REST/WS-API, Policy-Engine, Tools, Gedächtnis, Aufgaben, Telefonie, Coding-Runner |
-| **Hermes Agent** | `~/.hermes` (offizieller Installer) | Agent-Loop (Planung, Tool-Calling) mit lokalem Modell; nutzt die Jarvis-Tools ausschließlich über MCP |
+| **Agent (Claude Code)** | `core/src/jarvis/agent/claude_agent.py` | Agent-Loop über die offizielle Claude Code CLI mit Sirs Subscription; einziges Werkzeug-Set = Jarvis-MCP-Server |
+| **Modellrouter** | `core/src/jarvis/agent/model_router.py` | Sonnet 5.5 Standard, einfache Anfragen → Haiku 5.5, Opus 5.5 nur auf Befehl/manuell |
+| **Hermes Agent** (optional) | `~/.hermes` | Alternative zu Claude (`agent.provider: hermes`) mit lokalem Ollama-Modell |
 | **JarvisBridge** | `bridge/` (Swift) | Native macOS-Steuerung, eigene Token-/Kill-Switch-/Policy-Prüfung (Defense in Depth) |
 | **Voice-Daemon** | `core/src/jarvis/voice/daemon.py` | Wake Word, VAD, STT-Upload, Satz-für-Satz-TTS, Barge-in, Push-to-Talk |
 | **Desktop-App** | `desktop/` (Tauri 2, React, TS strict) | Kommandozentrale, Menüleisten-Icon, globaler Kurzbefehl ⌘⇧J |
-| **Ollama** | System | `jarvis-brain` (Agent), `qwen3-embedding:0.6b` (Embeddings), Vision über dasselbe Modell |
+| **Ollama** | System | nur `qwen3-embedding:0.6b` für die semantische Gedächtnissuche (kein Sprachmodell für das Denken) |
 | **whisper.cpp** | Homebrew | `whisper-server` mit large-v3-turbo (q5_0), Deutsch |
 | **PostgreSQL 17 + pgvector** | Homebrew | Sessions, Aufgaben, Freigaben, Ledger, Audit, Memory-Index, Anrufe, Jobs |
 | **Obsidian-Vault** | `~/Documents/Jarvis Vault` | Quelle der Wahrheit fürs Gedächtnis (Markdown + YAML-Frontmatter) |
@@ -40,12 +42,20 @@
 ## Kernabläufe
 
 **Gespräch.** Jede Eingabe (Desktop, Stimme, Telegram, Telefon, Webhook, Scheduler) geht durch den `Orchestrator`:
-Sitzung (mit Idle-Timeout) → Gedächtnisabruf (pgvector) → Turn-Instruktionen (Zeit, Kanal, Taint-Warnung) →
-Hermes-Sitzung (`/p/jarvis/api/sessions/{id}/chat/stream`, SSE) → Events auf den Bus → Transkript speichern →
-asynchrone Wissensextraktion. Agent-Läufe sind serialisiert (ein lokales 4B-Modell bedient ohnehin eine Anfrage
-nach der anderen). So kann der MCP-Server jeden Tool-Aufruf dem richtigen Akteur und der richtigen Sitzung zuordnen.
+Sitzung (mit Idle-Timeout) → Modellwahl (Befehl/Router) → Gedächtnisabruf (pgvector) → Turn-Kontext (Zeit, Kanal,
+Taint-Warnung, Erinnerungen) → Claude-Code-Prozess der Sitzung (`--input-format stream-json`, Modellwechsel per
+Control-Request ohne Neustart) → Events auf den Bus → Transkript speichern → asynchrone Wissensextraktion (Haiku).
+Ein vorgewärmter Bereitschaftsprozess macht auch den ersten Turn schnell (gemessen: ~4 s inkl. Tool-Aufruf; Folge-Turns
+erstes Token ~1 s). Untätige Prozesse werden nach 15 min beendet und per `--resume` fortgesetzt.
+Agent-Läufe sind serialisiert, damit der MCP-Server jeden Tool-Aufruf dem richtigen Akteur und der richtigen Sitzung zuordnet.
+Ist Claude nicht verfügbar (z. B. Kontingent erschöpft), antwortet Jarvis deterministisch und ehrlich – ohne LLM und ohne
+Erledigt-Behauptungen.
 
-**Tool-Aufruf.** Hermes → `POST /mcp` (Bearer-Token der Rolle `agent`) → `ToolExecutor.execute`:
+**Modellwahl.** Standard Sonnet 5.5. Kurze, einfache Anfragen ohne Geschäfts-, Planungs-, Code- oder Recherchebezug
+→ Haiku 5.5. Opus 5.5 nur auf Befehl („nimm Opus“, „ab jetzt Opus“, „nur diesmal Opus …“), per App-Umschalter, API
+(`POST /api/agent/model`) oder Agent-Tool `agent_set_model`. „Automatische Modellwahl“ stellt zurück.
+
+**Tool-Aufruf.** Claude Code → `POST /mcp` (Bearer-Token der Rolle `agent`) → `ToolExecutor.execute`:
 1. Tool existiert und ist aktiv (Connector eingerichtet, kein Override `enabled: false`)
 2. JSON-Schema-Validierung der Argumente
 3. Not-Aus (alles außer `read` gesperrt)
@@ -85,7 +95,7 @@ Der lokale Testmodus (`jarvisctl phone-test`) spricht exakt dasselbe Protokoll �
 
 ## Erweiterbarkeit
 
-- **Weitere LLM-Provider:** `agent/llm.py` (Provider-Adapter); Hermes selbst unterstützt viele Provider über `hermes model`.
+- **Weitere LLM-Provider:** `agent.provider` (Claude Code oder Hermes); Adapter in `agent/claude_agent.py` bzw. `agent/llm.py`.
 - **Weitere Connectoren:** Klasse mit `Manifest` + `tools()` + `health()` in `connectors/`, in `app_state.py` registrieren.
 - **Externe MCP-Server:** `config/mcp_servers.yaml` (z. B. offizieller GitHub-MCP-Server) – gleiche Policy-Pipeline.
 - **Weitere Telefonie-/TTS-Anbieter:** `TelephonyProvider` bzw. `TTSProvider`-Interface.

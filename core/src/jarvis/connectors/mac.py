@@ -168,12 +168,17 @@ class MacConnector(Connector):
             path = shots_dir / f"screen-{int(time.time())}.png"
             path.write_bytes(png)
             question = a.get("question") or "Beschreibe knapp, was auf dem Bildschirm zu sehen ist."
-            description = await self.state.ollama.chat(
-                self.state.settings.llm.agent_model,
-                [{"role": "user", "content": question, "images": [shot["png_base64"]]}],
-                purpose="vision",
-                num_predict=400,
-            )
+            if self.state.agent is not None:  # Claude (subscription) reads the PNG with its Read tool
+                description = await self.state.oneshot.run(
+                    f"Lies die Bilddatei {path} und beantworte auf Deutsch knapp: {question}", read_dir=shots_dir
+                )
+            else:
+                description = await self.state.ollama.chat(
+                    self.state.settings.llm.agent_model,
+                    [{"role": "user", "content": question, "images": [shot["png_base64"]]}],
+                    purpose="vision",
+                    num_predict=400,
+                )
             return {
                 "path": str(path),
                 "width": shot.get("width"),

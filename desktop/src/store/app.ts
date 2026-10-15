@@ -75,6 +75,8 @@ interface AppState {
   /** approval id -> chat session id (the REST approval rows do not carry the session). */
   approvalSessions: Record<string, string>;
   unread: number;
+  /** session id -> model chosen for the latest turn (from chat.model events). */
+  turnModels: Record<string, { model: string; reason: string }>;
 
   setView: (v: ViewId) => void;
   setToken: (t: string | null, err?: string | null) => void;
@@ -121,6 +123,7 @@ export const useApp = create<AppState>((set, get) => ({
   codingLive: {},
   approvalSessions: {},
   unread: 0,
+  turnModels: {},
 
   setView: (view) => set({ view }),
   setToken: (token, err = null) => set({ token, tokenError: err }),
@@ -197,6 +200,15 @@ export function handleBusEvent(ev: BusEvent): void {
   const d = ev.data as Record<string, unknown>;
   const type = ev.type;
 
+  if (type === "chat.model") {
+    const sid = typeof d.session_id === "string" ? d.session_id : null;
+    if (sid) useApp.setState((s) => ({ turnModels: { ...s.turnModels, [sid]: { model: String(d.model), reason: String(d.reason ?? "") } } }));
+    return;
+  }
+  if (type === "agent.model") {
+    bump("system");
+    return;
+  }
   if (type.startsWith("chat.")) {
     const sid = typeof d.session_id === "string" ? d.session_id : null;
     if (sid) {
