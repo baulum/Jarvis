@@ -1,0 +1,225 @@
+@import "@fontsource-variable/instrument-sans/standard.css";
+@import "@fontsource-variable/martian-mono/standard.css";
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------- design tokens
+   void   – window background, the "space" behind the instruments
+   hull   – rail and structural surfaces
+   plate  – raised instrument plates
+   seam   – hairlines between plates
+   ink    – text, three strengths
+   arc    – the reactor cyan, used sparingly for live/active state
+   ember  – amber for attention (approvals, waiting, degraded)
+   alarm  – red, reserved for errors and the kill switch
+*/
+@theme {
+  --color-void: #05080b;
+  --color-hull: #091015;
+  --color-plate: #0d151b;
+  --color-plate-hi: #121c23;
+  --color-seam: #18242d;
+  --color-seam-hi: #233541;
+  --color-ink: #d6e2e8;
+  --color-ink-dim: #8a9ea9;
+  --color-ink-faint: #52666f;
+  --color-arc: #6ad3e4;
+  --color-arc-dim: #3c97a8;
+  --color-arc-deep: #123540;
+  --color-ember: #e2a14c;
+  --color-ember-deep: #3a2a14;
+  --color-alarm: #e5584f;
+  --color-alarm-deep: #3d1614;
+
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Martian Mono Variable", ui-monospace, monospace;
+
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  html {
+    color-scheme: dark;
+    background: var(--color-void);
+  }
+  body {
+    margin: 0;
+    background: var(--color-void);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "ss01", "tnum" 0;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  /* text the user may want to copy */
+  .selectable,
+  input,
+  textarea,
+  pre,
+  code {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--color-arc) 35%, transparent);
+  }
+  :focus-visible {
+    outline: 1.5px solid var(--color-arc);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  button {
+    cursor: default;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-seam-hi) transparent;
+  }
+}
+
+@layer components {
+  /* Display type: Instrument Sans narrowed, the "instrument label" voice of the app. */
+  .type-display {
+    font-family: var(--font-sans);
+    font-stretch: 78%;
+    font-weight: 600;
+    letter-spacing: -0.012em;
+    line-height: 1.1;
+  }
+  .type-title {
+    font-stretch: 85%;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+  }
+  /* Data voice: Martian Mono, slightly condensed so tables stay compact. */
+  .type-data {
+    font-family: var(--font-mono);
+    font-stretch: 87.5%;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+  }
+  .type-data-lg {
+    font-family: var(--font-mono);
+    font-stretch: 81%;
+    font-variant-numeric: tabular-nums;
+    font-weight: 300;
+    letter-spacing: -0.02em;
+  }
+
+  .plate {
+    background: var(--color-plate);
+    border: 1px solid var(--color-seam);
+    border-radius: 10px;
+  }
+  .hairline {
+    border-color: var(--color-seam);
+  }
+
+  /* HUD bracket corners – reserved for the few "instrument" elements. */
+  .brackets {
+    position: relative;
+  }
+  .brackets::before,
+  .brackets::after {
+    content: "";
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    pointer-events: none;
+    border-color: color-mix(in oklab, var(--color-arc) 55%, transparent);
+  }
+  .brackets::before {
+    top: -1px;
+    left: -1px;
+    border-top: 1px solid;
+    border-left: 1px solid;
+    border-top-left-radius: 4px;
+  }
+  .brackets::after {
+    bottom: -1px;
+    right: -1px;
+    border-bottom: 1px solid;
+    border-right: 1px solid;
+    border-bottom-right-radius: 4px;
+  }
+
+  .field {
+    width: 100%;
+    background: var(--color-void);
+    border: 1px solid var(--color-seam-hi);
+    border-radius: 6px;
+    padding: 0.45rem 0.65rem;
+    color: var(--color-ink);
+    font-size: 0.8125rem;
+    transition: border-color 120ms;
+  }
+  .field::placeholder {
+    color: var(--color-ink-faint);
+  }
+  .field:focus {
+    outline: none;
+    border-color: var(--color-arc-dim);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-arc) 12%, transparent);
+  }
+
+  .drag {
+    -webkit-app-region: drag;
+  }
+}
+
+/* Live caret for streaming answers */
+@keyframes caret {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.caret::after {
+  content: "";
+  display: inline-block;
+  width: 0.5ch;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: var(--color-arc);
+  animation: caret 1s steps(1) infinite;
+}
+
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin-slow {
+  animation: spin-slow 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .caret::after {
+    animation: none;
+  }
+}
