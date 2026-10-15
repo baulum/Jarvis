@@ -30,6 +30,8 @@ Systemeinstellungen › Datenschutz & Sicherheit:
 - **Automation** → wird bei der ersten AppleScript-Aktion abgefragt (AppleScript ist standardmäßig deaktiviert)
 
 ## 4. Connectoren einrichten
+
+**Schritt-für-Schritt-Anleitung mit allen Links:** [docs/ANLEITUNG-ZUGANGSDATEN.md](docs/ANLEITUNG-ZUGANGSDATEN.md)
 In der Desktop-App unter **Connectoren** oder per CLI (`cd core && uv run jarvisctl secret set <name>`):
 
 | Connector | Was wird benötigt | Wo |

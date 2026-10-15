@@ -59,10 +59,13 @@ Hermes-Latenz: Kaltstart ~20 s (Modell laden), danach ~2–7 s je Turn (Prompt-C
 - [x] Desktop-App visuell geprüft (Chat, Systemstatus, Aufgaben inkl. Schrittansicht, Connectoren) – über Vite-Dev + Viewer-Token
 - [x] Playbook: fehlgeschlagene Tests erscheinen als Warnung im Abschluss
 - [x] mypy strict: 0 Befunde (60 Dateien); dabei echter Fehler gefunden (Notifier.list überschattete `list`)
-- [ ] Voice-Daemon mit echtem Mikrofon (benötigt Mikrofon-Freigabe)
+- [x] Voice mit echtem Mikrofon: „Hey Jarvis“ erkannt, Whisper, Antwort (Haiku) gesprochen, Folgefrage ohne Wake Word.
+      Dabei gefunden + behoben: falscher Barge-in direkt nach dem Wake Word, Fragmente wie „K.“ als Anfrage.
+- [ ] Bedienungshilfen + Bildschirmaufnahme für JarvisBridge (Dialoge ausgelöst, noch nicht erteilt)
 - [ ] Connectoren mit echten Zugangsdaten verifizieren (Lexware, Google, Telegram, GitHub, Fish Audio, Twilio)
 
 ### Benötigt von Sir
+- Schritt-für-Schritt-Anleitung für alle Zugangsdaten: docs/ANLEITUNG-ZUGANGSDATEN.md
 - macOS: Bedienungshilfen + Bildschirmaufnahme für JarvisBridge.app, Mikrofon für den Voice-Daemon
 - Zugangsdaten: Lexware-API-Key, Google-OAuth-Client, Telegram-Bot-Token, GitHub-Token, Fish-Audio-Key + Voice-ID,
   Twilio (SID/Token/Nummer) + öffentliche HTTPS-URL, Telefon-PIN

@@ -299,6 +299,9 @@ class VoiceDaemon:
         if not text:
             await self.set_state("idle", "Nichts verstanden")
             return False
+        if len(re.sub(r"\W", "", text)) < 3:  # fragments like "K." (tail of the wake word, a cough) → keep listening
+            logger.info("Ignored fragment: %r", text)
+            return True
         logger.info("Heard: %s", text)
         if _END_PHRASES.search(text) and len(text) < 40:
             await self.say_text("Sehr wohl, Sir.")
@@ -310,6 +313,7 @@ class VoiceDaemon:
             )
             r.raise_for_status()
             self.turn.session_id = self.session_id = r.json()["session_id"]
+            self.detector.reset()  # forget the audio that triggered this turn → no false barge-in
             speaker = asyncio.create_task(self.speak_stream(self.turn))
             # Keep listening for the wake word during the reply → barge-in.
             while not speaker.done():
@@ -349,6 +353,7 @@ class VoiceDaemon:
                 if not woke and not self.ptt:
                     continue
                 _earcon()
+                self.detector.reset()
                 await self.set_state("listening")
                 follow_up = await self._converse(first=True)
                 while follow_up:
@@ -376,6 +381,7 @@ def _earcon() -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     asyncio.run(VoiceDaemon(get_settings()).run())
 
 
