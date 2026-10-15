@@ -23,6 +23,16 @@
 - Lokal bleiben nur Embeddings (qwen3-embedding, Gedächtnissuche) und Whisper (STT). Hermes bleibt als Option (`agent.provider: hermes`).
 - Gemessen: „Welche Programme laufen?“ 4,0 s inkl. Tool; Neukunden-Satz → Playbook korrekt gestartet in 5,5 s.
 
+### Globale Claude-Skills (2026-10-15)
+- 67 Skills erkannt (eigene + 7 aktive Plugins); Schalter in der App; Agent lädt Skills (getestet: high-end-visual-design),
+  deaktivierter Skill ist sofort nicht mehr verfügbar (getestet). Coding-Runner nutzt dieselben Skills.
+
+### Mac-Steuerung – Sicherheitsverbesserung aus dem Live-Test
+- Tippen/Tasten/Klicks verlangen eine Ziel-App, die direkt vor der Ausführung aktiviert und geprüft wird
+  (eine spät erteilte Freigabe kann nicht in ein falsches Fenster tippen).
+- Bridge tippt ein Zeichen pro Event (Rechner hatte nur das erste Zeichen übernommen).
+- Bridge mit Apple-Development-Zertifikat signiert → macOS-Rechte bleiben über Updates erhalten.
+
 ### Funktioniert – real getestet
 | Bereich | Nachweis |
 |---|---|

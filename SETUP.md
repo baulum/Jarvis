@@ -54,13 +54,21 @@ Lokaler Test ohne Twilio: `uv run jarvisctl phone-test --say "eins zwei drei vie
 - Konfiguration: `agent.model`, `agent.auto_downgrade`, `agent.utility_model` in `config/jarvis.yaml`.
 - Alternative ohne Subscription: `agent.provider: hermes` (Hermes + lokales Ollama-Modell, siehe unten).
 
-## 6. Persönlichkeit & Verhalten anpassen
+## 6. Globale Claude-Skills
+- Jarvis nutzt deine Skills aus `~/.claude/skills` sowie die Skills aktiver Claude-Code-Plugins.
+- Desktop-App › **Skills › Claude-Skills**: jeden Skill einzeln an-/ausschalten (eigene Skills standardmäßig an, Plugin-Skills aus).
+- Im Gespräch lädt Jarvis passende Skills selbst; Aufgaben mit Dateien/Code (z. B. Websites) gibt er an Claude Code weiter,
+  das dieselben Skills im isolierten Worktree nutzt.
+- Technisch: aktivierte Skills werden als Plugin-Verzeichnis `~/Library/Application Support/Jarvis/skills-plugin` (Symlinks)
+  per `--plugin-dir` geladen – deine übrigen Claude-Einstellungen, Hooks und MCP-Server bleiben außen vor.
+
+## 7. Persönlichkeit & Verhalten anpassen
 - `config/personality.yaml` – Anrede, Charakterzüge, Humor, Begrüßungen (wird beim Core-Start als Hermes-SOUL.md übernommen)
 - `config/permissions.yaml` – Rollen, Risikostufen, Shell-Allowlist, Rate-Limits
 - `config/jarvis.yaml` – Modelle, Stimme, Benachrichtigungsregeln, Ruhezeiten, Pfade
 - `config/mcp_servers.yaml` – externe MCP-Server
 
-## 7. Tests
+## 8. Tests
 ```bash
 cd core
 uv run pytest tests/unit                       # ohne Infrastruktur
