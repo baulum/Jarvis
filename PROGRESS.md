@@ -38,7 +38,8 @@
 - Lexware: Verbindung „PJE Systems“, offene Rechnungen + Kundensuche (nur lesend; Schreibtest wartet auf Sirs Ja)
 - Fish Audio: Stimme „Jarvis (MCU)“, Synthese 0,87 s, Ausgabe über Voice-Daemon; 402 (kein API-Guthaben) wird klar gemeldet
 - macOS: Bildschirmaufnahme erteilt → Screenshot-Analyse (Claude) live korrekt; Bedienungshilfen noch offen
-- Voice: echtes Mikrofon, Wake Word, Whisper, Antwort, Folgefrage
+- Voice: echtes Mikrofon, Wake Word, Whisper, Antwort, Folgefrage; Barge-in live (zurück ins Zuhören)
+- GitHub: angemeldet als baulum, Repos (30, inkl. PJE-Systems) über Jarvis gelistet
 
 ### Funktioniert – real getestet
 | Bereich | Nachweis |
