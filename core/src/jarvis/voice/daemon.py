@@ -23,6 +23,7 @@ import json
 import logging
 import re
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -198,27 +199,32 @@ class VoiceDaemon:
         return r.content
 
     async def _play(self, pcm: bytes) -> bool:
-        """Play PCM; returns False if interrupted."""
-        audio = np.frombuffer(pcm, dtype=np.int16)
-        done = asyncio.Event()
-        pos = 0
+        """Play PCM through macOS' native player (afplay); returns False if interrupted.
 
-        def cb(outdata: Any, frames: int, time_info: Any, status: Any) -> None:
-            nonlocal pos
-            chunk = audio[pos : pos + frames]
-            outdata[: len(chunk), 0] = chunk
-            outdata[len(chunk) :, 0] = 0
-            pos += frames
-            if pos >= len(audio) and self.loop is not None:
-                self.loop.call_soon_threadsafe(done.set)
-                raise sd.CallbackStop
-
-        with sd.OutputStream(samplerate=PLAY_RATE, channels=1, dtype="int16", callback=cb):
+        Feeding audio from a Python callback underran under load and crackled; afplay plays the
+        whole buffer natively. A short fade-in/out removes clicks at sentence boundaries.
+        """
+        audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+        fade = min(int(PLAY_RATE * 0.008), len(audio) // 2)
+        if fade > 0:
+            ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+            audio[:fade] *= ramp
+            audio[-fade:] *= ramp[::-1]
+        wav = pcm_to_wav(np.clip(audio, -32768, 32767).astype(np.int16), PLAY_RATE)
+        with tempfile.NamedTemporaryFile(prefix="jarvis-tts-", suffix=".wav", delete=False) as f:
+            f.write(wav)
+            path = f.name
+        try:
+            proc = await asyncio.create_subprocess_exec("afplay", path)
             stop_wait = asyncio.create_task(self._stop_playback.wait())
-            done_wait = asyncio.create_task(done.wait())
+            done_wait = asyncio.create_task(proc.wait())
             await asyncio.wait({stop_wait, done_wait}, return_when=asyncio.FIRST_COMPLETED)
             stop_wait.cancel()
-            done_wait.cancel()
+            if proc.returncode is None:
+                proc.terminate()
+                await proc.wait()
+        finally:
+            Path(path).unlink(missing_ok=True)
         return not self._stop_playback.is_set()
 
     async def speak_stream(self, turn: Turn) -> None:
