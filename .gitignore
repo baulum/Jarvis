@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+# Node / Tauri
+node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+# Swift
+bridge/.build/
+bridge/build/
+# Local env / secrets (never commit)
+.env
+*.token
+*.pem
+*.key
+# OS
+.DS_Store
