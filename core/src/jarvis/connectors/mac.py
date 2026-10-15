@@ -6,6 +6,7 @@ depth); this connector adds Jarvis' risk levels/approvals and audit logging on t
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import time
 from pathlib import Path
@@ -148,14 +149,29 @@ class MacConnector(Connector):
         async def ui_press(ctx: ToolContext, a: dict[str, Any]) -> Any:
             return await b().request("POST", "/ui/press", a)
 
+        async def focus(app: str) -> None:
+            """Bring the target app to the front and verify it — input never lands in the wrong window,
+            even when the approval is granted minutes later."""
+            await open_app(ctx=None, a={"name": app})  # type: ignore[arg-type]
+            for _ in range(10):
+                await asyncio.sleep(0.15)
+                fm = await b().request("GET", "/frontmost")
+                names = {str(fm.get("name", "")).lower(), str(fm.get("bundleId", "")).lower()}
+                if app.lower() in names:
+                    return
+            raise ToolUserError(f"'{app}' konnte nicht in den Vordergrund geholt werden – Eingabe abgebrochen.")
+
         async def type_text(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            await focus(a["app"])
             return await b().request("POST", "/input/type", {"text": a["text"]})
 
         async def key(ctx: ToolContext, a: dict[str, Any]) -> Any:
-            return await b().request("POST", "/input/key", a)
+            await focus(a["app"])
+            return await b().request("POST", "/input/key", {k: v for k, v in a.items() if k != "app"})
 
         async def click(ctx: ToolContext, a: dict[str, Any]) -> Any:
-            return await b().request("POST", "/input/click", a)
+            await focus(a["app"])
+            return await b().request("POST", "/input/click", {k: v for k, v in a.items() if k != "app"})
 
         async def screenshot(ctx: ToolContext, a: dict[str, Any]) -> Any:
             shot = await b().request(
@@ -272,47 +288,49 @@ class MacConnector(Connector):
             ),
             ToolSpec(
                 "mac_type_text",
-                "Tippt Text in das aktuell fokussierte Feld.",
-                _obj({"text": {"type": "string", "maxLength": 5000}}, ["text"]),
+                "Tippt Text in die Ziel-App (app = App-Name, z. B. 'Rechner'); sie wird vorher aktiviert und geprüft.",
+                _obj({"app": {"type": "string"}, "text": {"type": "string", "maxLength": 5000}}, ["app", "text"]),
                 type_text,
                 "high",
                 S,
-                summarize=lambda a: f"Text tippen ({len(a['text'])} Zeichen): {a['text'][:60]!r}",
+                summarize=lambda a: f"In {a['app']} tippen ({len(a['text'])} Zeichen): {a['text'][:60]!r}",
             ),
             ToolSpec(
                 "mac_key",
-                "Drückt eine Taste/Tastenkombination (z. B. key='s', modifiers=['cmd']).",
+                "Drückt eine Taste/Kombination in der Ziel-App (z. B. app='TextEdit', key='s', modifiers=['cmd']).",
                 _obj(
                     {
+                        "app": {"type": "string"},
                         "key": {"type": "string"},
                         "modifiers": {
                             "type": "array",
                             "items": {"type": "string", "enum": ["cmd", "shift", "alt", "ctrl", "fn"]},
                         },
                     },
-                    ["key"],
+                    ["app", "key"],
                 ),
                 key,
                 "high",
                 S,
-                summarize=lambda a: f"Taste {'+'.join([*a.get('modifiers', []), a['key']])}",
+                summarize=lambda a: f"Taste {'+'.join([*a.get('modifiers', []), a['key']])} in {a['app']}",
             ),
             ToolSpec(
                 "mac_click",
-                "Klickt an Bildschirmkoordinaten.",
+                "Klickt an Bildschirmkoordinaten im Fenster der Ziel-App.",
                 _obj(
                     {
+                        "app": {"type": "string"},
                         "x": {"type": "number"},
                         "y": {"type": "number"},
                         "button": {"type": "string", "enum": ["left", "right"]},
                         "count": {"type": "integer", "minimum": 1, "maximum": 2},
                     },
-                    ["x", "y"],
+                    ["app", "x", "y"],
                 ),
                 click,
                 "high",
                 S,
-                summarize=lambda a: f"Klick bei ({a['x']}, {a['y']})",
+                summarize=lambda a: f"Klick in {a['app']} bei ({a['x']}, {a['y']})",
             ),
             ToolSpec(
                 "mac_screenshot",

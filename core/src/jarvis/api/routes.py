@@ -322,12 +322,30 @@ async def skills(st: AppState = StateDep, p: Principal = Reader) -> dict[str, An
         # currently fails upstream (TypeError in _find_all_skills, Hermes v0.22.1).
         hermes_skills = _read_skill_dirs(st.settings.hermes.profile)
     return {
+        "claude": st.skills.items(),
         "hermes": hermes_skills,
         "hermes_error": error,
         "playbooks": [
             {"name": pb.name, "title": pb.title, "description": pb.description} for pb in st.tasks.playbooks.values()
         ],
     }
+
+
+class SkillToggle(BaseModel):
+    id: str
+    enabled: bool
+
+
+@router.post("/skills/claude")
+async def skills_toggle(body: SkillToggle, st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    try:
+        st.skills.set_enabled(body.id, body.enabled)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    if st.agent is not None:
+        await st.agent.reload()  # running conversations pick the change up via --resume
+    await audit(p.label, "skills.toggle", target=body.id, details={"enabled": body.enabled})
+    return {"id": body.id, "enabled": body.enabled, "active": len(st.skills.enabled_names())}
 
 
 def _read_skill_dirs(profile: str) -> list[dict[str, Any]]:

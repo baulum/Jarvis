@@ -62,7 +62,9 @@ enum InputHandlers {
         try requireEventAccess()
         let text = try ctx.string("text", maxLength: maxTypeLength)
         try await ensureFrontmostAllowed(ctx)
-        let segs = segments(for: text)
+        // One character per event: many apps (e.g. Calculator) only read the first character of a
+        // multi-character unicode keyboard event.
+        let segs = segments(for: text, chunkUTF16: 1)
         let killSwitch = ctx.env.killSwitch
         let typed: Int = try await runBlocking {
             let source = CGEventSource(stateID: .hidSystemState)
@@ -90,7 +92,7 @@ enum InputHandlers {
                     try postKey(code, flags: [], source: source)
                     count += 1
                 }
-                usleep(12_000)
+                usleep(8_000)
             }
             return count
         }

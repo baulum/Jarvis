@@ -17,6 +17,7 @@ from jarvis.agent.hermes_setup import HermesSupervisor, sync_soul
 from jarvis.agent.llm import HermesClient, OllamaClient
 from jarvis.agent.model_router import ModelRouter
 from jarvis.agent.orchestrator import Orchestrator
+from jarvis.agent.skills import SkillCatalog
 from jarvis.coding.runner import CodingRunner
 from jarvis.config import Permissions, Personality, Settings, load_permissions, load_personality
 from jarvis.connectors.base import ConnectorManager
@@ -76,6 +77,7 @@ class AppState:
         self.ollama = OllamaClient(settings.llm.ollama_url, settings.llm.keep_alive)
         self.hermes: HermesClient | None = None
         self.hermes_supervisor = HermesSupervisor(self)
+        self.skills = SkillCatalog(settings.paths.data_dir)
         self.oneshot = ClaudeOneShot(self)
         self.model_router = ModelRouter(
             settings.agent.model, settings.agent.auto_downgrade, settings.paths.data_dir / "agent-model.json"
@@ -187,6 +189,7 @@ class AppState:
             _, token = await create_device("claude-code-agent", "agent")
             secret_store.set(AGENT_MCP_SECRET, token)
         assert self.agent is not None
+        self.skills.build_plugin_dir()
         self.agent.write_mcp_config(token)
         await self.agent.start()
 

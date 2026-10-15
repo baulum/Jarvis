@@ -175,6 +175,8 @@ export function createApi(opts: ApiOptions) {
     // tools / skills / connectors
     tools: () => get<ToolInfo[]>("/tools"),
     skills: () => get<SkillsResponse>("/skills"),
+    toggleClaudeSkill: (skillId: string, enabled: boolean) =>
+      post<{ id: string; enabled: boolean; active: number }>("/skills/claude", { id: skillId, enabled }),
     connectors: () => get<ConnectorsResponse>("/connectors"),
     configureConnector: (cid: string, body: ConnectorConfigBody) => post<Connector>(`/connectors/${id(cid)}`, body),
     testConnector: (cid: string) => post<ConnectorHealth>(`/connectors/${id(cid)}/test`),

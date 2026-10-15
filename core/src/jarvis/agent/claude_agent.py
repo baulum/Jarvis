@@ -125,10 +125,29 @@ class ClaudeCodeAgent:
         return shutil.which(self.cfg.claude_binary) is not None and self.mcp_config.exists()
 
     def system_prompt(self) -> str:
-        return render_soul(self.state.personality) + (
-            "\n\n## Werkzeuge\nDeine einzigen Werkzeuge sind die Jarvis-Werkzeuge (Namen beginnen mit "
-            "`mcp__jarvis__`). Du hast keinen direkten Datei- oder Shell-Zugriff."
+        skills = self.state.skills.enabled_names()
+        skill_note = (
+            "\n\n## Skills\nDu kannst Sirs aktivierte Claude-Skills mit dem Skill-Werkzeug laden, wenn sie zur Aufgabe "
+            "passen (Wissen, Vorgehen, Designrichtlinien). Du selbst hast keinen Datei- oder Shell-Zugriff: Aufgaben, "
+            "die Dateien erstellen oder Code schreiben (z. B. Websites), gibst du per `coding_start_job` an "
+            "Claude Code weiter und nennst im Auftrag die passenden Skills – dort stehen dieselben Skills bereit.\n"
+            f"Aktivierte Skills: {', '.join(skills[:80]) or 'keine'}."
         )
+        return render_soul(self.state.personality) + (
+            "\n\n## Werkzeuge\nDeine Werkzeuge sind die Jarvis-Werkzeuge (Namen beginnen mit `mcp__jarvis__`) und "
+            "das Skill-Werkzeug." + skill_note
+        )
+
+    async def reload(self) -> None:
+        """Apply changed skills/persona: idle processes and the standby are restarted, busy ones finish first."""
+        for sid, p in list(self._procs.items()):
+            if not p.busy:
+                await self._kill(p)
+                self._procs.pop(sid, None)
+        if self._standby is not None:
+            await self._kill(self._standby)
+            self._standby = None
+        spawn(self._ensure_standby(), name="claude-standby")
 
     async def _spawn(self, resume: str | None = None) -> _Proc:
         exe = shutil.which(self.cfg.claude_binary)
@@ -145,15 +164,17 @@ class ClaudeCodeAgent:
             "--include-partial-messages",
             "--restricted",
             "--tools",
-            "",
+            "Skill",
+            "--plugin-dir",
+            str(self.state.skills.plugin_dir),
             "--strict-mcp-config",
             "--mcp-config",
             str(self.mcp_config),
             "--allowedTools",
             "mcp__jarvis",
+            "Skill",
             "--permission-prompts",
             "none",
-            "--disable-slash-commands",
             "--model",
             self._model_id(self.cfg.model),
             "--append-system-prompt",

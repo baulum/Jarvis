@@ -39,3 +39,30 @@ def test_router_scopes(tmp_path: Path) -> None:
     assert ModelRouter("sonnet", True, tmp_path / "m.json").choose("Plane mein Projekt", "desktop", "s3")[0] == "haiku"
     r.set(None, "default")
     assert r.choose("Plane mein Projekt", "desktop", "s3")[0] == "sonnet"
+
+
+def test_skill_catalog(tmp_path: Path) -> None:
+    import json
+
+    from jarvis.agent.skills import SkillCatalog
+
+    home = tmp_path / "claude"
+    (home / "skills" / "web-design").mkdir(parents=True)
+    (home / "skills" / "web-design" / "SKILL.md").write_text("---\nname: web-design\ndescription: Websites\n---\nBody")
+    plug = tmp_path / "plug"
+    (plug / "skills" / "seo").mkdir(parents=True)
+    (plug / "skills" / "seo" / "SKILL.md").write_text("---\nname: seo\ndescription: SEO\n---\n")
+    (home / "plugins").mkdir()
+    (home / "settings.json").write_text(json.dumps({"enabledPlugins": {"tools@mk": True}}))
+    (home / "plugins" / "installed_plugins.json").write_text(
+        json.dumps({"plugins": {"tools@mk": [{"installPath": str(plug)}]}})
+    )
+    cat = SkillCatalog(tmp_path / "data", home)
+    (tmp_path / "data").mkdir()
+    items = {s["id"]: s for s in cat.items()}
+    assert items["user/web-design"]["enabled"] and not items["plugin:tools/seo"]["enabled"]
+    cat.set_enabled("plugin:tools/seo", True)
+    cat.set_enabled("user/web-design", False)
+    links = sorted(p.name for p in (cat.plugin_dir / "skills").iterdir())
+    assert links == ["seo"]
+    assert SkillCatalog(tmp_path / "data", home).enabled_names() == ["seo"]

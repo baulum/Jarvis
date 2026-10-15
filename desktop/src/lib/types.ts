@@ -216,7 +216,16 @@ export interface HermesSkill {
   [k: string]: unknown;
 }
 
+export interface ClaudeSkill {
+  id: string;
+  name: string;
+  description: string;
+  source: string;
+  enabled: boolean;
+}
+
 export interface SkillsResponse {
+  claude: ClaudeSkill[];
   hermes: HermesSkill[];
   hermes_error: string | null;
   playbooks: { name: string; title: string; description: string }[];

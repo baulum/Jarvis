@@ -75,6 +75,11 @@ step "Jarvis-Geräte"
 (cd "$ROOT/core" && uv run jarvisctl init)
 
 step "macOS Bridge (Swift)"
+# A stable signing identity keeps the macOS privacy grants across rebuilds (ad-hoc signatures lose them).
+if [ -z "${SIGN_IDENTITY:-}" ]; then
+  SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)"
+  export SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+fi
 (cd "$ROOT/bridge" && ./scripts/build-app.sh)
 
 step "Desktop-App (Tauri)"

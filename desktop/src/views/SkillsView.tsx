@@ -1,12 +1,14 @@
 import { useMemo, useState } from "react";
-import { EmptyState, ErrorState, RiskBadge, Section, Skeleton, Tabs, Tag } from "../components/ui";
-import { useQuery } from "../hooks/useQuery";
+import { EmptyState, ErrorState, RiskBadge, Section, Skeleton, Tabs, Tag, Toggle } from "../components/ui";
+import { useAction, useQuery } from "../hooks/useQuery";
+import type { ClaudeSkill } from "../lib/types";
 import { api } from "../store/app";
 
-type Tab = "playbooks" | "tools" | "hermes";
+type Tab = "claude" | "playbooks" | "tools";
 
 export function SkillsView() {
-  const [tab, setTab] = useState<Tab>("playbooks");
+  const [tab, setTab] = useState<Tab>("claude");
+  const act = useAction();
   const [q, setQ] = useState("");
   const skills = useQuery(() => api.skills(), "skills");
   const tools = useQuery(() => api.tools(), "tools", { topics: ["connector"] });
@@ -24,9 +26,9 @@ export function SkillsView() {
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-4 border-b border-seam px-8 py-2.5">
         <Tabs value={tab} onChange={setTab} items={[
+          { id: "claude", label: "Claude-Skills", count: skills.data?.claude.filter((c) => c.enabled).length },
           { id: "playbooks", label: "Playbooks", count: playbooks.data?.length },
           { id: "tools", label: "Werkzeuge", count: tools.data?.length },
-          { id: "hermes", label: "Hermes-Skills", count: skills.data?.hermes.length },
         ]} />
         <input className="field ml-auto w-64" placeholder="Suchen …" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Suchen" />
       </div>
@@ -64,18 +66,36 @@ export function SkillsView() {
               </Section>
             ))
           )}
-          {tab === "hermes" && (
+          {tab === "claude" && (
             skills.loading ? <Skeleton /> : skills.error ? <ErrorState message={skills.error} onRetry={skills.refetch} /> :
-            (skills.data?.hermes.length ?? 0) === 0 ? <EmptyState title="Keine Hermes-Skills gefunden." /> : (
-              <ul className="grid gap-2 sm:grid-cols-2">
-                {skills.data!.hermes.filter((s) => match(String(s.name ?? ""), String(s.description ?? ""))).map((s) => (
-                  <li key={String(s.name)} className="plate p-3">
-                    <div className="flex items-baseline gap-2"><span className="type-data text-ink">{String(s.name)}</span>
-                      {s.category ? <span className="text-xs text-ink-faint">{String(s.category)}</span> : null}</div>
-                    <p className="mt-1 text-xs text-ink-dim">{String(s.description ?? "")}</p>
-                  </li>
+            (skills.data?.claude.length ?? 0) === 0 ? <EmptyState title="Keine globalen Claude-Skills gefunden." >Skills liegen in ~/.claude/skills oder in aktivierten Claude-Code-Plugins.</EmptyState> : (
+              <>
+                <p className="text-sm text-ink-dim">
+                  Aktivierte Skills nutzt J.A.R.V.I.S. im Gespräch und bei Coding-Aufträgen (z. B. Website-Design). Änderungen gelten ab der nächsten Antwort.
+                </p>
+                {Object.entries(
+                  skills.data!.claude.filter((c) => match(c.name, c.description)).reduce<Record<string, ClaudeSkill[]>>((acc, c) => {
+                    (acc[c.source] ??= []).push(c);
+                    return acc;
+                  }, {}),
+                ).map(([source, list]) => (
+                  <Section key={source} title={source === "user" ? "Eigene Skills (~/.claude/skills)" : `Plugin ${source.replace("plugin:", "")}`}
+                           meta={`${list.filter((c) => c.enabled).length}/${list.length} aktiv`}>
+                    <ul className="divide-y divide-seam">
+                      {list.map((c) => (
+                        <li key={c.id} className="flex items-start gap-4 px-4 py-2.5 text-sm">
+                          <div className="min-w-0 flex-1">
+                            <div className="type-data text-ink">{c.name}</div>
+                            <p className="line-clamp-2 text-xs text-ink-dim">{c.description}</p>
+                          </div>
+                          <Toggle label="Aktiv" checked={c.enabled} disabled={act.busy !== null}
+                                  onChange={(v) => void act.run("skill", () => api.toggleClaudeSkill(c.id, v)).then(() => skills.refetch())} />
+                        </li>
+                      ))}
+                    </ul>
+                  </Section>
                 ))}
-              </ul>
+              </>
             )
           )}
         </div>

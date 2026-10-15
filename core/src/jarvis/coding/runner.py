@@ -382,6 +382,9 @@ class CodingRunner:
             "Glob",
             "Grep",
             "Bash",
+            "Skill",
+            "--plugin-dir",
+            str(self.state.skills.plugin_dir),
             "--strict-mcp-config",
             "--permission-mode",
             "acceptEdits",
@@ -389,6 +392,7 @@ class CodingRunner:
             "none",
             "--allowedTools",
             *self.cfg.allowed_tools,
+            "Skill",
             "--settings",
             json.dumps(settings),
         ]

@@ -388,7 +388,8 @@ def _approval_message(status: str, summary: str) -> str:
     if status == "pending":
         return (
             f"FREIGABE ERFORDERLICH: '{summary}' wurde Sir zur Freigabe vorgelegt "
-            "(Desktop-App/Telegram). Führe diese Aktion NICHT erneut aus; sie wird nach der "
+            "(in der Desktop-App; per Telegram nur, wenn Telegram gekoppelt ist – erwähne Telegram sonst nicht). "
+            "Führe diese Aktion NICHT erneut aus; sie wird nach der "
             "Freigabe automatisch ausgeführt. Teile Sir kurz mit, dass die Freigabe aussteht."
         )
     if status == "executed":
