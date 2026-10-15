@@ -26,13 +26,22 @@ from jarvis.db.models import UsageRecord
 logger = logging.getLogger(__name__)
 
 
-async def record_usage(provider: str, model: str, purpose: str, prompt_tokens: int, completion_tokens: int,
-                       latency_ms: float) -> None:
+async def record_usage(
+    provider: str, model: str, purpose: str, prompt_tokens: int, completion_tokens: int, latency_ms: float
+) -> None:
     try:
         async with session_scope() as s:
-            s.add(UsageRecord(provider=provider, model=model, purpose=purpose, prompt_tokens=prompt_tokens,
-                              completion_tokens=completion_tokens, latency_ms=latency_ms))
-    except Exception:  # noqa: BLE001 - usage stats must never break a request
+            s.add(
+                UsageRecord(
+                    provider=provider,
+                    model=model,
+                    purpose=purpose,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    latency_ms=latency_ms,
+                )
+            )
+    except Exception:
         logger.debug("usage record failed", exc_info=True)
 
 
@@ -60,11 +69,23 @@ class OllamaClient:
         r.raise_for_status()
         return list(r.json().get("models", []))
 
-    async def chat(self, model: str, messages: list[dict[str, Any]], *, json_schema: dict[str, Any] | None = None,
-                   temperature: float = 0.2, purpose: str = "utility", num_predict: int | None = None) -> str:
+    async def chat(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        *,
+        json_schema: dict[str, Any] | None = None,
+        temperature: float = 0.2,
+        purpose: str = "utility",
+        num_predict: int | None = None,
+    ) -> str:
         body: dict[str, Any] = {
-            "model": model, "messages": messages, "stream": False, "think": False,
-            "keep_alive": self.keep_alive, "options": {"temperature": temperature},
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "think": False,
+            "keep_alive": self.keep_alive,
+            "options": {"temperature": temperature},
         }
         if num_predict:
             body["options"]["num_predict"] = num_predict
@@ -74,19 +95,33 @@ class OllamaClient:
         r = await self._http.post("/api/chat", json=body)
         r.raise_for_status()
         data = r.json()
-        await record_usage("ollama", model, purpose, int(data.get("prompt_eval_count", 0)),
-                           int(data.get("eval_count", 0)), (time.perf_counter() - t0) * 1000)
+        await record_usage(
+            "ollama",
+            model,
+            purpose,
+            int(data.get("prompt_eval_count", 0)),
+            int(data.get("eval_count", 0)),
+            (time.perf_counter() - t0) * 1000,
+        )
         return str(data.get("message", {}).get("content", ""))
 
-    async def chat_json(self, model: str, messages: list[dict[str, Any]], schema: dict[str, Any],
-                        purpose: str = "utility") -> Any:
+    async def chat_json(
+        self, model: str, messages: list[dict[str, Any]], schema: dict[str, Any], purpose: str = "utility"
+    ) -> Any:
         raw = await self.chat(model, messages, json_schema=schema, purpose=purpose)
         return json.loads(raw)
 
-    async def chat_stream(self, model: str, messages: list[dict[str, Any]], temperature: float = 0.4,
-                          purpose: str = "chat") -> AsyncIterator[str]:
-        body = {"model": model, "messages": messages, "stream": True, "think": False,
-                "keep_alive": self.keep_alive, "options": {"temperature": temperature}}
+    async def chat_stream(
+        self, model: str, messages: list[dict[str, Any]], temperature: float = 0.4, purpose: str = "chat"
+    ) -> AsyncIterator[str]:
+        body = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "think": False,
+            "keep_alive": self.keep_alive,
+            "options": {"temperature": temperature},
+        }
         t0 = time.perf_counter()
         async with self._http.stream("POST", "/api/chat", json=body) as r:
             r.raise_for_status()
@@ -98,14 +133,19 @@ class OllamaClient:
                 if piece:
                     yield piece
                 if chunk.get("done"):
-                    await record_usage("ollama", model, purpose, int(chunk.get("prompt_eval_count", 0)),
-                                       int(chunk.get("eval_count", 0)), (time.perf_counter() - t0) * 1000)
+                    await record_usage(
+                        "ollama",
+                        model,
+                        purpose,
+                        int(chunk.get("prompt_eval_count", 0)),
+                        int(chunk.get("eval_count", 0)),
+                        (time.perf_counter() - t0) * 1000,
+                    )
 
     async def embed(self, model: str, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        r = await self._http.post("/api/embed", json={"model": model, "input": texts,
-                                                       "keep_alive": self.keep_alive})
+        r = await self._http.post("/api/embed", json={"model": model, "input": texts, "keep_alive": self.keep_alive})
         r.raise_for_status()
         return [list(map(float, v)) for v in r.json()["embeddings"]]
 
@@ -131,7 +171,8 @@ class HermesClient:
     def __init__(self, api_url: str, api_key: str, timeout_s: float = 300) -> None:
         self.api_url = api_url.rstrip("/")
         self._http = httpx.AsyncClient(
-            base_url=self.api_url, headers={"Authorization": f"Bearer {api_key}"},
+            base_url=self.api_url,
+            headers={"Authorization": f"Bearer {api_key}"},
             timeout=httpx.Timeout(timeout_s, connect=5),
         )
 
@@ -175,15 +216,21 @@ class HermesClient:
     async def stop_run(self, run_id: str) -> None:
         await self._http.post(f"/v1/runs/{run_id}/stop", timeout=10)
 
-    async def chat_stream(self, session_id: str, text: str, instructions: str | None = None,
-                          images: list[str] | None = None) -> AsyncIterator[AgentEvent]:
+    async def chat_stream(
+        self, session_id: str, text: str, instructions: str | None = None, images: list[str] | None = None
+    ) -> AsyncIterator[AgentEvent]:
         """Run one agent turn in a Hermes session and stream normalised events."""
         payload: dict[str, Any] = {"input": text}
         if instructions:
             payload["instructions"] = instructions
         if images:
-            payload["input"] = [{"role": "user", "content": [{"type": "input_text", "text": text}] + [
-                {"type": "input_image", "image_url": img} for img in images]}]
+            payload["input"] = [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": text}]
+                    + [{"type": "input_image", "image_url": img} for img in images],
+                }
+            ]
         async with self._http.stream("POST", f"/api/sessions/{session_id}/chat/stream", json=payload) as r:
             if r.status_code >= 400:
                 body = (await r.aread()).decode(errors="replace")
@@ -226,8 +273,7 @@ class HermesClient:
         if name == "tool.failed":
             return AgentEvent("tool_failed", data=data)
         if name == "assistant.completed":
-            return AgentEvent("assistant_completed", text=str(data.get("content") or data.get("text") or ""),
-                              data=data)
+            return AgentEvent("assistant_completed", text=str(data.get("content") or data.get("text") or ""), data=data)
         if name == "run.completed":
             return AgentEvent("completed", data=data)
         if name == "run.failed":

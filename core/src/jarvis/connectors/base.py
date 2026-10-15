@@ -55,12 +55,19 @@ class Manifest:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "id": self.id, "name": self.name, "description": self.description, "category": self.category,
-            "auth": self.auth, "version": self.version, "docs_url": self.docs_url,
-            "setup_instructions": self.setup_instructions, "mcp_note": self.mcp_note,
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "category": self.category,
+            "auth": self.auth,
+            "version": self.version,
+            "docs_url": self.docs_url,
+            "setup_instructions": self.setup_instructions,
+            "mcp_note": self.mcp_note,
             "settings_schema": self.settings_schema,
-            "secrets": [{"name": s.name, "label": s.label, "help": s.help, "required": s.required}
-                        for s in self.secrets],
+            "secrets": [
+                {"name": s.name, "label": s.label, "help": s.help, "required": s.required} for s in self.secrets
+            ],
         }
 
 
@@ -72,8 +79,7 @@ class Health:
     details: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"status": self.status, "message": self.message, "checked_at": self.checked_at,
-                "details": self.details}
+        return {"status": self.status, "message": self.message, "checked_at": self.checked_at, "details": self.details}
 
 
 class Connector:
@@ -170,9 +176,17 @@ class ConnectorManager:
             await conn.stop()
             self._started.discard(cid)
 
-    async def configure(self, cid: str, *, actor: str, enabled: bool | None = None,
-                        settings: dict[str, Any] | None = None, secrets: dict[str, str] | None = None) -> None:
+    async def configure(
+        self,
+        cid: str,
+        *,
+        actor: str,
+        enabled: bool | None = None,
+        settings: dict[str, Any] | None = None,
+        secrets: dict[str, str] | None = None,
+    ) -> None:
         conn = self.connectors[cid]
+        was_active = conn.active
         if settings is not None:
             merged = {**conn.settings, **settings}
             # "required" only determines whether the connector counts as configured; partial
@@ -195,11 +209,21 @@ class ConnectorManager:
                 s.add(row)
             row.enabled = conn.enabled
             row.settings = conn.settings
-        await audit(actor, "connector.configure", target=cid,
-                    details={"enabled": conn.enabled, "settings_keys": sorted((settings or {}).keys()),
-                             "secrets_set": sorted((secrets or {}).keys())})
+        await audit(
+            actor,
+            "connector.configure",
+            target=cid,
+            details={
+                "enabled": conn.enabled,
+                "settings_keys": sorted((settings or {}).keys()),
+                "secrets_set": sorted((secrets or {}).keys()),
+            },
+        )
         await self._sync_running(conn)
         await self.check(cid)
+        if conn.active != was_active:
+            # The agent's tool set changed: let Hermes reload the MCP tool list.
+            await self.state.hermes_supervisor.restart()
 
     async def check(self, cid: str) -> Health:
         conn = self.connectors[cid]
@@ -211,7 +235,7 @@ class ConnectorManager:
         else:
             try:
                 h = await asyncio.wait_for(conn.health(), timeout=20)
-            except Exception as e:  # noqa: BLE001 - surfaced as health status
+            except Exception as e:
                 h = Health("error", f"{type(e).__name__}: {e}"[:300])
         previous = self.health.get(cid)
         self.health[cid] = h
@@ -236,16 +260,20 @@ class ConnectorManager:
         out = []
         for cid, conn in sorted(self.connectors.items()):
             h = self.health.get(cid)
-            out.append({
-                **conn.manifest.to_dict(),
-                "enabled": conn.enabled,
-                "configured": conn.configured,
-                "missing": conn.missing_secrets() + conn.missing_settings(),
-                "settings": conn.settings,
-                "secrets_present": {s.name: secret_store.exists(s.name) for s in conn.manifest.secrets},
-                "health": h.to_dict() if h else None,
-                "tools": [{"name": t.name, "description": t.description,
-                           "risk": self.state.registry.effective_risk(t)}
-                          for t in self.state.registry.all(include_disabled=True) if t.connector == cid],
-            })
+            out.append(
+                {
+                    **conn.manifest.to_dict(),
+                    "enabled": conn.enabled,
+                    "configured": conn.configured,
+                    "missing": conn.missing_secrets() + conn.missing_settings(),
+                    "settings": conn.settings,
+                    "secrets_present": {s.name: secret_store.exists(s.name) for s in conn.manifest.secrets},
+                    "health": h.to_dict() if h else None,
+                    "tools": [
+                        {"name": t.name, "description": t.description, "risk": self.state.registry.effective_risk(t)}
+                        for t in self.state.registry.all(include_disabled=True)
+                        if t.connector == cid
+                    ],
+                }
+            )
         return out

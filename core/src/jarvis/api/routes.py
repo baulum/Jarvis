@@ -1,0 +1,829 @@
+"""REST API consumed by the desktop app, the voice daemon and future clients (iPhone, VPS)."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import HTMLResponse, StreamingResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select
+
+from jarvis.agent.persona import time_of_day_greeting
+from jarvis.api.deps import current_principal, get_state, require, require_owner
+from jarvis.app_state import VERSION, AppState
+from jarvis.config import RISK_ORDER
+from jarvis.db import session_scope
+from jarvis.db.models import Approval, AuditEntry, Call, ChatSession, CodingJob, Task
+from jarvis.events import bus, spawn
+from jarvis.logging_setup import ring
+from jarvis.security.audit import audit, verify_chain
+from jarvis.security.auth import Principal, create_device, list_devices, revoke_device
+from jarvis.voice.speech import speakable
+
+router = APIRouter(prefix="/api")
+Owner = Depends(require_owner)
+Reader = Depends(require("read"))
+Actor = Depends(require("low"))
+StateDep = Depends(get_state)
+
+
+def _uuid(v: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(v)
+    except ValueError as e:
+        raise HTTPException(400, "invalid id") from e
+
+
+# ------------------------------------------------------------------ health / system
+@router.get("/health")
+async def health() -> dict[str, Any]:
+    return {"status": "ok", "version": VERSION}
+
+
+@router.get("/system/status")
+async def system_status(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    return await st.system_status()
+
+
+@router.get("/system/greeting")
+async def greeting(st: AppState = StateDep, p: Principal = Reader) -> dict[str, str]:
+    return {"text": time_of_day_greeting(st.personality)}
+
+
+class KillSwitchBody(BaseModel):
+    engaged: bool
+    reason: str = ""
+
+
+@router.post("/system/killswitch")
+async def killswitch(
+    body: KillSwitchBody, st: AppState = StateDep, p: Principal = Depends(current_principal)
+) -> dict[str, Any]:
+    if body.engaged:  # any authenticated device may STOP
+        await st.kill_switch.engage(body.reason or "manuell", p.label)
+    else:  # only the owner may release
+        if p.role != "owner":
+            raise HTTPException(403, "only the owner can release the kill switch")
+        await st.kill_switch.release(p.label)
+    return {"engaged": st.kill_switch.engaged, "reason": st.kill_switch.reason()}
+
+
+# ------------------------------------------------------------------ chat
+class ChatBody(BaseModel):
+    message: str = Field(min_length=1, max_length=20000)
+    session_id: str | None = None
+    channel: str = "desktop"
+    wait: bool = False
+    images: list[str] | None = None
+
+
+@router.post("/chat")
+async def chat(body: ChatBody, st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
+    channel = body.channel if body.channel in ("desktop", "voice", "api") else "desktop"
+    sid = _uuid(body.session_id) if body.session_id else None
+    sess = await st.orchestrator.get_or_create_session(p, channel, sid)
+    if body.wait:
+        res = await st.orchestrator.handle(p, channel, body.message, session_id=sess.id, images=body.images)
+        return {"session_id": str(res.session_id), "text": res.text, "error": res.error, "tools": res.tools}
+    spawn(st.orchestrator.handle(p, channel, body.message, session_id=sess.id, images=body.images), name="chat")
+    return {"session_id": str(sess.id), "accepted": True}
+
+
+@router.post("/chat/interrupt")
+async def chat_interrupt(st: AppState = StateDep, p: Principal = Actor) -> dict[str, bool]:
+    return {"interrupted": await st.orchestrator.interrupt()}
+
+
+@router.get("/sessions")
+async def sessions(st: AppState = StateDep, p: Principal = Reader, limit: int = 30) -> list[dict[str, Any]]:
+    async with session_scope() as s:
+        q = select(ChatSession).order_by(ChatSession.last_activity_at.desc()).limit(min(limit, 100))
+        if p.role != "owner":
+            q = q.where(ChatSession.actor_id == p.id)
+        rows = (await s.execute(q)).scalars().all()
+    return [
+        {
+            "id": str(r.id),
+            "title": r.title,
+            "channel": r.channel,
+            "tainted": r.tainted,
+            "last_activity_at": r.last_activity_at.isoformat(),
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in rows
+    ]
+
+
+@router.get("/sessions/{sid}/messages")
+async def session_messages(sid: str, st: AppState = StateDep, p: Principal = Reader) -> list[dict[str, Any]]:
+    return await st.orchestrator.history(_uuid(sid), limit=200)
+
+
+# ------------------------------------------------------------------ approvals
+@router.get("/approvals")
+async def approvals(status: str = "pending", st: AppState = StateDep, p: Principal = Reader) -> list[dict[str, Any]]:
+    async with session_scope() as s:
+        q = select(Approval).order_by(Approval.created_at.desc()).limit(100)
+        if status != "all":
+            q = q.where(Approval.status == status)
+        rows = (await s.execute(q)).scalars().all()
+    return [
+        {
+            "id": str(a.id),
+            "tool": a.tool,
+            "summary": a.summary,
+            "risk": a.risk,
+            "reason": a.reason,
+            "status": a.status,
+            "args": a.args,
+            "requested_by": a.requested_by,
+            "channel": a.channel,
+            "created_at": a.created_at.isoformat(),
+            "expires_at": a.expires_at.isoformat(),
+            "decided_by": a.decided_by,
+            "result": a.result,
+        }
+        for a in rows
+    ]
+
+
+class DecisionBody(BaseModel):
+    approve: bool
+    note: str | None = None
+
+
+@router.post("/approvals/{aid}")
+async def decide(
+    aid: str, body: DecisionBody, st: AppState = StateDep, p: Principal = Depends(current_principal)
+) -> dict[str, Any]:
+    try:
+        return await st.executor.decide(_uuid(aid), body.approve, p, body.note)
+    except PermissionError as e:
+        raise HTTPException(403, str(e)) from e
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+# ------------------------------------------------------------------ tasks
+def _task_dict(t: Task) -> dict[str, Any]:
+    return {
+        "id": str(t.id),
+        "title": t.title,
+        "kind": t.kind,
+        "status": t.status,
+        "params": t.params,
+        "error": t.error,
+        "question": t.pending_question,
+        "result": t.result,
+        "attempts": t.attempts,
+        "created_at": t.created_at.isoformat(),
+        "updated_at": t.updated_at.isoformat(),
+        "steps": [
+            {
+                "idx": s.idx,
+                "name": s.name,
+                "status": s.status,
+                "error": s.error,
+                "output": s.output,
+                "approval_id": str(s.approval_id) if s.approval_id else None,
+                "started_at": s.started_at.isoformat() if s.started_at else None,
+                "finished_at": s.finished_at.isoformat() if s.finished_at else None,
+            }
+            for s in t.steps
+        ],
+    }
+
+
+@router.get("/tasks")
+async def tasks(status: str | None = None, st: AppState = StateDep, p: Principal = Reader) -> list[dict[str, Any]]:
+    return [_task_dict(t) for t in await st.tasks.list_tasks(status, limit=100)]
+
+
+@router.get("/tasks/{tid}")
+async def task(tid: str, st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    t = await st.tasks.get_task(_uuid(tid))
+    if t is None:
+        raise HTTPException(404, "not found")
+    return _task_dict(t)
+
+
+class TaskCreate(BaseModel):
+    playbook: str
+    params: dict[str, Any]
+
+
+@router.post("/tasks")
+async def task_create(body: TaskCreate, st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
+    try:
+        t = await st.tasks.create(body.playbook, body.params, p)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return _task_dict(t)
+
+
+class TaskInput(BaseModel):
+    values: dict[str, Any]
+
+
+@router.post("/tasks/{tid}/input")
+async def task_input(tid: str, body: TaskInput, st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
+    try:
+        t = await st.tasks.provide_input(_uuid(tid), body.values, p.label)
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+    return _task_dict(t) if t else {}
+
+
+@router.post("/tasks/{tid}/cancel")
+async def task_cancel(tid: str, st: AppState = StateDep, p: Principal = Actor) -> dict[str, bool]:
+    return {"cancelled": await st.tasks.cancel(_uuid(tid), p.label)}
+
+
+@router.post("/tasks/{tid}/retry")
+async def task_retry(tid: str, st: AppState = StateDep, p: Principal = Actor) -> dict[str, bool]:
+    return {"retried": await st.tasks.retry(_uuid(tid), p.label)}
+
+
+@router.get("/playbooks")
+async def playbooks(st: AppState = StateDep, p: Principal = Reader) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": pb.name,
+            "title": pb.title,
+            "description": pb.description,
+            "params_schema": pb.params_schema,
+            "steps": [s.name for s in pb.steps],
+        }
+        for pb in st.tasks.playbooks.values()
+    ]
+
+
+# ------------------------------------------------------------------ tools / skills / connectors
+@router.get("/tools")
+async def tools(st: AppState = StateDep, p: Principal = Reader) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": t.name,
+            "description": t.description,
+            "connector": t.connector,
+            "risk": st.registry.effective_risk(t),
+            "enabled": st.registry.is_enabled(t),
+            "writes": t.writes,
+            "untrusted_output": t.untrusted_output,
+            "parameters": t.parameters,
+        }
+        for t in st.registry.all(include_disabled=True)
+    ]
+
+
+@router.get("/skills")
+async def skills(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    hermes_skills: list[dict[str, Any]] = []
+    error = None
+    if st.hermes is not None:
+        try:
+            hermes_skills = await st.hermes.skills()
+        except Exception as e:
+            error = str(e)[:200]
+    return {
+        "hermes": hermes_skills,
+        "hermes_error": error,
+        "playbooks": [
+            {"name": pb.name, "title": pb.title, "description": pb.description} for pb in st.tasks.playbooks.values()
+        ],
+    }
+
+
+@router.get("/connectors")
+async def connectors(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    return {"connectors": st.connectors.describe(), "mcp_servers": st.mcp_hub.status()}
+
+
+class ConnectorConfigBody(BaseModel):
+    enabled: bool | None = None
+    settings: dict[str, Any] | None = None
+    secrets: dict[str, str] | None = None
+
+
+@router.post("/connectors/{cid}")
+async def connector_configure(
+    cid: str, body: ConnectorConfigBody, st: AppState = StateDep, p: Principal = Owner
+) -> dict[str, Any]:
+    if cid not in st.connectors.connectors:
+        raise HTTPException(404, "unknown connector")
+    try:
+        await st.connectors.configure(
+            cid, actor=p.label, enabled=body.enabled, settings=body.settings, secrets=body.secrets
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return next(c for c in st.connectors.describe() if c["id"] == cid)
+
+
+@router.post("/connectors/{cid}/test")
+async def connector_test(cid: str, st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    if cid not in st.connectors.connectors:
+        raise HTTPException(404, "unknown connector")
+    return (await st.connectors.check(cid)).to_dict()
+
+
+@router.post("/connectors/telegram/pair")
+async def telegram_pair(st: AppState = StateDep, p: Principal = Owner) -> dict[str, str]:
+    tg = st.connectors.connectors["telegram"]
+    try:
+        code = await tg.begin_pairing()  # type: ignore[attr-defined]
+    except Exception as e:
+        raise HTTPException(400, str(e)) from e
+    return {"code": code, "instructions": f"Sende deinem Bot in Telegram: /pair {code} (gültig 10 Minuten)"}
+
+
+@router.post("/connectors/google/oauth/start")
+async def google_oauth_start(st: AppState = StateDep, p: Principal = Owner) -> dict[str, str]:
+    g = st.connectors.connectors["google"]
+    try:
+        return {"auth_url": g.begin_oauth()}  # type: ignore[attr-defined]
+    except Exception as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.get("/connectors/google/oauth/callback", response_class=HTMLResponse)
+async def google_oauth_callback(
+    state: str, code: str | None = None, error: str | None = None, st: AppState = StateDep
+) -> str:
+    # Unauthenticated by necessity (browser redirect); protected by the one-time PKCE state.
+    if error or not code:
+        return f"<h3>Google-Verbindung abgebrochen: {error or 'kein Code'}</h3>"
+    g = st.connectors.connectors["google"]
+    try:
+        await g.finish_oauth(state, code)  # type: ignore[attr-defined]
+    except Exception as e:
+        return f"<h3>Fehler: {str(e)[:200]}</h3>"
+    await st.connectors.configure("google", actor="oauth", enabled=True)
+    return "<h3>Google ist verbunden. Du kannst dieses Fenster schließen.</h3>"
+
+
+# ------------------------------------------------------------------ memory
+@router.get("/memory/search")
+async def memory_search(q: str, limit: int = 8, st: AppState = StateDep, p: Principal = Reader) -> list[dict[str, Any]]:
+    return await st.memory.search(q, limit=min(limit, 30), include_sensitive=p.role == "owner")
+
+
+@router.get("/memory/items")
+async def memory_items(
+    kind: str | None = None,
+    status: str | None = None,
+    q: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    st: AppState = StateDep,
+    p: Principal = Reader,
+) -> dict[str, Any]:
+    return await st.memory.list_items(kind, status, min(limit, 500), offset, q)
+
+
+@router.get("/memory/items/{mid}")
+async def memory_item(mid: str, st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    item = await st.memory.get(_uuid(mid))
+    if item is None:
+        raise HTTPException(404, "not found")
+    if item["sensitivity"] == "sensitive" and p.role != "owner":
+        raise HTTPException(403, "sensitive")
+    return item
+
+
+class MemoryCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    content: str = Field(min_length=2)
+    kind: str = "note"
+    entities: list[str] = []
+    sensitive: bool | None = None
+
+
+@router.post("/memory/items")
+async def memory_create(body: MemoryCreate, st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
+    return await st.memory.remember(
+        body.title,
+        body.content,
+        body.kind,
+        entities=body.entities,
+        sensitive=body.sensitive,
+        source={"type": "manual", "actor": p.label},
+        actor=p.label,
+        confirmed=p.role == "owner",
+    )
+
+
+class MemoryCorrect(BaseModel):
+    content: str
+    title: str | None = None
+
+
+@router.post("/memory/items/{mid}/correct")
+async def memory_correct(
+    mid: str, body: MemoryCorrect, st: AppState = StateDep, p: Principal = Owner
+) -> dict[str, Any]:
+    try:
+        return await st.memory.correct(_uuid(mid), body.content, p.label, body.title)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@router.delete("/memory/items/{mid}")
+async def memory_delete(mid: str, st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    try:
+        return await st.memory.forget(_uuid(mid), p.label)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@router.post("/memory/pending/{mid}")
+async def memory_pending(mid: str, body: DecisionBody, st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    try:
+        return await st.memory.confirm_pending(_uuid(mid), body.approve, p.label)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@router.get("/memory/graph")
+async def memory_graph(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    return await st.memory.graph()
+
+
+@router.get("/memory/export")
+async def memory_export(st: AppState = StateDep, p: Principal = Owner) -> Response:
+    data = await st.memory.export_zip()
+    await audit(p.label, "memory.export", details={"bytes": len(data)})
+    name = f"jarvis-memory-{datetime.now(UTC).strftime('%Y%m%d-%H%M')}.zip"
+    return Response(
+        data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'}
+    )
+
+
+@router.post("/memory/reindex")
+async def memory_reindex(st: AppState = StateDep, p: Principal = Owner) -> dict[str, int]:
+    return await st.memory.reindex_all()
+
+
+# ------------------------------------------------------------------ scheduler
+class ScheduleBody(BaseModel):
+    name: str
+    cron: str
+    action: dict[str, Any]
+
+
+@router.get("/schedules")
+async def schedules(st: AppState = StateDep, p: Principal = Reader) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": str(s.id),
+            "name": s.name,
+            "cron": s.cron,
+            "timezone": s.timezone,
+            "action": s.action,
+            "enabled": s.enabled,
+            "last_run_at": s.last_run_at.isoformat() if s.last_run_at else None,
+            "next_run_at": s.next_run_at.isoformat() if s.next_run_at else None,
+            "last_status": s.last_status,
+        }
+        for s in await st.scheduler.list()
+    ]
+
+
+@router.post("/schedules")
+async def schedule_create(body: ScheduleBody, st: AppState = StateDep, p: Principal = Owner) -> dict[str, str]:
+    try:
+        s = await st.scheduler.create(body.name, body.cron, body.action, p.label)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"id": str(s.id)}
+
+
+@router.post("/schedules/{sid}/enabled")
+async def schedule_enable(
+    sid: str, body: DecisionBody, st: AppState = StateDep, p: Principal = Owner
+) -> dict[str, bool]:
+    return {"ok": await st.scheduler.set_enabled(_uuid(sid), body.approve, p.label)}
+
+
+@router.post("/schedules/{sid}/run")
+async def schedule_run(sid: str, st: AppState = StateDep, p: Principal = Owner) -> dict[str, bool]:
+    spawn(st.scheduler.run_now(_uuid(sid)), name="schedule-run")
+    return {"started": True}
+
+
+@router.delete("/schedules/{sid}")
+async def schedule_delete(sid: str, st: AppState = StateDep, p: Principal = Owner) -> dict[str, bool]:
+    return {"deleted": await st.scheduler.delete(_uuid(sid), p.label)}
+
+
+# ------------------------------------------------------------------ notifications
+@router.get("/notifications")
+async def notifications(unread: bool = False, st: AppState = StateDep, p: Principal = Reader) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": str(n.id),
+            "event": n.event,
+            "level": n.level,
+            "title": n.title,
+            "body": n.body,
+            "read": n.read,
+            "delivered": n.delivered,
+            "created_at": n.created_at.isoformat(),
+            "data": n.data,
+        }
+        for n in await st.notifier.list(unread)
+    ]
+
+
+class ReadBody(BaseModel):
+    ids: list[str] | None = None
+
+
+@router.post("/notifications/read")
+async def notifications_read(body: ReadBody, st: AppState = StateDep, p: Principal = Reader) -> dict[str, bool]:
+    await st.notifier.mark_read(body.ids)
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ logs / audit
+@router.get("/logs")
+async def logs(limit: int = 300, level: str | None = None, p: Principal = Reader) -> list[dict[str, Any]]:
+    return ring.recent(min(limit, 2000), level)
+
+
+@router.get("/audit")
+async def audit_log(
+    limit: int = 200, offset: int = 0, action: str | None = None, p: Principal = Owner
+) -> dict[str, Any]:
+    async with session_scope() as s:
+        q = select(AuditEntry).order_by(AuditEntry.id.desc()).limit(min(limit, 1000)).offset(offset)
+        if action:
+            q = q.where(AuditEntry.action.ilike(f"%{action}%"))
+        rows = (await s.execute(q)).scalars().all()
+        total = (await s.execute(select(func.count()).select_from(AuditEntry))).scalar_one()
+    return {
+        "total": total,
+        "entries": [
+            {
+                "id": r.id,
+                "ts": r.ts.isoformat(),
+                "actor": r.actor,
+                "action": r.action,
+                "target": r.target,
+                "outcome": r.outcome,
+                "details": r.details,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/audit/verify")
+async def audit_verify(p: Principal = Owner) -> dict[str, Any]:
+    return await verify_chain()
+
+
+# ------------------------------------------------------------------ permissions / devices / settings
+@router.get("/permissions")
+async def permissions(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    macos: dict[str, Any] = {}
+    try:
+        h = await st.bridge.health()
+        macos = {"bridge": "ok", **h.get("permissions", {}), "kill_switch": h.get("killSwitch")}
+    except Exception:
+        macos = {"bridge": "offline"}
+    macos["microphone"] = st.voice_state.get("mic_permission")
+    perms = st.permissions
+    return {
+        "roles": {k: v.model_dump() for k, v in perms.roles.items()},
+        "taint_requires_approval": perms.taint_requires_approval,
+        "shell_allowlist": perms.shell_allowlist,
+        "rate_limits": perms.rate_limits.model_dump(),
+        "tools": [
+            {
+                "name": t.name,
+                "connector": t.connector,
+                "risk": st.registry.effective_risk(t),
+                "enabled": st.registry.is_enabled(t),
+                "auto_for_owner": RISK_ORDER[st.registry.effective_risk(t)]
+                <= RISK_ORDER[perms.roles["owner"].auto_approve],
+            }
+            for t in st.registry.all(include_disabled=True)
+        ],
+        "macos": macos,
+    }
+
+
+@router.post("/permissions/macos/{kind}")
+async def macos_permission(kind: str, st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    if kind not in ("accessibility", "screenRecording"):
+        raise HTTPException(400, "unknown permission")
+    try:
+        return dict(await st.bridge.request("POST", "/permissions/request", {"kind": kind}))
+    except Exception as e:
+        raise HTTPException(503, str(e)) from e
+
+
+@router.get("/devices")
+async def devices(p: Principal = Owner) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": str(d.id),
+            "name": d.name,
+            "role": d.role,
+            "revoked": d.revoked,
+            "last_seen_at": d.last_seen_at.isoformat() if d.last_seen_at else None,
+            "created_at": d.created_at.isoformat(),
+        }
+        for d in await list_devices()
+    ]
+
+
+class DeviceBody(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    role: str = "operator"
+
+
+@router.post("/devices")
+async def device_create(body: DeviceBody, st: AppState = StateDep, p: Principal = Owner) -> dict[str, str]:
+    if body.role not in st.permissions.roles or body.role == "owner":
+        raise HTTPException(400, "invalid role (owner devices are created with jarvisctl)")
+    device, token = await create_device(body.name, body.role)
+    await audit(p.label, "device.create", target=str(device.id), details={"role": body.role})
+    return {"id": str(device.id), "token": token}
+
+
+@router.delete("/devices/{did}")
+async def device_revoke(did: str, p: Principal = Owner) -> dict[str, bool]:
+    ok = await revoke_device(_uuid(did))
+    await audit(p.label, "device.revoke", target=did)
+    return {"revoked": ok}
+
+
+@router.get("/settings")
+async def settings(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    s = st.settings
+    return {
+        "personality": st.personality.model_dump(),
+        "voice": s.voice.model_dump(),
+        "llm": s.llm.model_dump(),
+        "notifications": s.notifications.model_dump(),
+        "session": s.session.model_dump(),
+        "paths": {k: str(v) for k, v in s.paths.model_dump().items()},
+        "telephony": s.telephony.model_dump(),
+        "coding": s.coding.model_dump(),
+        "server": {"host": s.server.host, "port": s.server.port, "public_base_url": s.server.public_base_url},
+    }
+
+
+# ------------------------------------------------------------------ voice
+class SpeakBody(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    sample_rate: int = 24000
+
+
+@router.post("/voice/tts")
+async def voice_tts(body: SpeakBody, st: AppState = StateDep, p: Principal = Reader) -> StreamingResponse:
+    """Streams raw 16-bit mono PCM (used by the voice daemon for low-latency playback)."""
+    text = speakable(body.text)
+    return StreamingResponse(
+        st.tts.stream(text, body.sample_rate), media_type="audio/L16", headers={"X-Sample-Rate": str(body.sample_rate)}
+    )
+
+
+@router.post("/voice/stt")
+async def voice_stt(request: Request, st: AppState = StateDep, p: Principal = Reader) -> dict[str, str]:
+    wav = await request.body()
+    if len(wav) > 20_000_000:
+        raise HTTPException(413, "too large")
+    return {"text": await st.stt.transcribe_wav(wav)}
+
+
+class VoiceCommand(BaseModel):
+    action: str  # ptt_start | ptt_stop | mute | unmute | interrupt | say
+    text: str | None = None
+
+
+@router.post("/voice/command")
+async def voice_command(body: VoiceCommand, p: Principal = Actor) -> dict[str, bool]:
+    if body.action not in ("ptt_start", "ptt_stop", "mute", "unmute", "interrupt", "say"):
+        raise HTTPException(400, "unknown action")
+    await bus.publish("voice.command", action=body.action, text=body.text)
+    if body.action == "say" and body.text:
+        await bus.publish("voice.say", text=body.text)
+    return {"ok": True}
+
+
+class VoiceStatus(BaseModel):
+    state: str
+    muted: bool = False
+    wake_word: bool = True
+    mic_permission: str | None = None
+    level: float | None = None
+    detail: str | None = None
+
+
+@router.post("/voice/status")
+async def voice_status(body: VoiceStatus, st: AppState = StateDep, p: Principal = Reader) -> dict[str, bool]:
+    st.voice_state.update({**body.model_dump(), "connected": True, "updated_at": datetime.now(UTC).isoformat()})
+    await bus.publish("voice.status", **body.model_dump())
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ coding jobs
+def _job_dict(j: CodingJob) -> dict[str, Any]:
+    return {
+        "id": str(j.id),
+        "title": j.title,
+        "status": j.status,
+        "repo_path": j.repo_path,
+        "branch": j.branch,
+        "worktree_path": j.worktree_path,
+        "result": j.result,
+        "test_command": j.test_command,
+        "created_at": j.created_at.isoformat(),
+        "finished_at": j.finished_at.isoformat() if j.finished_at else None,
+    }
+
+
+@router.get("/coding/jobs")
+async def coding_jobs(p: Principal = Reader) -> list[dict[str, Any]]:
+    async with session_scope() as s:
+        rows = (await s.execute(select(CodingJob).order_by(CodingJob.created_at.desc()).limit(50))).scalars().all()
+    return [_job_dict(j) for j in rows]
+
+
+@router.get("/coding/jobs/{jid}/log")
+async def coding_log(
+    jid: str, lines: int = 300, st: AppState = StateDep, p: Principal = Reader
+) -> list[dict[str, Any]]:
+    return await st.coding.log_tail(_uuid(jid), min(lines, 2000))
+
+
+@router.post("/coding/jobs/{jid}/cancel")
+async def coding_cancel(jid: str, st: AppState = StateDep, p: Principal = Actor) -> dict[str, bool]:
+    return {"cancelled": await st.coding.cancel(_uuid(jid), p.label)}
+
+
+@router.post("/coding/jobs/{jid}/retry")
+async def coding_retry(jid: str, st: AppState = StateDep, p: Principal = Owner) -> dict[str, bool]:
+    try:
+        await st.coding.retry(_uuid(jid))
+    except Exception as e:
+        raise HTTPException(409, str(e)) from e
+    return {"retried": True}
+
+
+# ------------------------------------------------------------------ telephony
+@router.get("/telephony/status")
+async def telephony_status(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    return st.telephony.status() if st.telephony else {"enabled": False}
+
+
+@router.get("/telephony/calls")
+async def telephony_calls(p: Principal = Reader) -> list[dict[str, Any]]:
+    async with session_scope() as s:
+        rows = (await s.execute(select(Call).order_by(Call.created_at.desc()).limit(50))).scalars().all()
+    return [
+        {
+            "id": str(c.id),
+            "provider": c.provider,
+            "direction": c.direction,
+            "from": c.from_number,
+            "to": c.to_number,
+            "status": c.status,
+            "authenticated": c.authenticated,
+            "purpose": c.purpose,
+            "transcript": c.transcript,
+            "created_at": c.created_at.isoformat(),
+            "ended_at": c.ended_at.isoformat() if c.ended_at else None,
+        }
+        for c in rows
+    ]
+
+
+@router.post("/telephony/test-call")
+async def telephony_test_call(st: AppState = StateDep, p: Principal = Owner) -> dict[str, str]:
+    """LOCAL TEST MODE: returns credentials for a simulated call over the media-stream protocol."""
+    if st.telephony is None:
+        raise HTTPException(400, "telephony disabled")
+    call_id, token = await st.telephony.start_local_test_call()
+    return {
+        "call_id": str(call_id),
+        "stream_token": token,
+        "ws_url": f"ws://127.0.0.1:{st.settings.server.port}/api/telephony/stream",
+        "notice": "LOKALER TESTMODUS – kein echtes Telefonat",
+    }
+
+
+@router.get("/stats/overview")
+async def stats_overview(p: Principal = Reader, days: int = Query(7, ge=1, le=90)) -> dict[str, Any]:
+    async with session_scope() as s:
+        tasks_by_status = dict((await s.execute(select(Task.status, func.count()).group_by(Task.status))).all())
+        approvals_by_status = dict(
+            (await s.execute(select(Approval.status, func.count()).group_by(Approval.status))).all()
+        )
+    return {"tasks": tasks_by_status, "approvals": approvals_by_status}

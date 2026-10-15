@@ -29,10 +29,13 @@ def _obj(props: dict[str, Any], req: list[str] | None = None) -> dict[str, Any]:
 
 class ShellConnector(Connector):
     manifest = Manifest(
-        id="shell", name="Lokale Shell",
+        id="shell",
+        name="Lokale Shell",
         description="Führt ausschließlich freigegebene Programme (permissions.yaml: shell_allowlist) als "
-                    "Argumentliste aus – ohne Shell-Interpretation.",
-        category="system", auth="local", default_enabled=True,
+        "Argumentliste aus – ohne Shell-Interpretation.",
+        category="system",
+        auth="local",
+        default_enabled=True,
     )
 
     async def health(self) -> Health:
@@ -58,37 +61,62 @@ class ShellConnector(Connector):
             if not cwd.is_relative_to(home):
                 raise ToolUserError("Arbeitsverzeichnis muss im Benutzerordner liegen")
             env = {k: v for k, v in os.environ.items() if not k.startswith(("JARVIS_SECRET", "AWS_", "GITHUB_TOKEN"))}
-            proc = await asyncio.create_subprocess_exec(path, *argv[1:], cwd=cwd, env=env,
-                                                        stdout=asyncio.subprocess.PIPE,
-                                                        stderr=asyncio.subprocess.PIPE,
-                                                        stdin=asyncio.subprocess.DEVNULL)
+            proc = await asyncio.create_subprocess_exec(
+                path,
+                *argv[1:],
+                cwd=cwd,
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.DEVNULL,
+            )
             try:
                 out, err = await asyncio.wait_for(proc.communicate(), timeout=float(a.get("timeout_s", 60)))
             except TimeoutError:
                 proc.kill()
                 raise ToolUserError("Befehl hat das Zeitlimit überschritten") from None
-            return {"exit_code": proc.returncode, "stdout": out.decode(errors="replace")[-8000:],
-                    "stderr": err.decode(errors="replace")[-4000:]}
+            return {
+                "exit_code": proc.returncode,
+                "stdout": out.decode(errors="replace")[-8000:],
+                "stderr": err.decode(errors="replace")[-4000:],
+            }
 
-        return [ToolSpec(
-            "shell_run", "Führt ein freigegebenes Kommandozeilenprogramm aus (argv-Liste, kein Shell-Syntax).",
-            _obj({"argv": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-                  "command": {"type": "string"}, "cwd": {"type": "string"},
-                  "timeout_s": {"type": "integer", "minimum": 1, "maximum": 600}}),
-            run, "high", "shell", writes=False, timeout_s=620,
-            summarize=lambda a: "Shell: " + (" ".join(a.get("argv") or []) or a.get("command", "")))]
+        return [
+            ToolSpec(
+                "shell_run",
+                "Führt ein freigegebenes Kommandozeilenprogramm aus (argv-Liste, kein Shell-Syntax).",
+                _obj(
+                    {
+                        "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                        "command": {"type": "string"},
+                        "cwd": {"type": "string"},
+                        "timeout_s": {"type": "integer", "minimum": 1, "maximum": 600},
+                    }
+                ),
+                run,
+                "high",
+                "shell",
+                writes=False,
+                timeout_s=620,
+                summarize=lambda a: "Shell: " + (" ".join(a.get("argv") or []) or a.get("command", "")),
+            )
+        ]
 
 
 class HttpApiConnector(Connector):
     manifest = Manifest(
-        id="http", name="HTTP API",
+        id="http",
+        name="HTTP API",
         description="Ruft frei konfigurierbare HTTP-APIs auf. Nur Hosts aus der Allowlist; GET ist lesend, "
-                    "schreibende Methoden benötigen eine Freigabe.",
-        category="developer", auth="token",
+        "schreibende Methoden benötigen eine Freigabe.",
+        category="developer",
+        auth="token",
         secrets=[SecretField("http-api-token", "Optionaler Bearer-Token", required=False)],
-        settings_schema={"type": "object", "properties": {
-            "allowed_hosts": {"type": "array", "items": {"type": "string"}, "default": []}},
-            "required": ["allowed_hosts"]},
+        settings_schema={
+            "type": "object",
+            "properties": {"allowed_hosts": {"type": "array", "items": {"type": "string"}, "default": []}},
+            "required": ["allowed_hosts"],
+        },
         default_enabled=False,
     )
 
@@ -119,13 +147,33 @@ class HttpApiConnector(Connector):
 
         props = {"url": {"type": "string"}, "params": {"type": "object"}, "use_token": {"type": "boolean"}}
         return [
-            ToolSpec("http_get", "HTTP-GET auf eine freigegebene API.", _obj(props, ["url"]), get, "read", "http",
-                     untrusted_output=True),
-            ToolSpec("http_send", "HTTP POST/PUT/PATCH/DELETE auf eine freigegebene API.",
-                     _obj({**props, "method": {"type": "string", "enum": ["POST", "PUT", "PATCH", "DELETE"]},
-                           "json": {"type": "object"}}, ["url"]), send, "high", "http", writes=True,
-                     untrusted_output=True,
-                     summarize=lambda a: f"HTTP {a.get('method', 'POST')} {a['url']}"),
+            ToolSpec(
+                "http_get",
+                "HTTP-GET auf eine freigegebene API.",
+                _obj(props, ["url"]),
+                get,
+                "read",
+                "http",
+                untrusted_output=True,
+            ),
+            ToolSpec(
+                "http_send",
+                "HTTP POST/PUT/PATCH/DELETE auf eine freigegebene API.",
+                _obj(
+                    {
+                        **props,
+                        "method": {"type": "string", "enum": ["POST", "PUT", "PATCH", "DELETE"]},
+                        "json": {"type": "object"},
+                    },
+                    ["url"],
+                ),
+                send,
+                "high",
+                "http",
+                writes=True,
+                untrusted_output=True,
+                summarize=lambda a: f"HTTP {a.get('method', 'POST')} {a['url']}",
+            ),
         ]
 
 
@@ -133,18 +181,28 @@ class WebhookConnector(Connector):
     """Outbound webhooks (tool) and inbound webhooks (``POST /api/webhooks/{name}``, HMAC-SHA256)."""
 
     manifest = Manifest(
-        id="webhook", name="Webhooks",
+        id="webhook",
+        name="Webhooks",
         description="Eingehende Webhooks (HMAC-signiert) starten Jarvis-Anweisungen; ausgehende Webhooks "
-                    "senden Ereignisse an konfigurierte Ziele.",
-        category="developer", auth="token",
-        secrets=[SecretField("webhook-signing-secret", "HMAC-Secret für eingehende Webhooks",
-                             help="Absender signieren den Body mit HMAC-SHA256 im Header X-Jarvis-Signature "
-                                  "(Format: sha256=<hex>).")],
-        settings_schema={"type": "object", "properties": {
-            "outbound_targets": {"type": "object", "additionalProperties": {"type": "string"}, "default": {}},
-            "inbound_routes": {"type": "object", "additionalProperties": {"type": "string"}, "default": {}}}},
+        "senden Ereignisse an konfigurierte Ziele.",
+        category="developer",
+        auth="token",
+        secrets=[
+            SecretField(
+                "webhook-signing-secret",
+                "HMAC-Secret für eingehende Webhooks",
+                help="Absender signieren den Body mit HMAC-SHA256 im Header X-Jarvis-Signature (Format: sha256=<hex>).",
+            )
+        ],
+        settings_schema={
+            "type": "object",
+            "properties": {
+                "outbound_targets": {"type": "object", "additionalProperties": {"type": "string"}, "default": {}},
+                "inbound_routes": {"type": "object", "additionalProperties": {"type": "string"}, "default": {}},
+            },
+        },
         setup_instructions="inbound_routes: {name: 'Anweisung an Jarvis, {payload} wird ersetzt'}; "
-                           "outbound_targets: {name: 'https://...'}",
+        "outbound_targets: {name: 'https://...'}",
     )
 
     def verify(self, body: bytes, signature: str | None) -> bool:
@@ -165,7 +223,15 @@ class WebhookConnector(Connector):
                 r = await c.post(url, json=a.get("payload") or {})
             return {"status": r.status_code}
 
-        return [ToolSpec("webhook_send", "Sendet ein Ereignis an ein konfiguriertes Webhook-Ziel.",
-                         _obj({"target": {"type": "string"}, "payload": {"type": "object"}}, ["target"]),
-                         send, "high", "webhook", writes=True,
-                         summarize=lambda a: f"Webhook an '{a['target']}' senden")]
+        return [
+            ToolSpec(
+                "webhook_send",
+                "Sendet ein Ereignis an ein konfiguriertes Webhook-Ziel.",
+                _obj({"target": {"type": "string"}, "payload": {"type": "object"}}, ["target"]),
+                send,
+                "high",
+                "webhook",
+                writes=True,
+                summarize=lambda a: f"Webhook an '{a['target']}' senden",
+            )
+        ]

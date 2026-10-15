@@ -51,8 +51,16 @@ class Notifier:
         t = now.time()
         return (start <= t or t < end) if start > end else (start <= t < end)
 
-    async def notify(self, event: str, title: str, body: str = "", *, channels: list[str] | None = None,
-                     level: str = "info", data: dict[str, Any] | None = None) -> list[str]:
+    async def notify(
+        self,
+        event: str,
+        title: str,
+        body: str = "",
+        *,
+        channels: list[str] | None = None,
+        level: str = "info",
+        data: dict[str, Any] | None = None,
+    ) -> list[str]:
         chosen, bypass = (channels, level == "critical") if channels else self._channels_for(event)
         if self._quiet() and not bypass:
             chosen = [c for c in chosen if c == "desktop"]
@@ -63,8 +71,9 @@ class Notifier:
             await s.flush()
             nid = n.id
         if "desktop" in chosen:
-            await bus.publish("notification", id=str(nid), event=event, level=level, title=title, body=body,
-                              data=data or {})
+            await bus.publish(
+                "notification", id=str(nid), event=event, level=level, title=title, body=body, data=data or {}
+            )
             delivered.append("desktop")
         if "voice" in chosen:
             await bus.publish("voice.say", text=f"{title}. {body}"[:400])
@@ -75,7 +84,7 @@ class Notifier:
                 try:
                     await tg.send(f"{title}\n{body}".strip())  # type: ignore[attr-defined]
                     delivered.append("telegram")
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.warning("Telegram notification failed: %s", e)
             elif tg is not None and tg.active:
                 delivered.append("telegram")
@@ -83,7 +92,7 @@ class Notifier:
             try:
                 await self.state.telephony.call_owner(f"{title}. {body}"[:500], reason=event)
                 delivered.append("phone")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("Phone notification failed: %s", e)
         async with session_scope() as s:
             await s.execute(update(Notification).where(Notification.id == nid).values(delivered=delivered))
@@ -96,20 +105,27 @@ class Notifier:
             body = "Abgeschlossen." + (f" Hinweise: {'; '.join(warn)}" if warn else "")
             await self.notify(ev.type, f"Aufgabe erledigt: {d.get('title')}", body, data=d)
         elif ev.type == "task.failed":
-            await self.notify(ev.type, f"Aufgabe fehlgeschlagen: {d.get('title')}", str(d.get("error") or ""),
-                              level="warning", data=d)
+            await self.notify(
+                ev.type, f"Aufgabe fehlgeschlagen: {d.get('title')}", str(d.get("error") or ""), level="warning", data=d
+            )
         elif ev.type == "task.input_required":
             await self.notify(ev.type, f"Angaben benötigt: {d.get('title')}", str(d.get("question") or ""), data=d)
         elif ev.type == "approval.requested":
             await self.notify(ev.type, "Freigabe erforderlich", str(d.get("summary")), level="warning", data=d)
         elif ev.type == "coding.finished":
-            await self.notify(ev.type, f"Coding-Job {d.get('status')}: {d.get('title')}", str(d.get("summary", ""))[:500],
-                              level="info" if d.get("status") == "completed" else "warning", data=d)
+            await self.notify(
+                ev.type,
+                f"Coding-Job {d.get('status')}: {d.get('title')}",
+                str(d.get("summary", ""))[:500],
+                level="info" if d.get("status") == "completed" else "warning",
+                data=d,
+            )
         elif ev.type == "memory.pending":
             await self.notify(ev.type, "Sensible Erinnerung wartet auf Bestätigung", str(d.get("title")), data=d)
         elif ev.type == "system.critical":
-            await self.notify(ev.type, str(d.get("title", "Kritisches Ereignis")), str(d.get("body", "")),
-                              level="critical", data=d)
+            await self.notify(
+                ev.type, str(d.get("title", "Kritisches Ereignis")), str(d.get("body", "")), level="critical", data=d
+            )
 
     async def list(self, unread_only: bool = False, limit: int = 100) -> list[Notification]:
         q = select(Notification).order_by(Notification.created_at.desc()).limit(limit)

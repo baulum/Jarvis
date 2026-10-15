@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 
 from jarvis.connectors.base import Connector, Health, Manifest, SecretField
-from jarvis.events import Event, bus
+from jarvis.events import Event, bus, spawn
 from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
 from jarvis.security.guards import rate_limiter
@@ -32,17 +32,29 @@ API = "https://api.telegram.org"
 
 class TelegramConnector(Connector):
     manifest = Manifest(
-        id="telegram", name="Telegram",
+        id="telegram",
+        name="Telegram",
         description="Mit Jarvis per Telegram schreiben oder sprechen, Aufgaben starten, Statusmeldungen und "
-                    "Freigaben per Knopfdruck.",
-        category="communication", auth="token",
-        secrets=[SecretField("telegram-bot-token", "Bot-Token von @BotFather",
-                             help="In Telegram @BotFather › /newbot. Danach in der App 'Koppeln' wählen und dem Bot "
-                                  "/pair <Code> senden.")],
-        settings_schema={"type": "object", "properties": {"owner_chat_id": {"type": "integer"},
-                                                          "pairing_code": {"type": ["string", "null"]},
-                                                          "pairing_expires": {"type": ["number", "null"]}},
-                         "required": ["owner_chat_id"]},
+        "Freigaben per Knopfdruck.",
+        category="communication",
+        auth="token",
+        secrets=[
+            SecretField(
+                "telegram-bot-token",
+                "Bot-Token von @BotFather",
+                help="In Telegram @BotFather › /newbot. Danach in der App 'Koppeln' wählen und dem Bot "
+                "/pair <Code> senden.",
+            )
+        ],
+        settings_schema={
+            "type": "object",
+            "properties": {
+                "owner_chat_id": {"type": "integer"},
+                "pairing_code": {"type": ["string", "null"]},
+                "pairing_expires": {"type": ["number", "null"]},
+            },
+            "required": ["owner_chat_id"],
+        },
         mcp_note="Kein offizieller Telegram-MCP-Server; direkte Nutzung der offiziellen Bot API.",
     )
 
@@ -65,7 +77,9 @@ class TelegramConnector(Connector):
             raise ToolUserError(f"Telegram: {data.get('description', r.status_code)}")
         return data["result"]
 
-    async def send(self, text: str, chat_id: int | None = None, buttons: list[list[dict[str, str]]] | None = None) -> Any:
+    async def send(
+        self, text: str, chat_id: int | None = None, buttons: list[list[dict[str, str]]] | None = None
+    ) -> Any:
         chat = chat_id or self.settings.get("owner_chat_id")
         if not chat:
             raise ToolUserError("Telegram ist noch nicht mit Sir gekoppelt.")
@@ -98,8 +112,11 @@ class TelegramConnector(Connector):
         code = f"{secrets.randbelow(10**6):06d}"
         self.settings["pairing_code"] = code
         self.settings["pairing_expires"] = time.time() + 600
-        await self.state.connectors.configure("telegram", actor="pairing", settings={
-            "pairing_code": code, "pairing_expires": self.settings["pairing_expires"]})
+        await self.state.connectors.configure(
+            "telegram",
+            actor="pairing",
+            settings={"pairing_code": code, "pairing_expires": self.settings["pairing_expires"]},
+        )
         if self._poll_task is None and self._pair_task is None:
             self._pair_task = asyncio.create_task(self._poll_loop(pairing_only=True))
         return code
@@ -108,18 +125,23 @@ class TelegramConnector(Connector):
         backoff = 1.0
         while True:
             try:
-                updates = await self._call("getUpdates", http_timeout=35, offset=self._offset, timeout=25,
-                                           allowed_updates=["message", "callback_query"])
+                updates = await self._call(
+                    "getUpdates",
+                    http_timeout=35,
+                    offset=self._offset,
+                    timeout=25,
+                    allowed_updates=["message", "callback_query"],
+                )
                 backoff = 1.0
                 for upd in updates:
                     self._offset = max(self._offset, int(upd["update_id"]) + 1)
-                    asyncio.create_task(self._handle_update(upd))
+                    spawn(self._handle_update(upd), name="telegram-update")
                 if pairing_only and self.settings.get("owner_chat_id"):
                     self._pair_task = None
                     return
             except asyncio.CancelledError:
                 raise
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("Telegram polling error: %s", e)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60)
@@ -138,8 +160,12 @@ class TelegramConnector(Connector):
                 return
             owner = self.settings.get("owner_chat_id")
             if not owner or chat_id != int(owner):
-                await audit(f"telegram:{chat_id}", "telegram.rejected", outcome="denied",
-                            details={"from": msg.get("from", {}).get("username")})
+                await audit(
+                    f"telegram:{chat_id}",
+                    "telegram.rejected",
+                    outcome="denied",
+                    details={"from": msg.get("from", {}).get("username")},
+                )
                 return
             if not rate_limiter.check(f"telegram:{chat_id}", 20, 60):
                 await self.send("Langsam, Sir. Zu viele Nachrichten in kurzer Zeit.", chat_id)
@@ -156,8 +182,9 @@ class TelegramConnector(Connector):
                 return
             await self._call("sendChatAction", chat_id=chat_id, action="typing")
             principal = Principal(id=str(chat_id), role="telegram_owner", channel="telegram")
-            result = await self.state.orchestrator.handle(principal, "telegram", text,
-                                                          session_id=self._sessions.get(chat_id))
+            result = await self.state.orchestrator.handle(
+                principal, "telegram", text, session_id=self._sessions.get(chat_id)
+            )
             self._sessions[chat_id] = result.session_id
             await self.send(result.text or "(keine Antwort)", chat_id)
         except Exception:
@@ -170,8 +197,12 @@ class TelegramConnector(Connector):
         if not rate_limiter.check(f"telegram-pair:{chat_id}", 5, 3600):
             return
         if expected and secrets.compare_digest(code, str(expected)) and time.time() < expires:
-            await self.state.connectors.configure("telegram", actor=f"telegram:{chat_id}", enabled=True, settings={
-                "owner_chat_id": chat_id, "pairing_code": None, "pairing_expires": None})
+            await self.state.connectors.configure(
+                "telegram",
+                actor=f"telegram:{chat_id}",
+                enabled=True,
+                settings={"owner_chat_id": chat_id, "pairing_code": None, "pairing_expires": None},
+            )
             await audit(f"telegram:{chat_id}", "telegram.paired")
             await self.send("Kopplung erfolgreich. Zu Ihren Diensten, Sir.", chat_id)
         else:
@@ -209,14 +240,21 @@ class TelegramConnector(Connector):
         principal = Principal(id=str(chat_id), role="telegram_owner", channel="telegram")
         try:
             res = await self.state.executor.decide(uuid.UUID(aid), decision == "y", principal)
-            note = {"executed": "✅ Freigegeben und ausgeführt", "rejected": "❌ Abgelehnt",
-                    "failed": "⚠️ Freigegeben, Ausführung fehlgeschlagen",
-                    "expired": "⌛ Abgelaufen"}.get(res["status"], res["status"])
+            note = {
+                "executed": "✅ Freigegeben und ausgeführt",
+                "rejected": "❌ Abgelehnt",
+                "failed": "⚠️ Freigegeben, Ausführung fehlgeschlagen",
+                "expired": "⌛ Abgelaufen",
+            }.get(res["status"], res["status"])
         except PermissionError as e:
             note = f"⛔ {e}"
         await self._call("answerCallbackQuery", callback_query_id=cq["id"], text=note[:180])
-        await self._call("editMessageReplyMarkup", chat_id=chat_id, message_id=cq["message"]["message_id"],
-                         reply_markup={"inline_keyboard": []})
+        await self._call(
+            "editMessageReplyMarkup",
+            chat_id=chat_id,
+            message_id=cq["message"]["message_id"],
+            reply_markup={"inline_keyboard": []},
+        )
         await self.send(note, chat_id)
 
     async def _on_approval_requested(self, ev: Event) -> None:
@@ -228,8 +266,15 @@ class TelegramConnector(Connector):
             await self.send(text + "\n\nKritische Aktion – bitte in der Desktop-App freigeben.")
             return
         aid = ev.data["approval_id"]
-        await self.send(text, buttons=[[{"text": "✅ Freigeben", "callback_data": f"ap:{aid}:y"},
-                                        {"text": "❌ Ablehnen", "callback_data": f"ap:{aid}:n"}]])
+        await self.send(
+            text,
+            buttons=[
+                [
+                    {"text": "✅ Freigeben", "callback_data": f"ap:{aid}:y"},
+                    {"text": "❌ Ablehnen", "callback_data": f"ap:{aid}:n"},
+                ]
+            ],
+        )
 
     async def _transcribe(self, media: dict[str, Any] | None) -> str:
         if not media:
@@ -249,7 +294,18 @@ class TelegramConnector(Connector):
             res = await self.send(a["text"])
             return {"message_id": res.get("message_id")}
 
-        return [ToolSpec("telegram_send_message", "Sendet Sir eine Telegram-Nachricht.",
-                         {"type": "object", "properties": {"text": {"type": "string", "minLength": 1}},
-                          "required": ["text"], "additionalProperties": False},
-                         send, "low", "telegram")]
+        return [
+            ToolSpec(
+                "telegram_send_message",
+                "Sendet Sir eine Telegram-Nachricht.",
+                {
+                    "type": "object",
+                    "properties": {"text": {"type": "string", "minLength": 1}},
+                    "required": ["text"],
+                    "additionalProperties": False,
+                },
+                send,
+                "low",
+                "telegram",
+            )
+        ]

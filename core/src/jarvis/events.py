@@ -72,7 +72,25 @@ class EventBus:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        loop.create_task(self.publish(type_, **data))
+        task = loop.create_task(self.publish(type_, **data))
+        _background.add(task)
+        task.add_done_callback(_background.discard)
 
 
 bus = EventBus()
+
+_background: set[asyncio.Task[Any]] = set()
+
+
+def spawn(coro: Any, name: str | None = None) -> asyncio.Task[Any]:
+    """Run a fire-and-forget coroutine while keeping a strong reference (avoids GC of running tasks)."""
+    task = asyncio.get_running_loop().create_task(coro, name=name)
+    _background.add(task)
+
+    def _done(t: asyncio.Task[Any]) -> None:
+        _background.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            logger.error("Background task %s failed", t.get_name(), exc_info=t.exception())
+
+    task.add_done_callback(_done)
+    return task

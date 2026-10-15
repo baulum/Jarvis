@@ -42,7 +42,7 @@ class RingBuffer(logging.Handler):
         for cb in listeners:
             try:
                 cb(entry)
-            except Exception:  # noqa: BLE001, S110 - a listener must never break logging
+            except Exception:  # noqa: S110 - a listener must never break logging
                 pass
 
     def recent(self, limit: int = 200, level: str | None = None) -> list[dict[str, Any]]:

@@ -67,8 +67,12 @@ class Note:
 
     def frontmatter(self) -> dict[str, Any]:
         fm: dict[str, Any] = {
-            "id": self.id, "kind": self.kind, "created": self.created, "updated": self.updated,
-            "status": self.status, "sensitivity": self.sensitivity,
+            "id": self.id,
+            "kind": self.kind,
+            "created": self.created,
+            "updated": self.updated,
+            "status": self.status,
+            "sensitivity": self.sensitivity,
         }
         if self.source:
             fm["source"] = self.source
@@ -162,12 +166,12 @@ def parse_note(text: str, rel: str) -> Note:
             fm = loaded if isinstance(loaded, dict) else {}
         except yaml.YAMLError:
             fm = {}
-        body = text[m.end():]
+        body = text[m.end() :]
     title = Path(rel).stem
     hm = re.match(r"^\s*#\s+(.+)\n", body)
     if hm:
         title = hm.group(1).strip()
-        body = body[hm.end():]
+        body = body[hm.end() :]
     folder = Path(rel).parts[0] if len(Path(rel).parts) > 1 else ""
     known = {"id", "kind", "created", "updated", "status", "sensitivity", "source", "entities", "tags"}
     return Note(

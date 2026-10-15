@@ -36,18 +36,28 @@ def _scrub(value: Any) -> Any:
     return value
 
 
-def _digest(prev_hash: str, ts: datetime, actor: str, action: str, target: str, outcome: str,
-            details: dict[str, Any]) -> str:
+def _digest(
+    prev_hash: str, ts: datetime, actor: str, action: str, target: str, outcome: str, details: dict[str, Any]
+) -> str:
     canonical = json.dumps(
-        {"ts": ts.isoformat(), "actor": actor, "action": action, "target": target, "outcome": outcome,
-         "details": details},
-        sort_keys=True, ensure_ascii=False, default=str,
+        {
+            "ts": ts.isoformat(),
+            "actor": actor,
+            "action": action,
+            "target": target,
+            "outcome": outcome,
+            "details": details,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
     )
     return hashlib.sha256((prev_hash + canonical).encode()).hexdigest()
 
 
-async def audit(actor: str, action: str, *, target: str = "", outcome: str = "ok",
-                details: dict[str, Any] | None = None) -> None:
+async def audit(
+    actor: str, action: str, *, target: str = "", outcome: str = "ok", details: dict[str, Any] | None = None
+) -> None:
     clean = _scrub(details or {})
     ts = datetime.now(UTC)
     try:
@@ -55,9 +65,16 @@ async def audit(actor: str, action: str, *, target: str = "", outcome: str = "ok
             await s.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": _LOCK_ID})
             prev = (await s.execute(select(AuditEntry.hash).order_by(AuditEntry.id.desc()).limit(1))).scalar()
             prev_hash = prev or GENESIS
-            entry = AuditEntry(ts=ts, actor=actor, action=action, target=target[:300], outcome=outcome,
-                               details=clean, prev_hash=prev_hash,
-                               hash=_digest(prev_hash, ts, actor, action, target[:300], outcome, clean))
+            entry = AuditEntry(
+                ts=ts,
+                actor=actor,
+                action=action,
+                target=target[:300],
+                outcome=outcome,
+                details=clean,
+                prev_hash=prev_hash,
+                hash=_digest(prev_hash, ts, actor, action, target[:300], outcome, clean),
+            )
             s.add(entry)
     except Exception:
         # Auditing must never silently disappear: log loudly, but don't crash the caller.

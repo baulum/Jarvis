@@ -44,20 +44,30 @@ def _obj(props: dict[str, Any], req: list[str] | None = None) -> dict[str, Any]:
 
 class GoogleConnector(Connector):
     manifest = Manifest(
-        id="google", name="Google (Gmail, Kalender, Drive)",
+        id="google",
+        name="Google (Gmail, Kalender, Drive)",
         description="E-Mails suchen, lesen, Entwürfe und Versand (nach Freigabe); Termine lesen und anlegen; "
-                    "Drive-Dateien suchen und lesen.",
-        category="productivity", auth="oauth2",
+        "Drive-Dateien suchen und lesen.",
+        category="productivity",
+        auth="oauth2",
         secrets=[
-            SecretField("google-oauth-client", "OAuth-Client (JSON, Typ 'Desktop-App')",
-                        help="Google Cloud Console › APIs & Dienste › Anmeldedaten › OAuth-Client-ID (Desktop-App). "
-                             "Gmail-, Calendar- und Drive-API aktivieren. JSON-Inhalt hier einfügen."),
+            SecretField(
+                "google-oauth-client",
+                "OAuth-Client (JSON, Typ 'Desktop-App')",
+                help="Google Cloud Console › APIs & Dienste › Anmeldedaten › OAuth-Client-ID (Desktop-App). "
+                "Gmail-, Calendar- und Drive-API aktivieren. JSON-Inhalt hier einfügen.",
+            ),
             SecretField("google-oauth-token", "Autorisierung (wird durch 'Mit Google verbinden' gesetzt)"),
         ],
-        settings_schema={"type": "object", "properties": {"calendar_id": {"type": "string", "default": "primary"},
-                                                          "account_email": {"type": "string"}}},
+        settings_schema={
+            "type": "object",
+            "properties": {
+                "calendar_id": {"type": "string", "default": "primary"},
+                "account_email": {"type": "string"},
+            },
+        },
         mcp_note="Offizieller Google-Workspace-MCP-Server ist erst Developer Preview (05/2026); Jarvis nutzt die "
-                 "stabilen REST-APIs mit minimalen Scopes.",
+        "stabilen REST-APIs mit minimalen Scopes.",
     )
 
     def __init__(self, state: Any) -> None:
@@ -84,10 +94,23 @@ class GoogleConnector(Connector):
         verifier = secrets.token_urlsafe(64)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         self._pending[state] = {"verifier": verifier, "ts": str(time.time())}
-        return AUTH_URL + "?" + urllib.parse.urlencode({
-            "client_id": client["client_id"], "redirect_uri": self.redirect_uri(), "response_type": "code",
-            "scope": " ".join(SCOPES), "access_type": "offline", "prompt": "consent", "state": state,
-            "code_challenge": challenge, "code_challenge_method": "S256"})
+        return (
+            AUTH_URL
+            + "?"
+            + urllib.parse.urlencode(
+                {
+                    "client_id": client["client_id"],
+                    "redirect_uri": self.redirect_uri(),
+                    "response_type": "code",
+                    "scope": " ".join(SCOPES),
+                    "access_type": "offline",
+                    "prompt": "consent",
+                    "state": state,
+                    "code_challenge": challenge,
+                    "code_challenge_method": "S256",
+                }
+            )
+        )
 
     async def finish_oauth(self, state: str, code: str) -> None:
         pending = self._pending.pop(state, None)
@@ -95,14 +118,23 @@ class GoogleConnector(Connector):
             raise ToolUserError("OAuth-Status ungültig oder abgelaufen")
         client = self._client()
         async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.post(TOKEN_URL, data={**client, "code": code, "grant_type": "authorization_code",
-                                              "redirect_uri": self.redirect_uri(), "code_verifier": pending["verifier"]})
+            r = await c.post(
+                TOKEN_URL,
+                data={
+                    **client,
+                    "code": code,
+                    "grant_type": "authorization_code",
+                    "redirect_uri": self.redirect_uri(),
+                    "code_verifier": pending["verifier"],
+                },
+            )
         if r.status_code >= 400:
             raise ToolUserError(f"Token-Austausch fehlgeschlagen: {r.text[:200]}")
         tok = r.json()
         if "refresh_token" not in tok:
-            raise ToolUserError("Google hat kein Refresh-Token geliefert (Zugriff in Google-Konto entfernen und erneut "
-                                "verbinden).")
+            raise ToolUserError(
+                "Google hat kein Refresh-Token geliefert (Zugriff in Google-Konto entfernen und erneut verbinden)."
+            )
         secret_store.set("google-oauth-token", json.dumps({"refresh_token": tok["refresh_token"]}))
         self._access = (tok["access_token"], time.time() + int(tok.get("expires_in", 3600)) - 60)
 
@@ -114,8 +146,9 @@ class GoogleConnector(Connector):
             raise ToolUserError("Google ist nicht verbunden (OAuth fehlt).")
         refresh = json.loads(raw)["refresh_token"]
         async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.post(TOKEN_URL, data={**self._client(), "refresh_token": refresh,
-                                              "grant_type": "refresh_token"})
+            r = await c.post(
+                TOKEN_URL, data={**self._client(), "refresh_token": refresh, "grant_type": "refresh_token"}
+            )
         if r.status_code >= 400:
             raise ToolUserError("Google-Autorisierung abgelaufen oder widerrufen – bitte neu verbinden.")
         tok = r.json()
@@ -138,8 +171,14 @@ class GoogleConnector(Connector):
             return Health("error", str(e))
 
     # ------------------------------------------------------------------ helpers
-    async def send_mail(self, to: str, subject: str, body: str,
-                        attachments: list[tuple[str, str, bytes]] | None = None, draft: bool = False) -> Any:
+    async def send_mail(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        attachments: list[tuple[str, str, bytes]] | None = None,
+        draft: bool = False,
+    ) -> Any:
         msg = EmailMessage()
         msg["To"] = to
         msg["Subject"] = subject
@@ -149,10 +188,12 @@ class GoogleConnector(Connector):
             msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=name)
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         if draft:
-            return await self._api("POST", "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
-                                   json={"message": {"raw": raw}})
-        return await self._api("POST", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-                               json={"raw": raw})
+            return await self._api(
+                "POST", "https://gmail.googleapis.com/gmail/v1/users/me/drafts", json={"message": {"raw": raw}}
+            )
+        return await self._api(
+            "POST", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", json={"raw": raw}
+        )
 
     # ------------------------------------------------------------------ tools
     def tools(self) -> list[ToolSpec]:
@@ -162,24 +203,43 @@ class GoogleConnector(Connector):
         S = "google"
 
         async def gmail_search(ctx: ToolContext, a: dict[str, Any]) -> Any:
-            res = await self._api("GET", f"{G}/messages", params={"q": a["query"],
-                                                                    "maxResults": min(int(a.get("limit", 10)), 20)})
+            res = await self._api(
+                "GET", f"{G}/messages", params={"q": a["query"], "maxResults": min(int(a.get("limit", 10)), 20)}
+            )
             out = []
             for m in res.get("messages", []):
-                meta = await self._api("GET", f"{G}/messages/{m['id']}", params={
-                    "format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]})
+                meta = await self._api(
+                    "GET",
+                    f"{G}/messages/{m['id']}",
+                    params={"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]},
+                )
                 hdr = {h["name"]: h["value"] for h in meta.get("payload", {}).get("headers", [])}
-                out.append({"id": m["id"], "from": hdr.get("From"), "subject": hdr.get("Subject"),
-                            "date": hdr.get("Date"), "snippet": meta.get("snippet", "")})
-            listing = "\n".join(f"- [{o['id']}] {o['date']} | {o['from']} | {o['subject']} | {o['snippet']}" for o in out)
+                out.append(
+                    {
+                        "id": m["id"],
+                        "from": hdr.get("From"),
+                        "subject": hdr.get("Subject"),
+                        "date": hdr.get("Date"),
+                        "snippet": meta.get("snippet", ""),
+                    }
+                )
+            listing = "\n".join(
+                f"- [{o['id']}] {o['date']} | {o['from']} | {o['subject']} | {o['snippet']}" for o in out
+            )
             return {"count": len(out), **wrap_untrusted(listing or "(keine Treffer)", "gmail", 8000)}
 
         async def gmail_read(ctx: ToolContext, a: dict[str, Any]) -> Any:
             m = await self._api("GET", f"{G}/messages/{a['message_id']}", params={"format": "full"})
             hdr = {h["name"]: h["value"] for h in m.get("payload", {}).get("headers", [])}
             body = _extract_text(m.get("payload", {}))
-            return {"id": m["id"], "from": hdr.get("From"), "to": hdr.get("To"), "subject": hdr.get("Subject"),
-                    "date": hdr.get("Date"), **wrap_untrusted(body, f"email von {hdr.get('From')}", 10000)}
+            return {
+                "id": m["id"],
+                "from": hdr.get("From"),
+                "to": hdr.get("To"),
+                "subject": hdr.get("Subject"),
+                "date": hdr.get("Date"),
+                **wrap_untrusted(body, f"email von {hdr.get('From')}", 10000),
+            }
 
         async def gmail_draft(ctx: ToolContext, a: dict[str, Any]) -> Any:
             res = await self.send_mail(a["to"], a["subject"], a["body"], draft=True)
@@ -193,23 +253,44 @@ class GoogleConnector(Connector):
             start = a.get("from") or datetime.now(TZ).isoformat()
             end = a.get("to") or (datetime.now(TZ) + timedelta(days=int(a.get("days", 7)))).isoformat()
             cal = urllib.parse.quote(self.settings.get("calendar_id", "primary"))
-            res = await self._api("GET", f"{C}/calendars/{cal}/events", params={
-                "timeMin": _rfc3339(start), "timeMax": _rfc3339(end), "singleEvents": "true", "orderBy": "startTime",
-                "maxResults": 50})
-            return [{"id": e.get("id"), "title": e.get("summary"), "start": e.get("start", {}).get("dateTime") or
-                     e.get("start", {}).get("date"), "end": e.get("end", {}).get("dateTime") or e.get("end", {}).get("date"),
-                     "location": e.get("location")} for e in res.get("items", [])]
+            res = await self._api(
+                "GET",
+                f"{C}/calendars/{cal}/events",
+                params={
+                    "timeMin": _rfc3339(start),
+                    "timeMax": _rfc3339(end),
+                    "singleEvents": "true",
+                    "orderBy": "startTime",
+                    "maxResults": 50,
+                },
+            )
+            return [
+                {
+                    "id": e.get("id"),
+                    "title": e.get("summary"),
+                    "start": e.get("start", {}).get("dateTime") or e.get("start", {}).get("date"),
+                    "end": e.get("end", {}).get("dateTime") or e.get("end", {}).get("date"),
+                    "location": e.get("location"),
+                }
+                for e in res.get("items", [])
+            ]
 
         async def cal_create(ctx: ToolContext, a: dict[str, Any], invite: bool = False) -> Any:
             start = datetime.fromisoformat(a["start"])
             if start.tzinfo is None:
                 start = start.replace(tzinfo=TZ)
-            end = datetime.fromisoformat(a["end"]) if a.get("end") else start + timedelta(
-                minutes=int(a.get("duration_minutes", 60)))
+            end = (
+                datetime.fromisoformat(a["end"])
+                if a.get("end")
+                else start + timedelta(minutes=int(a.get("duration_minutes", 60)))
+            )
             if end.tzinfo is None:
                 end = end.replace(tzinfo=TZ)
-            body: dict[str, Any] = {"summary": a["title"], "start": {"dateTime": start.isoformat()},
-                                    "end": {"dateTime": end.isoformat()}}
+            body: dict[str, Any] = {
+                "summary": a["title"],
+                "start": {"dateTime": start.isoformat()},
+                "end": {"dateTime": end.isoformat()},
+            }
             for k in ("location", "description"):
                 if a.get(k):
                     body[k] = a[k]
@@ -226,17 +307,24 @@ class GoogleConnector(Connector):
 
         async def drive_search(ctx: ToolContext, a: dict[str, Any]) -> Any:
             q = a["query"].replace("'", "\\'")
-            res = await self._api("GET", f"{D}/files", params={
-                "q": f"fullText contains '{q}' and trashed = false", "pageSize": min(int(a.get("limit", 10)), 25),
-                "fields": "files(id,name,mimeType,modifiedTime,webViewLink)"})
+            res = await self._api(
+                "GET",
+                f"{D}/files",
+                params={
+                    "q": f"fullText contains '{q}' and trashed = false",
+                    "pageSize": min(int(a.get("limit", 10)), 25),
+                    "fields": "files(id,name,mimeType,modifiedTime,webViewLink)",
+                },
+            )
             return res.get("files", [])
 
         async def drive_read(ctx: ToolContext, a: dict[str, Any]) -> Any:
             meta = await self._api("GET", f"{D}/files/{a['file_id']}", params={"fields": "id,name,mimeType"})
             mime = meta.get("mimeType", "")
             if mime.startswith("application/vnd.google-apps."):
-                export = {"document": "text/plain", "spreadsheet": "text/csv",
-                          "presentation": "text/plain"}.get(mime.rsplit(".", 1)[-1])
+                export = {"document": "text/plain", "spreadsheet": "text/csv", "presentation": "text/plain"}.get(
+                    mime.rsplit(".", 1)[-1]
+                )
                 if not export:
                     raise ToolUserError(f"Dateityp {mime} kann nicht als Text gelesen werden")
                 data = await self._api("GET", f"{D}/files/{a['file_id']}/export", params={"mimeType": export})
@@ -247,38 +335,102 @@ class GoogleConnector(Connector):
             text = data.decode(errors="replace") if isinstance(data, bytes) else json.dumps(data)
             return {"name": meta.get("name"), **wrap_untrusted(text, f"drive:{meta.get('name')}", 12000)}
 
-        ev_props = {"title": {"type": "string"}, "start": {"type": "string", "description": "ISO-8601"},
-                    "end": {"type": "string"}, "duration_minutes": {"type": "integer", "minimum": 5},
-                    "location": {"type": "string"}, "description": {"type": "string"}}
+        ev_props = {
+            "title": {"type": "string"},
+            "start": {"type": "string", "description": "ISO-8601"},
+            "end": {"type": "string"},
+            "duration_minutes": {"type": "integer", "minimum": 5},
+            "location": {"type": "string"},
+            "description": {"type": "string"},
+        }
         mail_props = {"to": {"type": "string"}, "subject": {"type": "string"}, "body": {"type": "string"}}
         return [
-            ToolSpec("gmail_search", "Sucht E-Mails (Gmail-Suchsyntax, z. B. 'from:mueller newer_than:7d').",
-                     _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]), gmail_search,
-                     "read", S, untrusted_output=True),
-            ToolSpec("gmail_read", "Liest eine E-Mail vollständig.", _obj({"message_id": {"type": "string"}},
-                                                                        ["message_id"]),
-                     gmail_read, "read", S, untrusted_output=True),
-            ToolSpec("gmail_create_draft", "Legt einen E-Mail-Entwurf an (wird nicht gesendet).",
-                     _obj(mail_props, ["to", "subject", "body"]), gmail_draft, "medium", S, writes=True,
-                     summarize=lambda a: f"E-Mail-Entwurf an {a['to']}: {a['subject']}"),
-            ToolSpec("gmail_send", "Sendet eine E-Mail.", _obj(mail_props, ["to", "subject", "body"]), gmail_send,
-                     "high", S, writes=True, summarize=lambda a: f"E-Mail senden an {a['to']}: {a['subject']} – "
-                                                               f"{a['body'][:120]}"),
-            ToolSpec("calendar_list_events", "Listet Termine (Standard: nächste 7 Tage).",
-                     _obj({"from": {"type": "string"}, "to": {"type": "string"}, "days": {"type": "integer"}}),
-                     cal_list, "read", S),
-            ToolSpec("calendar_create_event", "Legt einen Termin ohne Teilnehmer an.", _obj(ev_props, ["title", "start"]),
-                     cal_create, "medium", S, writes=True,
-                     summarize=lambda a: f"Termin '{a['title']}' am {a['start']}"),
-            ToolSpec("calendar_invite", "Legt einen Termin an und lädt Teilnehmer per E-Mail ein.",
-                     _obj({**ev_props, "attendees": {"type": "array", "items": {"type": "string"}, "minItems": 1}},
-                          ["title", "start", "attendees"]), cal_invite, "high", S, writes=True,
-                     summarize=lambda a: f"Einladung '{a['title']}' am {a['start']} an {', '.join(a['attendees'])}"),
-            ToolSpec("drive_search", "Sucht Dateien in Google Drive (Volltext).",
-                     _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]), drive_search, "read", S),
-            ToolSpec("drive_read", "Liest den Textinhalt einer Drive-Datei.", _obj({"file_id": {"type": "string"}},
-                                                                                  ["file_id"]),
-                     drive_read, "read", S, untrusted_output=True),
+            ToolSpec(
+                "gmail_search",
+                "Sucht E-Mails (Gmail-Suchsyntax, z. B. 'from:mueller newer_than:7d').",
+                _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]),
+                gmail_search,
+                "read",
+                S,
+                untrusted_output=True,
+            ),
+            ToolSpec(
+                "gmail_read",
+                "Liest eine E-Mail vollständig.",
+                _obj({"message_id": {"type": "string"}}, ["message_id"]),
+                gmail_read,
+                "read",
+                S,
+                untrusted_output=True,
+            ),
+            ToolSpec(
+                "gmail_create_draft",
+                "Legt einen E-Mail-Entwurf an (wird nicht gesendet).",
+                _obj(mail_props, ["to", "subject", "body"]),
+                gmail_draft,
+                "medium",
+                S,
+                writes=True,
+                summarize=lambda a: f"E-Mail-Entwurf an {a['to']}: {a['subject']}",
+            ),
+            ToolSpec(
+                "gmail_send",
+                "Sendet eine E-Mail.",
+                _obj(mail_props, ["to", "subject", "body"]),
+                gmail_send,
+                "high",
+                S,
+                writes=True,
+                summarize=lambda a: f"E-Mail senden an {a['to']}: {a['subject']} – {a['body'][:120]}",
+            ),
+            ToolSpec(
+                "calendar_list_events",
+                "Listet Termine (Standard: nächste 7 Tage).",
+                _obj({"from": {"type": "string"}, "to": {"type": "string"}, "days": {"type": "integer"}}),
+                cal_list,
+                "read",
+                S,
+            ),
+            ToolSpec(
+                "calendar_create_event",
+                "Legt einen Termin ohne Teilnehmer an.",
+                _obj(ev_props, ["title", "start"]),
+                cal_create,
+                "medium",
+                S,
+                writes=True,
+                summarize=lambda a: f"Termin '{a['title']}' am {a['start']}",
+            ),
+            ToolSpec(
+                "calendar_invite",
+                "Legt einen Termin an und lädt Teilnehmer per E-Mail ein.",
+                _obj(
+                    {**ev_props, "attendees": {"type": "array", "items": {"type": "string"}, "minItems": 1}},
+                    ["title", "start", "attendees"],
+                ),
+                cal_invite,
+                "high",
+                S,
+                writes=True,
+                summarize=lambda a: f"Einladung '{a['title']}' am {a['start']} an {', '.join(a['attendees'])}",
+            ),
+            ToolSpec(
+                "drive_search",
+                "Sucht Dateien in Google Drive (Volltext).",
+                _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]),
+                drive_search,
+                "read",
+                S,
+            ),
+            ToolSpec(
+                "drive_read",
+                "Liest den Textinhalt einer Drive-Datei.",
+                _obj({"file_id": {"type": "string"}}, ["file_id"]),
+                drive_read,
+                "read",
+                S,
+                untrusted_output=True,
+            ),
         ]
 
 

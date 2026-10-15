@@ -21,22 +21,22 @@ from jarvis.agent.llm import OllamaClient
 from jarvis.db import session_scope
 from jarvis.db.models import MemoryItem, MemoryLink
 from jarvis.events import bus
-from jarvis.memory.vault import KIND_FOLDERS, Note, Vault, parse_note
+from jarvis.memory.vault import KIND_FOLDERS, Note, Vault
 from jarvis.security.audit import audit
 
 logger = logging.getLogger(__name__)
 
-DUPLICATE_THRESHOLD = 0.93   # cosine similarity: treat as the same fact
-RELATED_THRESHOLD = 0.82     # same title + this similarity: update the existing note
+DUPLICATE_THRESHOLD = 0.93  # cosine similarity: treat as the same fact
+RELATED_THRESHOLD = 0.82  # same title + this similarity: update the existing note
 
 _SENSITIVE_PATTERNS = [
-    r"\b[A-Z]{2}\d{2}(?:\s?\d{4}){4,7}\s?\d{0,2}\b",          # IBAN
-    r"\b(?:\d[ -]?){13,19}\b",                                # card-like numbers
-    r"(?i)\b(passwort|password|kennwort|pin|tan|api[- ]?key|token|secret)\b\s*[:=]",
-    r"(?i)\b(diagnose|krankheit|medikament|therapie|gesundheit)\w*",
-    r"(?i)\b(steuer-?id|sozialversicherungsnummer|personalausweisnummer)\b",
+    r"\b[A-Z]{2}\d{2}(?:\s?\d{4}){4,7}\s?\d{0,2}\b",  # IBAN
+    r"\b(?:\d[ -]?){13,19}\b",  # card-like numbers
+    r"\b(passwort|password|kennwort|pin|tan|api[- ]?key|token|secret)\b\s*[:=]",
+    r"\b(diagnose|krankheit|medikament|therapie|gesundheit)\w*",
+    r"\b(steuer-?id|sozialversicherungsnummer|personalausweisnummer)\b",
 ]
-_SENSITIVE_RE = re.compile("|".join(_SENSITIVE_PATTERNS))
+_SENSITIVE_RE = re.compile("|".join(_SENSITIVE_PATTERNS), re.IGNORECASE)
 
 
 def content_hash(title: str, body: str) -> str:
@@ -194,8 +194,14 @@ class MemoryService:
         return path
 
     # ------------------------------------------------------------------ queries
-    async def search(self, query: str, limit: int = 6, kinds: list[str] | None = None,
-                     include_sensitive: bool = True, include_superseded: bool = False) -> list[dict[str, Any]]:
+    async def search(
+        self,
+        query: str,
+        limit: int = 6,
+        kinds: list[str] | None = None,
+        include_sensitive: bool = True,
+        include_superseded: bool = False,
+    ) -> list[dict[str, Any]]:
         emb = await self._embed(query)
         distance = MemoryItem.embedding.cosine_distance(emb)
         q = select(MemoryItem, distance.label("dist")).where(MemoryItem.embedding.is_not(None))
@@ -214,12 +220,21 @@ class MemoryService:
             sim = 1 - float(dist)
             hay = f"{item.title} {item.content}".lower()
             boost = 0.03 * sum(1 for t in terms if t in hay)
-            results.append({
-                "id": str(item.id), "title": item.title, "kind": item.kind, "content": item.content[:1500],
-                "path": item.path, "score": round(sim + boost, 4), "status": item.status,
-                "sensitivity": item.sensitivity, "entities": item.entities, "source": item.source,
-                "updated_at": item.updated_at.isoformat(),
-            })
+            results.append(
+                {
+                    "id": str(item.id),
+                    "title": item.title,
+                    "kind": item.kind,
+                    "content": item.content[:1500],
+                    "path": item.path,
+                    "score": round(sim + boost, 4),
+                    "status": item.status,
+                    "sensitivity": item.sensitivity,
+                    "entities": item.entities,
+                    "source": item.source,
+                    "updated_at": item.updated_at.isoformat(),
+                }
+            )
         results.sort(key=lambda r: r["score"], reverse=True)
         return results[:limit]
 
@@ -228,16 +243,35 @@ class MemoryService:
             item = await s.get(MemoryItem, item_id)
             if item is None:
                 return None
-            backlinks = (await s.execute(select(MemoryLink.source_path).where(
-                MemoryLink.target_title == item.title))).scalars().all()
-            return {"id": str(item.id), "title": item.title, "kind": item.kind, "content": item.content,
-                    "path": item.path, "status": item.status, "sensitivity": item.sensitivity,
-                    "entities": item.entities, "source": item.source, "backlinks": list(backlinks),
-                    "superseded_by": str(item.superseded_by) if item.superseded_by else None,
-                    "created_at": item.created_at.isoformat(), "updated_at": item.updated_at.isoformat()}
+            backlinks = (
+                (await s.execute(select(MemoryLink.source_path).where(MemoryLink.target_title == item.title)))
+                .scalars()
+                .all()
+            )
+            return {
+                "id": str(item.id),
+                "title": item.title,
+                "kind": item.kind,
+                "content": item.content,
+                "path": item.path,
+                "status": item.status,
+                "sensitivity": item.sensitivity,
+                "entities": item.entities,
+                "source": item.source,
+                "backlinks": list(backlinks),
+                "superseded_by": str(item.superseded_by) if item.superseded_by else None,
+                "created_at": item.created_at.isoformat(),
+                "updated_at": item.updated_at.isoformat(),
+            }
 
-    async def list_items(self, kind: str | None = None, status: str | None = None, limit: int = 100,
-                         offset: int = 0, q: str | None = None) -> dict[str, Any]:
+    async def list_items(
+        self,
+        kind: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        q: str | None = None,
+    ) -> dict[str, Any]:
         stmt = select(MemoryItem)
         count = select(func.count()).select_from(MemoryItem)
         conds = []
@@ -253,17 +287,43 @@ class MemoryService:
             count = count.where(c)
         async with session_scope() as s:
             total = (await s.execute(count)).scalar_one()
-            rows = (await s.execute(stmt.order_by(MemoryItem.updated_at.desc()).limit(limit).offset(offset))
-                    ).scalars().all()
-        return {"total": total, "items": [
-            {"id": str(r.id), "title": r.title, "kind": r.kind, "path": r.path, "status": r.status,
-             "sensitivity": r.sensitivity, "preview": r.content[:240], "entities": r.entities,
-             "updated_at": r.updated_at.isoformat()} for r in rows]}
+            rows = (
+                (await s.execute(stmt.order_by(MemoryItem.updated_at.desc()).limit(limit).offset(offset)))
+                .scalars()
+                .all()
+            )
+        return {
+            "total": total,
+            "items": [
+                {
+                    "id": str(r.id),
+                    "title": r.title,
+                    "kind": r.kind,
+                    "path": r.path,
+                    "status": r.status,
+                    "sensitivity": r.sensitivity,
+                    "preview": r.content[:240],
+                    "entities": r.entities,
+                    "updated_at": r.updated_at.isoformat(),
+                }
+                for r in rows
+            ],
+        }
 
     async def graph(self, limit: int = 400) -> dict[str, Any]:
         async with session_scope() as s:
-            items = (await s.execute(select(MemoryItem).where(MemoryItem.status == "active")
-                                     .order_by(MemoryItem.updated_at.desc()).limit(limit))).scalars().all()
+            items = (
+                (
+                    await s.execute(
+                        select(MemoryItem)
+                        .where(MemoryItem.status == "active")
+                        .order_by(MemoryItem.updated_at.desc())
+                        .limit(limit)
+                    )
+                )
+                .scalars()
+                .all()
+            )
             links = (await s.execute(select(MemoryLink))).scalars().all()
         by_title = {i.title.lower(): i for i in items}
         by_path = {i.path: i for i in items}
@@ -285,9 +345,18 @@ class MemoryService:
         return {"nodes": list(nodes.values()), "edges": edges}
 
     # ------------------------------------------------------------------ writes
-    async def remember(self, title: str, content: str, kind: str = "note", *, entities: list[str] | None = None,
-                       source: dict[str, Any] | None = None, sensitive: bool | None = None,
-                       actor: str = "system", confirmed: bool = False) -> dict[str, Any]:
+    async def remember(
+        self,
+        title: str,
+        content: str,
+        kind: str = "note",
+        *,
+        entities: list[str] | None = None,
+        source: dict[str, Any] | None = None,
+        sensitive: bool | None = None,
+        actor: str = "system",
+        confirmed: bool = False,
+    ) -> dict[str, Any]:
         """Store a fact with duplicate detection. Sensitive facts wait for explicit confirmation."""
         kind = kind if kind in KIND_FOLDERS else "note"
         entities = [e.strip() for e in (entities or []) if e and e.strip()][:12]
@@ -296,32 +365,51 @@ class MemoryService:
 
         if is_sensitive and not confirmed:
             async with session_scope() as s:
-                item = MemoryItem(path=f"_pending/{uuid.uuid4()}", title=title[:300], kind=kind, content=content,
-                                  content_hash=content_hash(title, content), embedding=None,
-                                  sensitivity="sensitive", status="pending", source=src, entities=entities)
+                item = MemoryItem(
+                    path=f"_pending/{uuid.uuid4()}",
+                    title=title[:300],
+                    kind=kind,
+                    content=content,
+                    content_hash=content_hash(title, content),
+                    embedding=None,
+                    sensitivity="sensitive",
+                    status="pending",
+                    source=src,
+                    entities=entities,
+                )
                 s.add(item)
                 await s.flush()
                 pid = item.id
             await bus.publish("memory.pending", id=str(pid), title=title, kind=kind)
             await audit(actor, "memory.pending", target=str(pid), details={"title": title, "kind": kind})
-            return {"status": "pending_confirmation", "id": str(pid),
-                    "message": "Sensible Information – wird erst nach Bestätigung durch Sir gespeichert."}
+            return {
+                "status": "pending_confirmation",
+                "id": str(pid),
+                "message": "Sensible Information – wird erst nach Bestätigung durch Sir gespeichert.",
+            }
 
         emb = await self._embed(f"{title}\n{content}")
         async with session_scope() as s:
             dist = MemoryItem.embedding.cosine_distance(emb)
-            row = (await s.execute(
-                select(MemoryItem, dist.label("d")).where(MemoryItem.status == "active",
-                                                           MemoryItem.embedding.is_not(None))
-                .order_by(dist).limit(1))).first()
+            row = (
+                await s.execute(
+                    select(MemoryItem, dist.label("d"))
+                    .where(MemoryItem.status == "active", MemoryItem.embedding.is_not(None))
+                    .order_by(dist)
+                    .limit(1)
+                )
+            ).first()
         if row is not None:
             existing, d = row
             sim = 1 - float(d)
-            if sim >= DUPLICATE_THRESHOLD or (sim >= RELATED_THRESHOLD
-                                              and existing.title.lower() == title.lower()):
+            if sim >= DUPLICATE_THRESHOLD or (sim >= RELATED_THRESHOLD and existing.title.lower() == title.lower()):
                 if content.strip() in existing.content:
-                    return {"status": "duplicate", "id": str(existing.id), "path": existing.path,
-                            "similarity": round(sim, 3)}
+                    return {
+                        "status": "duplicate",
+                        "id": str(existing.id),
+                        "path": existing.path,
+                        "similarity": round(sim, 3),
+                    }
                 note = self.vault.read(existing.path)
                 stamp = datetime.now(UTC).strftime("%Y-%m-%d")
                 note.body = f"{note.body}\n\n**Ergänzung {stamp}:** {content.strip()}"
@@ -336,8 +424,14 @@ class MemoryService:
         body = content.strip()
         if entities:
             body += "\n\nBezug: " + ", ".join(f"[[{e}]]" for e in entities if e.lower() != title.lower())
-        note = Note(title=title.strip()[:200], body=body, kind=kind, entities=entities, source=src,
-                    sensitivity="sensitive" if is_sensitive else "normal")
+        note = Note(
+            title=title.strip()[:200],
+            body=body,
+            kind=kind,
+            entities=entities,
+            source=src,
+            sensitivity="sensitive" if is_sensitive else "normal",
+        )
         self._write(note)
         item_id = await self.index_note(note)
         await bus.publish("memory.changed", path=note.path, change="added", origin="jarvis")
@@ -349,17 +443,31 @@ class MemoryService:
             item = await s.get(MemoryItem, item_id)
             if item is None or item.status != "pending":
                 raise LookupError("Kein ausstehender Eintrag")
-            data = {"title": item.title, "content": item.content, "kind": item.kind, "entities": item.entities,
-                    "source": item.source}
+            data = {
+                "title": item.title,
+                "content": item.content,
+                "kind": item.kind,
+                "entities": item.entities,
+                "source": item.source,
+            }
             await s.delete(item)
         await audit(actor, "memory.pending." + ("confirm" if approve else "reject"), target=str(item_id))
         if not approve:
             return {"status": "discarded"}
-        return await self.remember(data["title"], data["content"], data["kind"], entities=data["entities"],
-                                   source=data["source"], sensitive=True, actor=actor, confirmed=True)
+        return await self.remember(
+            data["title"],
+            data["content"],
+            data["kind"],
+            entities=data["entities"],
+            source=data["source"],
+            sensitive=True,
+            actor=actor,
+            confirmed=True,
+        )
 
-    async def correct(self, item_id: uuid.UUID, new_content: str, actor: str,
-                      new_title: str | None = None) -> dict[str, Any]:
+    async def correct(
+        self, item_id: uuid.UUID, new_content: str, actor: str, new_title: str | None = None
+    ) -> dict[str, Any]:
         """Replace outdated information: the old note is kept but marked superseded."""
         async with session_scope() as s:
             old = await s.get(MemoryItem, item_id)
@@ -367,10 +475,14 @@ class MemoryService:
                 raise LookupError("Erinnerung nicht gefunden")
             old_path, old_title, kind, entities = old.path, old.title, old.kind, list(old.entities or [])
             sensitivity = old.sensitivity
-        new_note = Note(title=new_title or old_title, kind=kind, entities=entities, sensitivity=sensitivity,
-                        body=f"{new_content.strip()}\n\nErsetzt: [[{self.vault.read(old_path).title}]] (veraltet)",
-                        source={"ts": datetime.now(UTC).isoformat(timespec="seconds"), "type": "correction",
-                                "actor": actor})
+        new_note = Note(
+            title=new_title or old_title,
+            kind=kind,
+            entities=entities,
+            sensitivity=sensitivity,
+            body=f"{new_content.strip()}\n\nErsetzt: [[{self.vault.read(old_path).title}]] (veraltet)",
+            source={"ts": datetime.now(UTC).isoformat(timespec="seconds"), "type": "correction", "actor": actor},
+        )
         if new_note.title == old_title:
             old_note = self.vault.read(old_path)
             old_note.title = f"{old_title} (veraltet {datetime.now(UTC).strftime('%Y-%m-%d')})"
@@ -415,14 +527,33 @@ class MemoryService:
             async with session_scope() as s:
                 items = (await s.execute(select(MemoryItem).where(MemoryItem.status != "pending"))).scalars().all()
                 links = (await s.execute(select(MemoryLink))).scalars().all()
-            z.writestr("index.json", json.dumps({
-                "exported_at": datetime.now(UTC).isoformat(),
-                "items": [{"id": str(i.id), "path": i.path, "title": i.title, "kind": i.kind, "status": i.status,
-                           "sensitivity": i.sensitivity, "entities": i.entities, "source": i.source}
-                          for i in items],
-                "links": [{"source": link.source_path, "target": link.target_title, "relation": link.relation}
-                          for link in links],
-            }, ensure_ascii=False, indent=2))
+            z.writestr(
+                "index.json",
+                json.dumps(
+                    {
+                        "exported_at": datetime.now(UTC).isoformat(),
+                        "items": [
+                            {
+                                "id": str(i.id),
+                                "path": i.path,
+                                "title": i.title,
+                                "kind": i.kind,
+                                "status": i.status,
+                                "sensitivity": i.sensitivity,
+                                "entities": i.entities,
+                                "source": i.source,
+                            }
+                            for i in items
+                        ],
+                        "links": [
+                            {"source": link.source_path, "target": link.target_title, "relation": link.relation}
+                            for link in links
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            )
         return buf.getvalue()
 
     async def stats(self) -> dict[str, Any]:
@@ -446,8 +577,11 @@ class MemoryService:
         ]
         data = await self.ollama.chat_json(self.utility_model, messages, EXTRACTION_SCHEMA, purpose="memory_extract")
         facts = data.get("facts", []) if isinstance(data, dict) else []
-        return [f for f in facts if isinstance(f, dict) and float(f.get("confidence", 0)) >= 0.7
-                and len(str(f.get("content", ""))) >= 12][:5]
+        return [
+            f
+            for f in facts
+            if isinstance(f, dict) and float(f.get("confidence", 0)) >= 0.7 and len(str(f.get("content", ""))) >= 12
+        ][:5]
 
     async def _extract_worker(self) -> None:
         while True:
@@ -456,9 +590,13 @@ class MemoryService:
                 facts = await self.extract(job["user"], job["assistant"])
                 for f in facts:
                     res = await self.remember(
-                        str(f["title"]), str(f["content"]), str(f.get("kind", "note")),
-                        entities=[str(e) for e in f.get("entities", [])], sensitive=bool(f.get("sensitive")),
-                        source={"type": "conversation", **job["source"]}, actor="memory-extractor",
+                        str(f["title"]),
+                        str(f["content"]),
+                        str(f.get("kind", "note")),
+                        entities=[str(e) for e in f.get("entities", [])],
+                        sensitive=bool(f.get("sensitive")),
+                        source={"type": "conversation", **job["source"]},
+                        actor="memory-extractor",
                     )
                     logger.info("Memory extraction: %s -> %s", f.get("title"), res.get("status"))
             except Exception:

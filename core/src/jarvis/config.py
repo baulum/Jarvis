@@ -70,7 +70,7 @@ class LlmCfg(_Strict):
 class HermesCfg(_Strict):
     enabled: bool = True
     profile: str = "jarvis"
-    api_url: str = "http://127.0.0.1:8642"
+    api_url: str = "http://127.0.0.1:8642/p/jarvis"
     api_key_secret: str = "hermes-api-key"
     request_timeout_s: float = 300
 

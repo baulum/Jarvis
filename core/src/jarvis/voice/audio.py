@@ -81,8 +81,16 @@ class EnergyVAD:
     absolute minimum. An utterance ends after ``silence_ms`` of non-speech.
     """
 
-    def __init__(self, rate: int, frame_ms: int = 20, silence_ms: int = 800, ratio: float = 3.0,
-                 min_rms: float = 300.0, min_speech_ms: int = 250, max_utterance_s: float = 30.0) -> None:
+    def __init__(
+        self,
+        rate: int,
+        frame_ms: int = 20,
+        silence_ms: int = 800,
+        ratio: float = 3.0,
+        min_rms: float = 300.0,
+        min_speech_ms: int = 250,
+        max_utterance_s: float = 30.0,
+    ) -> None:
         self.rate = rate
         self.frame = int(rate * frame_ms / 1000)
         self.frame_ms = frame_ms
@@ -113,9 +121,9 @@ class EnergyVAD:
         done: list[npt.NDArray[np.int16]] = []
         data = np.concatenate([self._pending, pcm])
         n = len(data) // self.frame
-        self._pending = data[n * self.frame:]
+        self._pending = data[n * self.frame :]
         for i in range(n):
-            frame = data[i * self.frame:(i + 1) * self.frame]
+            frame = data[i * self.frame : (i + 1) * self.frame]
             speech = self.is_speech(frame)
             if speech:
                 if not self.active:

@@ -41,7 +41,8 @@ llm:
 hermes:
   enabled: true
   profile: jarvis
-  api_url: http://127.0.0.1:8642
+  # Hermes runs ONE multiplexing host gateway for all profiles; this profile is served under /p/<profile>
+  api_url: http://127.0.0.1:8642/p/jarvis
   api_key_secret: hermes-api-key
   request_timeout_s: 300
 

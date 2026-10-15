@@ -61,7 +61,7 @@ class ToolSpec:
         if self.summarize:
             try:
                 return self.summarize(args)
-            except Exception:  # noqa: BLE001, S110 - fall back to generic summary
+            except Exception:  # noqa: S110 - fall back to generic summary
                 pass
         shown = ", ".join(f"{k}={str(v)[:80]}" for k, v in args.items())
         return f"{self.name}({shown})"

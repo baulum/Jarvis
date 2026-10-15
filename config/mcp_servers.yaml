@@ -1,0 +1,23 @@
+# External MCP servers whose tools Jarvis offers to its agent (through the same
+# permission/approval/audit pipeline as built-in tools).
+#
+# Secrets: reference Keychain entries as ${secret:<name>} (set them with `jarvisctl secret set <name>`).
+# Risk: tools marked readOnlyHint by the server are "read", everything else uses default_risk.
+
+servers:
+  github_official:
+    description: Offizieller GitHub-MCP-Server (Remote). ~50 Tools – für das lokale 4B-Modell
+      standardmäßig aus; der eingebaute GitHub-Connector deckt die Kernabläufe ab.
+    enabled: false
+    url: https://api.githubcopilot.com/mcp/
+    headers:
+      Authorization: Bearer ${secret:github-token}
+    default_risk: high
+    include_tools: []          # leer = alle; z. B. [get_file_contents, list_pull_requests]
+
+  time:
+    description: Referenz-MCP-Server 'time' (modelcontextprotocol/servers) – Zeitzonen-Umrechnung.
+    enabled: false
+    command: uvx
+    args: [mcp-server-time, --local-timezone=Europe/Berlin]
+    default_risk: read

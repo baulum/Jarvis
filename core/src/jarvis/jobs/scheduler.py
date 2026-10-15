@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from jarvis.db import session_scope
 from jarvis.db.models import Schedule
-from jarvis.events import bus
+from jarvis.events import bus, spawn
 from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
 from jarvis.tools.registry import ToolContext
@@ -45,15 +45,17 @@ class Scheduler:
         if self._task:
             self._task.cancel()
 
-    async def create(self, name: str, cron: str, action: dict[str, Any], actor: str,
-                     tz: str = "Europe/Berlin") -> Schedule:
+    async def create(
+        self, name: str, cron: str, action: dict[str, Any], actor: str, tz: str = "Europe/Berlin"
+    ) -> Schedule:
         if not croniter.is_valid(cron):
             raise ValueError("Ungültiger Cron-Ausdruck")
         if action.get("type") not in ("prompt", "tool", "playbook"):
             raise ValueError("action.type muss prompt, tool oder playbook sein")
         async with session_scope() as s:
-            sched = Schedule(name=name, cron=cron, timezone=tz, action=action, enabled=True,
-                             next_run_at=next_run(cron, tz))
+            sched = Schedule(
+                name=name, cron=cron, timezone=tz, action=action, enabled=True, next_run_at=next_run(cron, tz)
+            )
             s.add(sched)
             await s.flush()
         await audit(actor, "schedule.create", target=str(sched.id), details={"name": name, "cron": cron})
@@ -101,16 +103,24 @@ class Scheduler:
                 if not self.state.kill_switch.engaged:
                     now = datetime.now(UTC)
                     async with session_scope() as s:
-                        due = (await s.execute(select(Schedule).where(Schedule.enabled.is_(True),
-                                                                      Schedule.next_run_at <= now)
-                                               .with_for_update(skip_locked=True))).scalars().all()
+                        due = (
+                            (
+                                await s.execute(
+                                    select(Schedule)
+                                    .where(Schedule.enabled.is_(True), Schedule.next_run_at <= now)
+                                    .with_for_update(skip_locked=True)
+                                )
+                            )
+                            .scalars()
+                            .all()
+                        )
                         jobs = []
                         for sched in due:
                             sched.last_run_at = now
                             sched.next_run_at = next_run(sched.cron, sched.timezone, now)
                             jobs.append((sched.id, sched.name, dict(sched.action)))
                     for sid, name, action in jobs:
-                        asyncio.create_task(self._execute(sid, name, action))
+                        spawn(self._execute(sid, name, action), name=f"schedule-{name}")
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -127,8 +137,9 @@ class Scheduler:
                     await self.state.notifier.notify("schedule.result", name, result.text)
                 status = "error" if result.error else "ok"
             elif kind == "tool":
-                res = await self.state.executor.execute(action["tool"], action.get("args", {}),
-                                                        ToolContext(principal=SCHEDULER))
+                res = await self.state.executor.execute(
+                    action["tool"], action.get("args", {}), ToolContext(principal=SCHEDULER)
+                )
                 status = res.status
             elif kind == "playbook":
                 await self.state.tasks.create(action["playbook"], action.get("params", {}), SCHEDULER)

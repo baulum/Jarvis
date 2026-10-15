@@ -58,8 +58,9 @@ class Orchestrator:
         self.active_run: RunContext | None = None
 
     # ------------------------------------------------------------------ sessions
-    async def get_or_create_session(self, principal: Principal, channel: str,
-                                    session_id: uuid.UUID | None = None, title: str = "") -> ChatSession:
+    async def get_or_create_session(
+        self, principal: Principal, channel: str, session_id: uuid.UUID | None = None, title: str = ""
+    ) -> ChatSession:
         timeout = timedelta(minutes=self.state.settings.session.idle_timeout_minutes)
         async with session_scope() as s:
             if session_id is not None:
@@ -70,8 +71,7 @@ class Orchestrator:
                     if datetime.now(UTC) - sess.last_activity_at <= timeout:
                         return sess
                     sess.closed = True  # expired -> start a fresh one
-            sess = ChatSession(channel=channel, actor_role=principal.role, actor_id=principal.id,
-                               title=title[:200])
+            sess = ChatSession(channel=channel, actor_role=principal.role, actor_id=principal.id, title=title[:200])
             s.add(sess)
             await s.flush()
         await bus.publish("session.created", session_id=str(sess.id), channel=channel)
@@ -79,10 +79,28 @@ class Orchestrator:
 
     async def history(self, session_id: uuid.UUID, limit: int = 100) -> list[dict[str, Any]]:
         async with session_scope() as s:
-            rows = (await s.execute(select(ChatMessage).where(ChatMessage.session_id == session_id)
-                                    .order_by(ChatMessage.created_at.desc()).limit(limit))).scalars().all()
-        return [{"id": str(m.id), "role": m.role, "content": m.content, "meta": m.meta,
-                 "created_at": m.created_at.isoformat()} for m in reversed(rows)]
+            rows = (
+                (
+                    await s.execute(
+                        select(ChatMessage)
+                        .where(ChatMessage.session_id == session_id)
+                        .order_by(ChatMessage.created_at.desc())
+                        .limit(limit)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [
+            {
+                "id": str(m.id),
+                "role": m.role,
+                "content": m.content,
+                "meta": m.meta,
+                "created_at": m.created_at.isoformat(),
+            }
+            for m in reversed(rows)
+        ]
 
     async def _store(self, session_id: uuid.UUID, role: str, content: str, meta: dict[str, Any] | None = None) -> None:
         async with session_scope() as s:
@@ -94,9 +112,16 @@ class Orchestrator:
                     sess.title = content[:80]
 
     # ------------------------------------------------------------------ main entry
-    async def handle(self, principal: Principal, channel: str, text: str, *,
-                     session_id: uuid.UUID | None = None, on_event: EventCallback | None = None,
-                     images: list[str] | None = None) -> TurnResult:
+    async def handle(
+        self,
+        principal: Principal,
+        channel: str,
+        text: str,
+        *,
+        session_id: uuid.UUID | None = None,
+        on_event: EventCallback | None = None,
+        images: list[str] | None = None,
+    ) -> TurnResult:
         sess = await self.get_or_create_session(principal, channel, session_id)
         await self._store(sess.id, "user", text, {"channel": channel})
         await bus.publish("chat.user", session_id=str(sess.id), text=text, channel=channel)
@@ -105,8 +130,7 @@ class Orchestrator:
         instructions = turn_instructions(channel, memory_context=memory_context, tainted=sess.tainted)
 
         async def emit(ev: AgentEvent) -> None:
-            await bus.publish(f"chat.{ev.type}", session_id=str(sess.id), text=ev.text,
-                              data=_safe_event_data(ev.data))
+            await bus.publish(f"chat.{ev.type}", session_id=str(sess.id), text=ev.text, data=_safe_event_data(ev.data))
             if on_event:
                 await on_event(ev)
 
@@ -119,13 +143,21 @@ class Orchestrator:
         else:
             result = await self._run_fallback(sess, text, instructions, emit)
 
-        await self._store(sess.id, "assistant", result.text,
-                          {"tools": result.tools, "provider": result.provider, "error": result.error})
-        await bus.publish("chat.done", session_id=str(sess.id), text=result.text, error=result.error,
-                          provider=result.provider)
-        if result.text and not result.error and principal.role in ("owner", "telegram_owner", "phone_owner"):
-            self.state.memory.enqueue_extraction(text, result.text, {"session_id": str(sess.id),
-                                                                     "channel": channel})
+        await self._store(
+            sess.id,
+            "assistant",
+            result.text,
+            {"tools": result.tools, "provider": result.provider, "error": result.error},
+        )
+        await bus.publish(
+            "chat.done", session_id=str(sess.id), text=result.text, error=result.error, provider=result.provider
+        )
+        if (
+            result.text
+            and not result.error
+            and principal.role in ("owner", "voice_owner", "telegram_owner", "phone_owner")
+        ):
+            self.state.memory.enqueue_extraction(text, result.text, {"session_id": str(sess.id), "channel": channel})
         return result
 
     async def _recall(self, text: str, principal: Principal) -> str:
@@ -139,8 +171,15 @@ class Orchestrator:
         lines = [f"- {h['title']}: {h['content'][:400]} ({h['path']})" for h in hits if h["score"] >= 0.55]
         return "\n".join(lines)
 
-    async def _run_hermes(self, sess: ChatSession, principal: Principal, text: str, instructions: str,
-                          emit: EventCallback, images: list[str] | None) -> TurnResult:
+    async def _run_hermes(
+        self,
+        sess: ChatSession,
+        principal: Principal,
+        text: str,
+        instructions: str,
+        emit: EventCallback,
+        images: list[str] | None,
+    ) -> TurnResult:
         hermes = self.state.hermes
         assert hermes is not None
         tools: list[dict[str, Any]] = []
@@ -160,8 +199,13 @@ class Orchestrator:
                     elif ev.type == "assistant_completed":
                         final_text = ev.text or final_text
                     elif ev.type in ("tool_started", "tool_completed", "tool_failed"):
-                        tools.append({"event": ev.type, "name": ev.data.get("name") or ev.data.get("tool"),
-                                      "ts": datetime.now(UTC).isoformat()})
+                        tools.append(
+                            {
+                                "event": ev.type,
+                                "name": ev.data.get("name") or ev.data.get("tool"),
+                                "ts": datetime.now(UTC).isoformat(),
+                            }
+                        )
                     elif ev.type == "failed":
                         return TurnResult(sess.id, self._error_reply(ev.text), tools, error=ev.text or "run failed")
                     elif ev.type == "cancelled":
@@ -188,13 +232,14 @@ class Orchestrator:
         sess.hermes_session_id = hsid
         return hsid
 
-    async def _run_fallback(self, sess: ChatSession, text: str, instructions: str,
-                            emit: EventCallback) -> TurnResult:
+    async def _run_fallback(self, sess: ChatSession, text: str, instructions: str, emit: EventCallback) -> TurnResult:
         """Direct local LLM without tools — used only when Hermes is down. Says so honestly."""
         notice = "(Hinweis: Der Agent-Dienst Hermes ist nicht erreichbar – ich antworte ohne Werkzeuge.) "
         history = await self.history(sess.id, limit=12)
         messages = [{"role": "system", "content": render_soul(self.state.personality) + "\n\n" + instructions}]
-        messages += [{"role": m["role"], "content": m["content"]} for m in history if m["role"] in ("user", "assistant")]
+        messages += [
+            {"role": m["role"], "content": m["content"]} for m in history if m["role"] in ("user", "assistant")
+        ]
         chunks = [notice]
         await emit(AgentEvent("delta", text=notice))
         try:

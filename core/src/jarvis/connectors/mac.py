@@ -44,8 +44,9 @@ class BridgeClient:
         try:
             r = await self._http.request(method, path, json=json, headers=self._headers())
         except httpx.ConnectError as e:
-            raise ToolUserError("JarvisBridge läuft nicht. Starte sie mit scripts/start.sh oder öffne "
-                                "JarvisBridge.app.") from e
+            raise ToolUserError(
+                "JarvisBridge läuft nicht. Starte sie mit scripts/start.sh oder öffne JarvisBridge.app."
+            ) from e
         if r.status_code >= 400:
             try:
                 err = r.json()
@@ -53,8 +54,10 @@ class BridgeClient:
                 err = {"error": r.text[:200]}
             code = err.get("error", "error")
             if code == "permission_denied":
-                raise ToolUserError(f"macOS-Berechtigung fehlt: {err.get('permission')}. Bitte in "
-                                    "Systemeinstellungen › Datenschutz & Sicherheit für JarvisBridge erlauben.")
+                raise ToolUserError(
+                    f"macOS-Berechtigung fehlt: {err.get('permission')}. Bitte in "
+                    "Systemeinstellungen › Datenschutz & Sicherheit für JarvisBridge erlauben."
+                )
             if code == "kill_switch_engaged":
                 raise ToolUserError("Not-Aus der Bridge ist aktiv.")
             raise ToolUserError(f"Bridge-Fehler {r.status_code}: {code} {err.get('message', '')}".strip())
@@ -77,13 +80,16 @@ class BridgeClient:
 
 class MacConnector(Connector):
     manifest = Manifest(
-        id="mac", name="macOS Steuerung",
+        id="mac",
+        name="macOS Steuerung",
         description="Apps starten/wechseln, Fenster und Bedienelemente erkennen, tippen, klicken, Screenshots "
-                    "analysieren, Zwischenablage, Dateien, Kurzbefehle – über die native JarvisBridge.",
-        category="system", auth="local", default_enabled=True,
+        "analysieren, Zwischenablage, Dateien, Kurzbefehle – über die native JarvisBridge.",
+        category="system",
+        auth="local",
+        default_enabled=True,
         setup_instructions="bridge/scripts/build-app.sh ausführen, JarvisBridge.app starten (oder "
-                           "install-launchagent.sh) und in Systemeinstellungen › Datenschutz & Sicherheit "
-                           "'Bedienungshilfen' und 'Bildschirmaufnahme' für JarvisBridge erlauben.",
+        "install-launchagent.sh) und in Systemeinstellungen › Datenschutz & Sicherheit "
+        "'Bedienungshilfen' und 'Bildschirmaufnahme' für JarvisBridge erlauben.",
     )
 
     @property
@@ -93,7 +99,7 @@ class MacConnector(Connector):
     async def health(self) -> Health:
         try:
             h = await self.bridge.health()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return Health("error", f"Bridge nicht erreichbar ({type(e).__name__})")
         perms = h.get("permissions", {})
         missing = [k for k, v in perms.items() if not v]
@@ -116,8 +122,9 @@ class MacConnector(Connector):
                 raise ToolUserError("name oder bundleId angeben")
             apps = await b().request("GET", "/apps")
             want = (a.get("bundleId") or a.get("name") or "").lower()
-            running = next((x for x in apps if want in (str(x.get("name", "")).lower(),
-                                                          str(x.get("bundleId", "")).lower())), None)
+            running = next(
+                (x for x in apps if want in (str(x.get("name", "")).lower(), str(x.get("bundleId", "")).lower())), None
+            )
             if running:
                 return await b().request("POST", "/apps/activate", {"pid": running["pid"]})
             return await b().request("POST", "/apps/launch", body)
@@ -150,8 +157,11 @@ class MacConnector(Connector):
             return await b().request("POST", "/input/click", a)
 
         async def screenshot(ctx: ToolContext, a: dict[str, Any]) -> Any:
-            shot = await b().request("POST", "/screenshot", {k: v for k, v in a.items()
-                                                              if k in ("windowId", "displayId")} | {"maxWidth": 1280})
+            shot = await b().request(
+                "POST",
+                "/screenshot",
+                {k: v for k, v in a.items() if k in ("windowId", "displayId")} | {"maxWidth": 1280},
+            )
             shots_dir = self.state.settings.paths.data_dir / "screenshots"
             shots_dir.mkdir(parents=True, exist_ok=True)
             png = base64.b64decode(shot["png_base64"])
@@ -161,9 +171,15 @@ class MacConnector(Connector):
             description = await self.state.ollama.chat(
                 self.state.settings.llm.agent_model,
                 [{"role": "user", "content": question, "images": [shot["png_base64"]]}],
-                purpose="vision", num_predict=400)
-            return {"path": str(path), "width": shot.get("width"), "height": shot.get("height"),
-                    "analysis": wrap_untrusted(description, "bildschirminhalt", 4000)}
+                purpose="vision",
+                num_predict=400,
+            )
+            return {
+                "path": str(path),
+                "width": shot.get("width"),
+                "height": shot.get("height"),
+                "analysis": wrap_untrusted(description, "bildschirminhalt", 4000),
+            }
 
         async def clipboard_get(ctx: ToolContext, a: dict[str, Any]) -> Any:
             clip = await b().request("GET", "/clipboard")
@@ -204,69 +220,199 @@ class MacConnector(Connector):
         S = "mac"
         return [
             ToolSpec("mac_list_apps", "Listet laufende Programme.", _obj({}), list_apps, "read", S),
-            ToolSpec("mac_open_app", "Startet ein Programm oder holt es in den Vordergrund (z. B. name='Safari').",
-                     _obj({"name": {"type": "string"}, "bundleId": {"type": "string"}}), open_app, "low", S,
-                     summarize=lambda a: f"App öffnen: {a.get('name') or a.get('bundleId')}"),
-            ToolSpec("mac_quit_app", "Beendet ein Programm regulär.", _obj(SELECTOR), quit_app, "medium", S,
-                     summarize=lambda a: f"App beenden: {a.get('name') or a.get('bundleId') or a.get('pid')}"),
+            ToolSpec(
+                "mac_open_app",
+                "Startet ein Programm oder holt es in den Vordergrund (z. B. name='Safari').",
+                _obj({"name": {"type": "string"}, "bundleId": {"type": "string"}}),
+                open_app,
+                "low",
+                S,
+                summarize=lambda a: f"App öffnen: {a.get('name') or a.get('bundleId')}",
+            ),
+            ToolSpec(
+                "mac_quit_app",
+                "Beendet ein Programm regulär.",
+                _obj(SELECTOR),
+                quit_app,
+                "medium",
+                S,
+                summarize=lambda a: f"App beenden: {a.get('name') or a.get('bundleId') or a.get('pid')}",
+            ),
             ToolSpec("mac_list_windows", "Listet sichtbare Fenster.", _obj({}), windows, "read", S),
-            ToolSpec("mac_frontmost", "Aktive App, Fenster und fokussiertes Bedienelement.", _obj({}), frontmost,
-                     "read", S),
-            ToolSpec("mac_ui_tree", "Liest die Bedienelemente einer App (Accessibility). Elemente haben eine "
-                     "id (Pfad), die mac_ui_press verwendet.",
-                     _obj({**SELECTOR, "maxDepth": {"type": "integer", "minimum": 1, "maximum": 8}}),
-                     ui_tree, "read", S, untrusted_output=True),
-            ToolSpec("mac_ui_press", "Drückt ein Bedienelement (Button, Menüpunkt) per Pfad oder Rolle/Titel.",
-                     _obj({**SELECTOR, "path": {"type": "string"}, "role": {"type": "string"},
-                           "title": {"type": "string"}}), ui_press, "high", S,
-                     summarize=lambda a: f"Bedienelement drücken: {a.get('title') or a.get('path')} "
-                                         f"in {a.get('name') or a.get('bundleId') or a.get('pid')}"),
-            ToolSpec("mac_type_text", "Tippt Text in das aktuell fokussierte Feld.",
-                     _obj({"text": {"type": "string", "maxLength": 5000}}, ["text"]), type_text, "high", S,
-                     summarize=lambda a: f"Text tippen ({len(a['text'])} Zeichen): {a['text'][:60]!r}"),
-            ToolSpec("mac_key", "Drückt eine Taste/Tastenkombination (z. B. key='s', modifiers=['cmd']).",
-                     _obj({"key": {"type": "string"}, "modifiers": {"type": "array", "items": {
-                         "type": "string", "enum": ["cmd", "shift", "alt", "ctrl", "fn"]}}}, ["key"]),
-                     key, "high", S, summarize=lambda a: f"Taste {'+'.join([*a.get('modifiers', []), a['key']])}"),
-            ToolSpec("mac_click", "Klickt an Bildschirmkoordinaten.",
-                     _obj({"x": {"type": "number"}, "y": {"type": "number"},
-                           "button": {"type": "string", "enum": ["left", "right"]},
-                           "count": {"type": "integer", "minimum": 1, "maximum": 2}}, ["x", "y"]),
-                     click, "high", S, summarize=lambda a: f"Klick bei ({a['x']}, {a['y']})"),
-            ToolSpec("mac_screenshot", "Erstellt einen Screenshot und analysiert ihn mit dem lokalen Bildmodell.",
-                     _obj({"question": {"type": "string"}, "windowId": {"type": "integer"}}), screenshot, "low", S,
-                     untrusted_output=True, timeout_s=120),
-            ToolSpec("mac_clipboard_get", "Liest Text aus der Zwischenablage.", _obj({}), clipboard_get, "low", S,
-                     untrusted_output=True),
-            ToolSpec("mac_clipboard_set", "Schreibt Text in die Zwischenablage.",
-                     _obj({"text": {"type": "string"}}, ["text"]), clipboard_set, "low", S),
-            ToolSpec("mac_files_search", "Sucht Dateien per Spotlight.",
-                     _obj({"query": {"type": "string"}, "only_in": {"type": "string"},
-                           "names_only": {"type": "boolean"}, "limit": {"type": "integer"}}, ["query"]),
-                     files_search, "read", S),
-            ToolSpec("mac_files_move", "Verschiebt/organisiert eine Datei (nur in erlaubten Ordnern).",
-                     _obj({"from_path": {"type": "string"}, "to_path": {"type": "string"}}, ["from_path", "to_path"]),
-                     files_move, "medium", S, writes=True,
-                     summarize=lambda a: f"Datei verschieben: {a['from_path']} → {a['to_path']}"),
-            ToolSpec("mac_files_mkdir", "Legt einen Ordner an (nur in erlaubten Ordnern).",
-                     _obj({"path": {"type": "string"}}, ["path"]), files_mkdir, "low", S),
-            ToolSpec("mac_files_reveal", "Zeigt eine Datei im Finder.", _obj({"path": {"type": "string"}}, ["path"]),
-                     files_reveal, "low", S),
-            ToolSpec("mac_open_url", "Öffnet eine URL im Standardbrowser.",
-                     _obj({"url": {"type": "string", "pattern": "^(https?|mailto):"}}, ["url"]), open_url, "low", S),
+            ToolSpec(
+                "mac_frontmost", "Aktive App, Fenster und fokussiertes Bedienelement.", _obj({}), frontmost, "read", S
+            ),
+            ToolSpec(
+                "mac_ui_tree",
+                "Liest die Bedienelemente einer App (Accessibility). Elemente haben eine "
+                "id (Pfad), die mac_ui_press verwendet.",
+                _obj({**SELECTOR, "maxDepth": {"type": "integer", "minimum": 1, "maximum": 8}}),
+                ui_tree,
+                "read",
+                S,
+                untrusted_output=True,
+            ),
+            ToolSpec(
+                "mac_ui_press",
+                "Drückt ein Bedienelement (Button, Menüpunkt) per Pfad oder Rolle/Titel.",
+                _obj({**SELECTOR, "path": {"type": "string"}, "role": {"type": "string"}, "title": {"type": "string"}}),
+                ui_press,
+                "high",
+                S,
+                summarize=lambda a: (
+                    f"Bedienelement drücken: {a.get('title') or a.get('path')} "
+                    f"in {a.get('name') or a.get('bundleId') or a.get('pid')}"
+                ),
+            ),
+            ToolSpec(
+                "mac_type_text",
+                "Tippt Text in das aktuell fokussierte Feld.",
+                _obj({"text": {"type": "string", "maxLength": 5000}}, ["text"]),
+                type_text,
+                "high",
+                S,
+                summarize=lambda a: f"Text tippen ({len(a['text'])} Zeichen): {a['text'][:60]!r}",
+            ),
+            ToolSpec(
+                "mac_key",
+                "Drückt eine Taste/Tastenkombination (z. B. key='s', modifiers=['cmd']).",
+                _obj(
+                    {
+                        "key": {"type": "string"},
+                        "modifiers": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": ["cmd", "shift", "alt", "ctrl", "fn"]},
+                        },
+                    },
+                    ["key"],
+                ),
+                key,
+                "high",
+                S,
+                summarize=lambda a: f"Taste {'+'.join([*a.get('modifiers', []), a['key']])}",
+            ),
+            ToolSpec(
+                "mac_click",
+                "Klickt an Bildschirmkoordinaten.",
+                _obj(
+                    {
+                        "x": {"type": "number"},
+                        "y": {"type": "number"},
+                        "button": {"type": "string", "enum": ["left", "right"]},
+                        "count": {"type": "integer", "minimum": 1, "maximum": 2},
+                    },
+                    ["x", "y"],
+                ),
+                click,
+                "high",
+                S,
+                summarize=lambda a: f"Klick bei ({a['x']}, {a['y']})",
+            ),
+            ToolSpec(
+                "mac_screenshot",
+                "Erstellt einen Screenshot und analysiert ihn mit dem lokalen Bildmodell.",
+                _obj({"question": {"type": "string"}, "windowId": {"type": "integer"}}),
+                screenshot,
+                "low",
+                S,
+                untrusted_output=True,
+                timeout_s=120,
+            ),
+            ToolSpec(
+                "mac_clipboard_get",
+                "Liest Text aus der Zwischenablage.",
+                _obj({}),
+                clipboard_get,
+                "low",
+                S,
+                untrusted_output=True,
+            ),
+            ToolSpec(
+                "mac_clipboard_set",
+                "Schreibt Text in die Zwischenablage.",
+                _obj({"text": {"type": "string"}}, ["text"]),
+                clipboard_set,
+                "low",
+                S,
+            ),
+            ToolSpec(
+                "mac_files_search",
+                "Sucht Dateien per Spotlight.",
+                _obj(
+                    {
+                        "query": {"type": "string"},
+                        "only_in": {"type": "string"},
+                        "names_only": {"type": "boolean"},
+                        "limit": {"type": "integer"},
+                    },
+                    ["query"],
+                ),
+                files_search,
+                "read",
+                S,
+            ),
+            ToolSpec(
+                "mac_files_move",
+                "Verschiebt/organisiert eine Datei (nur in erlaubten Ordnern).",
+                _obj({"from_path": {"type": "string"}, "to_path": {"type": "string"}}, ["from_path", "to_path"]),
+                files_move,
+                "medium",
+                S,
+                writes=True,
+                summarize=lambda a: f"Datei verschieben: {a['from_path']} → {a['to_path']}",
+            ),
+            ToolSpec(
+                "mac_files_mkdir",
+                "Legt einen Ordner an (nur in erlaubten Ordnern).",
+                _obj({"path": {"type": "string"}}, ["path"]),
+                files_mkdir,
+                "low",
+                S,
+            ),
+            ToolSpec(
+                "mac_files_reveal",
+                "Zeigt eine Datei im Finder.",
+                _obj({"path": {"type": "string"}}, ["path"]),
+                files_reveal,
+                "low",
+                S,
+            ),
+            ToolSpec(
+                "mac_open_url",
+                "Öffnet eine URL im Standardbrowser.",
+                _obj({"url": {"type": "string", "pattern": "^(https?|mailto):"}}, ["url"]),
+                open_url,
+                "low",
+                S,
+            ),
             ToolSpec("mac_shortcuts_list", "Listet Apple-Kurzbefehle.", _obj({}), shortcuts, "read", S),
-            ToolSpec("mac_shortcut_run", "Führt einen Apple-Kurzbefehl aus.",
-                     _obj({"name": {"type": "string"}, "input": {"type": "string"}}, ["name"]),
-                     shortcut_run, "medium", S, summarize=lambda a: f"Kurzbefehl ausführen: {a['name']}"),
-            ToolSpec("mac_applescript", "Führt AppleScript aus (standardmäßig deaktiviert).",
-                     _obj({"source": {"type": "string"}}, ["source"]), applescript, "high", S,
-                     summarize=lambda a: f"AppleScript ausführen: {a['source'][:120]}"),
+            ToolSpec(
+                "mac_shortcut_run",
+                "Führt einen Apple-Kurzbefehl aus.",
+                _obj({"name": {"type": "string"}, "input": {"type": "string"}}, ["name"]),
+                shortcut_run,
+                "medium",
+                S,
+                summarize=lambda a: f"Kurzbefehl ausführen: {a['name']}",
+            ),
+            ToolSpec(
+                "mac_applescript",
+                "Führt AppleScript aus (standardmäßig deaktiviert).",
+                _obj({"source": {"type": "string"}}, ["source"]),
+                applescript,
+                "high",
+                S,
+                summarize=lambda a: f"AppleScript ausführen: {a['source'][:120]}",
+            ),
         ]
 
 
 def _compact_tree(node: dict[str, Any], depth: int = 0) -> dict[str, Any]:
-    out = {k: node[k] for k in ("id", "role", "title", "value", "description", "enabled") if node.get(k) not in
-           (None, "", [])}
+    out = {
+        k: node[k]
+        for k in ("id", "role", "title", "value", "description", "enabled")
+        if node.get(k) not in (None, "", [])
+    }
     kids = node.get("children") or []
     if kids:
         out["children"] = [_compact_tree(c, depth + 1) for c in kids]

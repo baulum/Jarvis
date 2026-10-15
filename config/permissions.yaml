@@ -28,6 +28,11 @@ roles:
     max_risk: read
     auto_approve: read
     can_approve: false
+  voice_owner:
+    description: Sprachsteuerung am Mac ("Hey Jarvis") – jeder im Raum kann sprechen, daher keine Freigaben per Stimme
+    max_risk: high
+    auto_approve: low
+    can_approve: false
   telegram_owner:
     description: Besitzer über verifizierten Telegram-Chat
     max_risk: high

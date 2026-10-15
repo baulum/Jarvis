@@ -57,8 +57,22 @@ class STTService:
         if ffmpeg is None:
             raise RuntimeError("ffmpeg fehlt")
         proc = await asyncio.create_subprocess_exec(
-            ffmpeg, "-nostdin", "-loglevel", "error", "-i", str(path), "-ar", "16000", "-ac", "1", "-f", "wav", "-",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            ffmpeg,
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-i",
+            str(path),
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-f",
+            "wav",
+            "-",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
         out, err = await proc.communicate()
         if proc.returncode != 0:
             raise RuntimeError(f"ffmpeg: {err.decode()[:200]}")
@@ -71,8 +85,15 @@ _NOISE = re.compile(r"\[(?:BLANK_AUDIO|Musik|Music|MUSIK|Applaus|Stille|silence)
 def _clean_transcript(text: str) -> str:
     text = _NOISE.sub("", text).strip()
     # whisper hallucinations on silence
-    if text.lower().strip(" .!") in ("", "untertitel im auftrag des zdf", "vielen dank", "untertitel von stephanie geiges",
-                                     "copyright wdr 2021", "thank you", "thanks for watching"):
+    if text.lower().strip(" .!") in (
+        "",
+        "untertitel im auftrag des zdf",
+        "vielen dank",
+        "untertitel von stephanie geiges",
+        "copyright wdr 2021",
+        "thank you",
+        "thanks for watching",
+    ):
         return ""
     return text
 
@@ -105,14 +126,37 @@ class MacSayTTS(TTSProvider):
         with tempfile.TemporaryDirectory() as td:
             aiff = Path(td) / "out.aiff"
             proc = await asyncio.create_subprocess_exec(
-                "say", "-v", self.voice, "-r", str(self.rate), "-o", str(aiff), "--", text,
-                stderr=asyncio.subprocess.PIPE)
+                "say",
+                "-v",
+                self.voice,
+                "-r",
+                str(self.rate),
+                "-o",
+                str(aiff),
+                "--",
+                text,
+                stderr=asyncio.subprocess.PIPE,
+            )
             _, err = await proc.communicate()
             if proc.returncode != 0:
                 raise RuntimeError(f"say: {err.decode()[:200]}")
             proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(aiff), "-ar", str(sample_rate), "-ac", "1",
-                "-f", "s16le", "-", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                "ffmpeg",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-i",
+                str(aiff),
+                "-ar",
+                str(sample_rate),
+                "-ac",
+                "1",
+                "-f",
+                "s16le",
+                "-",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
             out, err = await proc.communicate()
             if proc.returncode != 0:
                 raise RuntimeError(f"ffmpeg: {err.decode()[:200]}")
@@ -139,9 +183,15 @@ class FishAudioTTS(TTSProvider):
         body = {"text": text, "format": "pcm", "sample_rate": rate, "latency": "balanced", "normalize": True}
         if self.reference_id:
             body["reference_id"] = self.reference_id
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=5)) as c, c.stream(
-            "POST", "https://api.fish.audio/v1/tts", json=body,
-            headers={"Authorization": f"Bearer {key}", "model": self.model}) as r:
+        async with (
+            httpx.AsyncClient(timeout=httpx.Timeout(60, connect=5)) as c,
+            c.stream(
+                "POST",
+                "https://api.fish.audio/v1/tts",
+                json=body,
+                headers={"Authorization": f"Bearer {key}", "model": self.model},
+            ) as r,
+        ):
             if r.status_code >= 400:
                 detail = (await r.aread()).decode(errors="replace")[:200]
                 raise RuntimeError(f"Fish Audio {r.status_code}: {detail}")
@@ -177,9 +227,12 @@ class TTSService:
 
     async def status(self) -> dict[str, object]:
         p = await self.provider()
-        return {"configured": self.cfg.provider, "active": p.name,
-                "fish_audio_ready": await self.fish.available(),
-                "fallback": p.name != self.cfg.provider}
+        return {
+            "configured": self.cfg.provider,
+            "active": p.name,
+            "fish_audio_ready": await self.fish.available(),
+            "fallback": p.name != self.cfg.provider,
+        }
 
     async def stream(self, text: str, sample_rate: int) -> AsyncIterator[bytes]:
         p = await self.provider()

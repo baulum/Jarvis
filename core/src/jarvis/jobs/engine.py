@@ -41,14 +41,14 @@ LEASE = timedelta(seconds=90)
 WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
 
 
-class StepWait(Exception):  # noqa: N818 - control-flow signal, not an error
+class StepWait(Exception):
     def __init__(self, status: str, info: dict[str, Any]) -> None:
         super().__init__(status)
         self.status = status  # waiting_approval | waiting_input | waiting_external
         self.info = info
 
 
-class StepSkip(Exception):  # noqa: N818
+class StepSkip(Exception):
     pass
 
 
@@ -69,18 +69,24 @@ class StepContext:
     previous_output: dict[str, Any] = field(default_factory=dict)
     _calls: int = 0
 
-    async def tool(self, name: str, args: dict[str, Any]) -> Any:
-        """Execute a tool idempotently; pauses the task when an approval is required."""
+    async def tool(self, name: str, args: dict[str, Any], key: str | None = None) -> Any:
+        """Execute a tool idempotently; pauses the task when an approval is required.
+
+        The idempotency key is derived from the call position inside the step (deterministic
+        on re-runs) unless an explicit ``key`` is given.
+        """
         self._calls += 1
-        key = f"task:{self.task_id}:{self.step_idx}:{self._calls}"
-        ctx = ToolContext(principal=self.principal, session_id=self.session_id, task_step_id=self.step_id,
-                          idempotency_key=key)
+        key = f"task:{self.task_id}:{self.step_idx}:{key or self._calls}:{name}"
+        ctx = ToolContext(
+            principal=self.principal, session_id=self.session_id, task_step_id=self.step_id, idempotency_key=key
+        )
         res = await self.engine.state.executor.execute(name, args, ctx)
         if res.status in ("ok", "duplicate"):
             return res.data
         if res.status == "approval_required":
-            raise StepWait("waiting_approval", {"approval_id": str(res.approval_id), "tool": name,
-                                                "message": res.message})
+            raise StepWait(
+                "waiting_approval", {"approval_id": str(res.approval_id), "tool": name, "message": res.message}
+            )
         if res.status == "in_progress":
             raise StepWait("waiting_external", {"reason": "tool_in_progress", "tool": name})
         if res.status == "denied" and "nicht eingerichtet" in res.message:
@@ -137,38 +143,61 @@ class TaskEngine:
             t.cancel()
 
     # ------------------------------------------------------------------ API
-    async def create(self, playbook: str, params: dict[str, Any], principal: Principal, *,
-                     session_id: uuid.UUID | None = None, idempotency_key: str | None = None) -> Task:
+    async def create(
+        self,
+        playbook: str,
+        params: dict[str, Any],
+        principal: Principal,
+        *,
+        session_id: uuid.UUID | None = None,
+        idempotency_key: str | None = None,
+    ) -> Task:
         pb = self.playbooks.get(playbook)
         if pb is None:
             raise ValueError(f"Unbekanntes Playbook: {playbook}")
         jsonschema.validate(params, pb.params_schema)
         async with session_scope() as s:
             if idempotency_key:
-                existing = (await s.execute(select(Task).where(Task.idempotency_key == idempotency_key))
-                            ).scalar_one_or_none()
+                existing = (
+                    await s.execute(select(Task).where(Task.idempotency_key == idempotency_key))
+                ).scalar_one_or_none()
                 if existing is not None:
                     return existing
-            title = pb.title_template.format(**{k: v for k, v in params.items() if isinstance(v, str | int | float)},
-                                             name=pb.title) if "{" in pb.title_template else pb.title_template
-            task = Task(title=title[:300], kind=playbook, status="queued", params=params, context={},
-                        actor_role=principal.role, actor_id=principal.label, session_id=session_id,
-                        idempotency_key=idempotency_key)
+            title = (
+                pb.title_template.format(
+                    **{k: v for k, v in params.items() if isinstance(v, str | int | float)}, name=pb.title
+                )
+                if "{" in pb.title_template
+                else pb.title_template
+            )
+            task = Task(
+                title=title[:300],
+                kind=playbook,
+                status="queued",
+                params=params,
+                context={},
+                actor_role=principal.role,
+                actor_id=principal.label,
+                session_id=session_id,
+                idempotency_key=idempotency_key,
+            )
             s.add(task)
             await s.flush()
             for i, sd in enumerate(pb.steps):
                 s.add(TaskStep(task_id=task.id, idx=i, name=sd.name, status="pending"))
             task_id = task.id
-        await audit(principal.label, "task.create", target=str(task_id), details={"playbook": playbook,
-                                                                                  "params": params})
+        await audit(
+            principal.label, "task.create", target=str(task_id), details={"playbook": playbook, "params": params}
+        )
         await bus.publish("task.created", task_id=str(task_id), title=title, playbook=playbook)
         self._wake.set()
         return await self.get_task(task_id)  # type: ignore[return-value]
 
     async def get_task(self, task_id: uuid.UUID) -> Task | None:
         async with session_scope() as s:
-            return (await s.execute(select(Task).options(selectinload(Task.steps)).where(Task.id == task_id))
-                    ).scalar_one_or_none()
+            return (
+                await s.execute(select(Task).options(selectinload(Task.steps)).where(Task.id == task_id))
+            ).scalar_one_or_none()
 
     async def list_tasks(self, status: str | None = None, limit: int = 50) -> list[Task]:
         q = select(Task).options(selectinload(Task.steps)).order_by(Task.created_at.desc()).limit(limit)
@@ -185,8 +214,9 @@ class TaskEngine:
             task.params = {**task.params, **values}
             task.pending_question = None
             task.status = "queued"
-            step = (await s.execute(select(TaskStep).where(TaskStep.task_id == task_id,
-                                                           TaskStep.status == "waiting_input"))).scalar_one_or_none()
+            step = (
+                await s.execute(select(TaskStep).where(TaskStep.task_id == task_id, TaskStep.status == "waiting_input"))
+            ).scalar_one_or_none()
             if step:
                 step.status = "pending"
         await audit(actor, "task.input", target=str(task_id), details={"keys": sorted(values)})
@@ -248,11 +278,16 @@ class TaskEngine:
             return None
         now = datetime.now(UTC)
         async with session_scope() as s:
-            task = (await s.execute(
-                select(Task).where(or_(Task.status == "queued",
-                                       (Task.status == "running") & (Task.lease_until < now)))
-                .where(Task.id.not_in(list(self._running) or [uuid.uuid4()]))
-                .order_by(Task.created_at).limit(1).with_for_update(skip_locked=True))).scalar_one_or_none()
+            task = (
+                await s.execute(
+                    select(Task)
+                    .where(or_(Task.status == "queued", (Task.status == "running") & (Task.lease_until < now)))
+                    .where(Task.id.not_in(list(self._running) or [uuid.uuid4()]))
+                    .order_by(Task.created_at)
+                    .limit(1)
+                    .with_for_update(skip_locked=True)
+                )
+            ).scalar_one_or_none()
             if task is None:
                 return None
             task.status = "running"
@@ -291,8 +326,11 @@ class TaskEngine:
             await self._finish(task_id, "failed", error=f"Playbook {task.kind} nicht registriert")
             return
         await bus.publish("task.updated", task_id=str(task_id), status="running", title=task.title)
-        principal = Principal(id=task.actor_id.split(":", 1)[-1], role=task.actor_role,
-                              channel=task.actor_id.split(":", 1)[0] if ":" in task.actor_id else "task")
+        principal = Principal(
+            id=task.actor_id.split(":", 1)[-1],
+            role=task.actor_role,
+            channel=task.actor_id.split(":", 1)[0] if ":" in task.actor_id else "task",
+        )
         context = dict(task.context or {})
         previous: dict[str, Any] = {}
         warnings: list[str] = list(context.get("_warnings", []))
@@ -306,27 +344,44 @@ class TaskEngine:
             sd = pb.steps[step.idx]
             await self._set_step(step.id, status="running", started_at=datetime.now(UTC), error=None)
             await bus.publish("task.step", task_id=str(task_id), step=step.idx, name=step.name, status="running")
-            sctx = StepContext(self, task_id, step.id, step.idx, dict(task.params), context, principal,
-                               task.session_id, previous)
+            sctx = StepContext(
+                self, task_id, step.id, step.idx, dict(task.params), context, principal, task.session_id, previous
+            )
             try:
                 out = await sd.fn(sctx) or {}
             except StepWait as w:
-                await self._set_step(step.id, status=w.status, output={"wait": w.info},
-                                     approval_id=uuid.UUID(w.info["approval_id"]) if "approval_id" in w.info else None)
+                await self._set_step(
+                    step.id,
+                    status=w.status,
+                    output={"wait": w.info},
+                    approval_id=uuid.UUID(w.info["approval_id"]) if "approval_id" in w.info else None,
+                )
                 context.update({"_warnings": warnings})
-                await self._set_task(task_id, status=w.status, context=context, lease_until=None,
-                                     pending_question=w.info.get("question"))
-                await bus.publish("task.updated", task_id=str(task_id), status=w.status, step=step.idx,
-                                  title=task.title, info=w.info)
+                await self._set_task(
+                    task_id,
+                    status=w.status,
+                    context=_jsonable(context),
+                    lease_until=None,
+                    pending_question=w.info.get("question"),
+                )
+                await bus.publish(
+                    "task.updated", task_id=str(task_id), status=w.status, step=step.idx, title=task.title, info=w.info
+                )
                 if w.status == "waiting_input":
-                    await bus.publish("task.input_required", task_id=str(task_id), title=task.title,
-                                      question=w.info.get("question"), fields=w.info.get("fields"))
+                    await bus.publish(
+                        "task.input_required",
+                        task_id=str(task_id),
+                        title=task.title,
+                        question=w.info.get("question"),
+                        fields=w.info.get("fields"),
+                    )
                 return
             except StepSkip as sk:
                 warnings.append(f"{step.name}: {sk}")
                 await self._set_step(step.id, status="skipped", error=str(sk), finished_at=datetime.now(UTC))
-                await bus.publish("task.step", task_id=str(task_id), step=step.idx, name=step.name,
-                                  status="skipped", note=str(sk))
+                await bus.publish(
+                    "task.step", task_id=str(task_id), step=step.idx, name=step.name, status="skipped", note=str(sk)
+                )
                 continue
             except StepFail as f:
                 await self._set_step(step.id, status="failed", error=str(f), finished_at=datetime.now(UTC))
@@ -338,11 +393,19 @@ class TaskEngine:
             await self._set_step(step.id, status="completed", output=_jsonable(out), finished_at=datetime.now(UTC))
             await self._set_task(task_id, context=_jsonable(context))
             await bus.publish("task.step", task_id=str(task_id), step=step.idx, name=step.name, status="completed")
-        await self._finish(task_id, "completed", context=context,
-                           result={"summary": context.get("summary", ""), "warnings": warnings})
+        await self._finish(
+            task_id, "completed", context=context, result={"summary": context.get("summary", ""), "warnings": warnings}
+        )
 
-    async def _finish(self, task_id: uuid.UUID, status: str, *, error: str | None = None,
-                      context: dict[str, Any] | None = None, result: dict[str, Any] | None = None) -> None:
+    async def _finish(
+        self,
+        task_id: uuid.UUID,
+        status: str,
+        *,
+        error: str | None = None,
+        context: dict[str, Any] | None = None,
+        result: dict[str, Any] | None = None,
+    ) -> None:
         fields: dict[str, Any] = {"status": status, "lease_until": None}
         if error is not None:
             fields["error"] = error
@@ -354,8 +417,9 @@ class TaskEngine:
         task = await self.get_task(task_id)
         title = task.title if task else str(task_id)
         await audit("task-engine", f"task.{status}", target=str(task_id), details={"error": error})
-        await bus.publish(f"task.{status}", task_id=str(task_id), title=title, error=error,
-                          result=_jsonable(result or {}))
+        await bus.publish(
+            f"task.{status}", task_id=str(task_id), title=title, error=error, result=_jsonable(result or {})
+        )
         await bus.publish("task.updated", task_id=str(task_id), status=status, title=title)
 
     async def _set_task(self, task_id: uuid.UUID, **fields: Any) -> None:
