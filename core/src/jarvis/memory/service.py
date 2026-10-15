@@ -399,10 +399,18 @@ class MemoryService:
                     .limit(1)
                 )
             ).first()
+            same_title = (await s.execute(
+                select(MemoryItem, dist.label("d")).where(MemoryItem.status == "active",
+                                                           func.lower(MemoryItem.title) == title.strip().lower(),
+                                                           MemoryItem.kind == kind).limit(1))).first()
+        if same_title is not None:
+            row = same_title  # the title is the note's identity in Obsidian -> extend that note
         if row is not None:
             existing, d = row
-            sim = 1 - float(d)
-            if sim >= DUPLICATE_THRESHOLD or (sim >= RELATED_THRESHOLD and existing.title.lower() == title.lower()):
+            sim = 1 - float(d) if d is not None else 0.0
+            if same_title is not None or sim >= DUPLICATE_THRESHOLD or (
+                sim >= RELATED_THRESHOLD and existing.title.lower() == title.lower()
+            ):
                 if content.strip() in existing.content:
                     return {
                         "status": "duplicate",

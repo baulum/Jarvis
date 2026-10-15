@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<defs>
+<radialGradient id="bg" cx="50%" cy="45%" r="70%"><stop offset="0" stop-color="#0F1A22"/><stop offset="1" stop-color="#04070A"/></radialGradient>
+<radialGradient id="core" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#F2FDFF"/><stop offset="0.35" stop-color="#9BE7F2"/><stop offset="1" stop-color="#2E8FA3" stop-opacity="0"/></radialGradient>
+<linearGradient id="seg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8FE3F0"/><stop offset="1" stop-color="#3FA9BD"/></linearGradient>
+</defs>
+<rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)"/>
+<rect x="64.5" y="64.5" width="895" height="895" rx="200" fill="none" stroke="#1E2E38" stroke-width="3"/>
+<circle cx="512" cy="512" r="372" fill="none" stroke="#2A4350" stroke-width="6"/>
+<path d="M528.5,182.4 A330,330 0 0 1 662.5,218.3 L634.2,273.5 A268,268 0 0 0 525.4,244.3 Z" fill="url(#seg)"/>
+<path d="M691.1,234.8 A330,330 0 0 1 789.2,332.9 L737.1,366.6 A268,268 0 0 0 657.4,286.9 Z" fill="url(#seg)"/>
+<path d="M805.7,361.5 A330,330 0 0 1 841.6,495.5 L779.7,498.6 A268,268 0 0 0 750.5,389.8 Z" fill="url(#seg)"/>
+<path d="M841.6,528.5 A330,330 0 0 1 805.7,662.5 L750.5,634.2 A268,268 0 0 0 779.7,525.4 Z" fill="url(#seg)"/>
+<path d="M789.2,691.1 A330,330 0 0 1 691.1,789.2 L657.4,737.1 A268,268 0 0 0 737.1,657.4 Z" fill="url(#seg)"/>
+<path d="M662.5,805.7 A330,330 0 0 1 528.5,841.6 L525.4,779.7 A268,268 0 0 0 634.2,750.5 Z" fill="url(#seg)"/>
+<path d="M495.5,841.6 A330,330 0 0 1 361.5,805.7 L389.8,750.5 A268,268 0 0 0 498.6,779.7 Z" fill="url(#seg)"/>
+<path d="M332.9,789.2 A330,330 0 0 1 234.8,691.1 L286.9,657.4 A268,268 0 0 0 366.6,737.1 Z" fill="url(#seg)"/>
+<path d="M218.3,662.5 A330,330 0 0 1 182.4,528.5 L244.3,525.4 A268,268 0 0 0 273.5,634.2 Z" fill="url(#seg)"/>
+<path d="M182.4,495.5 A330,330 0 0 1 218.3,361.5 L273.5,389.8 A268,268 0 0 0 244.3,498.6 Z" fill="url(#seg)"/>
+<path d="M234.8,332.9 A330,330 0 0 1 332.9,234.8 L366.6,286.9 A268,268 0 0 0 286.9,366.6 Z" fill="url(#seg)"/>
+<path d="M361.5,218.3 A330,330 0 0 1 495.5,182.4 L498.6,244.3 A268,268 0 0 0 389.8,273.5 Z" fill="url(#seg)"/>
+<circle cx="512" cy="512" r="226" fill="none" stroke="#5FC8DA" stroke-width="10" opacity="0.55"/>
+<circle cx="512" cy="512" r="200" fill="url(#core)"/>
+<circle cx="512" cy="512" r="92" fill="#E9FBFF"/>
+</svg>

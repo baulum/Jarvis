@@ -54,7 +54,7 @@ voice:
   enabled: true
   language: de
   wake_word: hey_jarvis
-  wake_threshold: 0.5
+  wake_threshold: 0.4
   stt:
     provider: whisper_cpp
     server_url: http://127.0.0.1:8178

@@ -265,6 +265,12 @@ def cmd_doctor(_: argparse.Namespace) -> None:
     sys.exit(0 if all(ok for _, ok, _ in checks) else 1)
 
 
+def cmd_voice(_: argparse.Namespace) -> None:
+    from jarvis.voice.daemon import main as voice_main
+
+    voice_main()
+
+
 def cmd_serve(_: argparse.Namespace) -> None:
     from jarvis.main import run
 
@@ -276,6 +282,7 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("serve", help="Core-Server starten").set_defaults(fn=cmd_serve)
     sub.add_parser("migrate", help="Datenbank-Migrationen ausführen").set_defaults(fn=cmd_migrate)
+    sub.add_parser("voice", help="Voice-Daemon starten (Wake Word, Mikrofon, Sprachausgabe)").set_defaults(fn=cmd_voice)
     i = sub.add_parser("init", help="Desktop- und Voice-Gerät anlegen")
     i.add_argument("--force", action="store_true")
     i.set_defaults(fn=cmd_init)

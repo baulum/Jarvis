@@ -42,7 +42,13 @@ class STTService:
 
     async def transcribe_wav(self, wav: bytes, language: str | None = None) -> str:
         files = {"file": ("audio.wav", wav, "audio/wav")}
-        data = {"response_format": "json", "temperature": "0.0", "language": language or self.language}
+        data = {
+            "response_format": "json",
+            "temperature": "0.0",
+            "language": language or self.language,
+            # Biases recognition towards domain vocabulary ("Jarvis" was heard as "Travis").
+            "prompt": "Jarvis, Sir, Lexware, Telegram, Obsidian, Claude Code, GitHub.",
+        }
         r = await self._http.post(self.server_url + "/inference", files=files, data=data)
         r.raise_for_status()
         text = str(r.json().get("text", "")).strip()
