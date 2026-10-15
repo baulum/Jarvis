@@ -33,6 +33,13 @@
 - Bridge tippt ein Zeichen pro Event (Rechner hatte nur das erste Zeichen übernommen).
 - Bridge mit Apple-Development-Zertifikat signiert → macOS-Rechte bleiben über Updates erhalten.
 
+### Live mit echten Zugangsdaten getestet (2026-10-15)
+- Google: Gmail (neueste Mails), Kalender (Termine 7 Tage), Drive (Suche) – über Jarvis im Chat
+- Lexware: Verbindung „PJE Systems“, offene Rechnungen + Kundensuche (nur lesend; Schreibtest wartet auf Sirs Ja)
+- Fish Audio: Stimme „Jarvis (MCU)“, Synthese 0,87 s, Ausgabe über Voice-Daemon; 402 (kein API-Guthaben) wird klar gemeldet
+- macOS: Bildschirmaufnahme erteilt → Screenshot-Analyse (Claude) live korrekt; Bedienungshilfen noch offen
+- Voice: echtes Mikrofon, Wake Word, Whisper, Antwort, Folgefrage
+
 ### Funktioniert – real getestet
 | Bereich | Nachweis |
 |---|---|
