@@ -230,8 +230,10 @@ class ConnectorManager:
         await self._sync_running(conn)
         await self.check(cid)
         if conn.active != was_active:
-            # The agent's tool set changed: let Hermes reload the MCP tool list.
+            # The agent's tool set changed: Claude processes and Hermes reload the MCP tool list.
             await self.state.hermes_supervisor.restart()
+            if self.state.agent is not None:
+                await self.state.agent.reload()
 
     async def check(self, cid: str) -> Health:
         conn = self.connectors[cid]

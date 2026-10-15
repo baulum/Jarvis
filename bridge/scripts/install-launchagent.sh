@@ -4,7 +4,7 @@
 set -euo pipefail
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP="$BRIDGE_DIR/build/JarvisBridge.app"
+APP="/Applications/JarvisBridge.app"; [ -d "$APP" ] || APP="$BRIDGE_DIR/build/JarvisBridge.app"
 BIN="$APP/Contents/MacOS/JarvisBridge"
 LABEL="com.jarvis.bridge"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"

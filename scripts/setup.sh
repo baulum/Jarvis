@@ -81,6 +81,8 @@ if [ -z "${SIGN_IDENTITY:-}" ]; then
   export SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 fi
 (cd "$ROOT/bridge" && ./scripts/build-app.sh)
+osascript -e 'quit app "JarvisBridge"' 2>/dev/null || true
+ditto "$ROOT/bridge/build/JarvisBridge.app" /Applications/JarvisBridge.app && echo "✓ JarvisBridge nach /Applications installiert"
 
 step "Desktop-App (Tauri)"
 if [ -f "$ROOT/desktop/package.json" ]; then
