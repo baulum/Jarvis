@@ -123,9 +123,11 @@ def derive_nodes(type_: str, data: dict[str, Any], session_id: str | None, task_
     out: list[str] = []
     if family in ("chat", "session"):
         out.append("agent:jarvis")
-        inner = data.get("data") if isinstance(data.get("data"), dict) else {}
-        if type_.startswith("chat.tool_") and inner.get("name") and inner["name"] != "tool":
-            out.append(f"tool:{inner['name']}")
+        raw = data.get("data")
+        inner: dict[str, Any] = raw if isinstance(raw, dict) else {}
+        name = inner.get("name")
+        if type_.startswith("chat.tool_") and name and name != "tool":
+            out.append(f"tool:{name}")
     if family in ("tool", "approval") and data.get("tool"):
         out.append(f"tool:{data['tool']}")
         if data.get("connector"):

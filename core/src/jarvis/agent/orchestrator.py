@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -25,7 +26,7 @@ from jarvis.agent.model_router import MODELS, parse_command
 from jarvis.agent.persona import turn_instructions
 from jarvis.db import session_scope
 from jarvis.db.models import ChatMessage, ChatSession
-from jarvis.events import activity, bus
+from jarvis.events import activity, bus, spawn
 from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
 
@@ -53,6 +54,7 @@ class TurnResult:
     error: str | None = None
     provider: str = "hermes"
     model: str | None = None
+    timings: dict[str, float] = field(default_factory=dict)
 
 
 class Orchestrator:
@@ -145,18 +147,24 @@ class Orchestrator:
         on_event: EventCallback | None,
         images: list[str] | None,
     ) -> TurnResult:
+        t0 = time.perf_counter()
+        timings: dict[str, float] = {}
+        # Memory recall runs while the user message is stored and the model is chosen (critical path for voice).
+        recall = asyncio.create_task(self._recall(text, principal, channel))
         user_msg_id = await self._store(sess.id, "user", text, {"channel": channel})
         await bus.publish("chat.user", session_id=str(sess.id), text=text, channel=channel)
-
-        memory_context = await self._recall(text, principal, channel)
+        model, model_reason, confirmation, agent_text = await self._model_for_turn(sess, principal, channel, text)
+        memory_context = await recall
+        timings["recall_ms"] = round((time.perf_counter() - t0) * 1000, 1)
         instructions = turn_instructions(channel, memory_context=memory_context, tainted=sess.tainted)
+        t_agent = time.perf_counter()
 
         async def emit(ev: AgentEvent) -> None:
+            if ev.type == "delta" and "first_token_ms" not in timings:
+                timings["first_token_ms"] = round((time.perf_counter() - t_agent) * 1000, 1)
             await bus.publish(f"chat.{ev.type}", session_id=str(sess.id), text=ev.text, data=_safe_event_data(ev.data))
             if on_event:
                 await on_event(ev)
-
-        model, model_reason, confirmation, agent_text = await self._model_for_turn(sess, principal, channel, text)
 
         if confirmation is not None:
             await emit(AgentEvent("delta", text=confirmation))
@@ -174,11 +182,19 @@ class Orchestrator:
         else:
             result = await self._run_fallback(sess, text, instructions, emit)
 
+        timings["agent_ms"] = round((time.perf_counter() - t_agent) * 1000, 1)
+        result.timings = timings
         await self._store(
             sess.id,
             "assistant",
             result.text,
-            {"tools": result.tools, "provider": result.provider, "error": result.error, "model": result.model},
+            {
+                "tools": result.tools,
+                "provider": result.provider,
+                "error": result.error,
+                "model": result.model,
+                "timings": timings,
+            },
         )
         await bus.publish(
             "chat.done",
@@ -187,21 +203,27 @@ class Orchestrator:
             error=result.error,
             provider=result.provider,
             model=result.model,
+            timings=timings,
         )
         if (
             result.text
             and not result.error
             and principal.role in ("owner", "voice_owner", "telegram_owner", "phone_owner")
         ):
-            recent = await self.history(sess.id, limit=8)
-            self.state.memory.enqueue_extraction(
-                text,
-                result.text,
-                {"session_id": str(sess.id), "channel": channel},
-                context=[{"role": m["role"], "content": m["content"]} for m in recent[:-2]],
-                message_id=str(user_msg_id),
-            )
+            spawn(self._queue_extraction(sess.id, channel, text, result.text, user_msg_id), name="memory-extract")
         return result
+
+    async def _queue_extraction(
+        self, session_id: uuid.UUID, channel: str, text: str, reply: str, user_msg_id: uuid.UUID
+    ) -> None:
+        recent = await self.history(session_id, limit=8)
+        self.state.memory.enqueue_extraction(
+            text,
+            reply,
+            {"session_id": str(session_id), "channel": channel},
+            context=[{"role": m["role"], "content": m["content"]} for m in recent[:-2]],
+            message_id=str(user_msg_id),
+        )
 
     async def _recall(self, text: str, principal: Principal, channel: str = "desktop") -> str:
         """Hybrid memory lookup before the agent runs. Spoken turns get a tight budget (first audio matters)."""

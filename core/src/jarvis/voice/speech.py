@@ -43,6 +43,24 @@ class STTService:
             return False
 
     async def transcribe_wav(self, wav: bytes, language: str | None = None) -> str:
+        """whisper-server runs with a reduced audio context (``-ac 768`` ≈ 15 s, half the latency of the full
+        30 s window); longer utterances are split at quiet points and transcribed piece by piece."""
+        import io
+        import wave
+
+        try:
+            with wave.open(io.BytesIO(wav)) as w:
+                rate, frames = w.getframerate(), w.readframes(w.getnframes())
+                mono16 = w.getnchannels() == 1 and w.getsampwidth() == 2
+        except (wave.Error, EOFError):
+            mono16, rate, frames = False, 16000, b""
+        if mono16 and len(frames) / 2 / rate > MAX_SEGMENT_S:
+            pcm = np.frombuffer(frames, dtype=np.int16)
+            parts = [await self._transcribe_one(pcm_to_wav(seg, rate), language) for seg in split_long(pcm, rate)]
+            return " ".join(p for p in parts if p)
+        return await self._transcribe_one(wav, language)
+
+    async def _transcribe_one(self, wav: bytes, language: str | None = None) -> str:
         files = {"file": ("audio.wav", wav, "audio/wav")}
         data = {
             "response_format": "json",
@@ -85,6 +103,26 @@ class STTService:
         if proc.returncode != 0:
             raise RuntimeError(f"ffmpeg: {err.decode()[:200]}")
         return await self.transcribe_wav(out)
+
+
+MAX_SEGMENT_S = 14.0
+
+
+def split_long(pcm: np.ndarray, rate: int, max_s: float = MAX_SEGMENT_S) -> list[np.ndarray]:
+    """Split audio into ≤ max_s segments, cutting at the quietest 100 ms between 60 % and 100 % of max_s."""
+    out: list[np.ndarray] = []
+    rest = pcm
+    hop = rate // 10
+    while len(rest) / rate > max_s:
+        lo, hi = int(rate * max_s * 0.6), int(rate * max_s)
+        window = rest[lo:hi].astype(np.float32)
+        n = len(window) // hop
+        energies = [float(np.mean(window[i * hop : (i + 1) * hop] ** 2)) for i in range(n)] or [0.0]
+        cut = lo + int(np.argmin(energies)) * hop + hop // 2
+        out.append(rest[:cut])
+        rest = rest[cut:]
+    out.append(rest)
+    return out
 
 
 _NOISE = re.compile(r"\[(?:BLANK_AUDIO|Musik|Music|MUSIK|Applaus|Stille|silence)\]|\((?:Musik|music)\)", re.I)

@@ -293,6 +293,9 @@ class SpeechTurn:
 
     async def finish(self) -> dict[str, Any]:
         """No more text: speak the rest, wait until every chunk has been handed to ``on_audio``."""
+        if self._cancelled:
+            self.metrics["cancelled"] = True
+            return self.metrics
         for piece in self.chunker.finish():
             for s in self.guard.admit(piece):
                 self._enqueue(s)

@@ -177,7 +177,7 @@ class ClaudeCodeAgent:
             "--permission-prompts",
             "none",
             "--model",
-            self._model_id(self.cfg.model),
+            self._model_id(self._spawn_model()),
             "--append-system-prompt",
             self.system_prompt(),
         ]
@@ -193,9 +193,14 @@ class ClaudeCodeAgent:
             limit=16 * 1024 * 1024,
             start_new_session=True,
         )
-        p = _Proc(proc=proc, model=self._model_id(self.cfg.model))
+        p = _Proc(proc=proc, model=self._model_id(self._spawn_model()))
         spawn(self._drain_stderr(p), name="claude-stderr")
         return p
+
+    def _spawn_model(self) -> str:
+        """Start processes with the model the router uses by default: a switch costs 1–2 s on the first turn."""
+        router = getattr(self.state, "model_router", None)
+        return str(getattr(router, "default", None) or self.cfg.model)
 
     async def _drain_stderr(self, p: _Proc) -> None:
         assert p.proc.stderr is not None
@@ -278,7 +283,9 @@ class ClaudeCodeAgent:
         model_id = self._model_id(model or self.cfg.model)
         if p.model != model_id:
             try:
+                t_switch = time.monotonic()
                 await self._switch_model(p, model_id)
+                logger.info("Model switch to %s took %.0f ms", model_id, (time.monotonic() - t_switch) * 1000)
             except (ClaudeUnavailable, TimeoutError, json.JSONDecodeError) as e:
                 p.busy = False
                 yield AgentEvent("failed", text=f"Modellwechsel fehlgeschlagen: {e}")

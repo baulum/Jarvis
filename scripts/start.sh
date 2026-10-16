@@ -26,7 +26,7 @@ wait_http() {  # url, seconds
 
 brew services list | grep -q "postgresql@17.*started" || brew services start postgresql@17 >/dev/null
 
-start_bg whisper whisper-server -m "$DATA/models/ggml-large-v3-turbo-q5_0.bin" --host 127.0.0.1 --port 8178 -l de -t 4
+start_bg whisper whisper-server -m "$DATA/models/ggml-large-v3-turbo-q5_0.bin" --host 127.0.0.1 --port 8178 -l de -t 4 -ac 768 -nf  # -ac/-nf: halbe STT-Latenz (gemessen 1,05 → 0,55 s); lange Äußerungen teilt der Core
 BRIDGE_APP=/Applications/JarvisBridge.app   # installed location (macOS privacy grants are tied to it)
 [ -d "$BRIDGE_APP" ] || BRIDGE_APP="$ROOT/bridge/build/JarvisBridge.app"
 if [ -d "$BRIDGE_APP" ] && ! curl -fsS -o /dev/null http://127.0.0.1:8766/health 2>/dev/null; then
@@ -35,6 +35,7 @@ fi
 start_bg core bash -c "cd '$ROOT/core' && exec uv run --frozen jarvisctl serve"
 wait_http http://127.0.0.1:8765/api/health 60 && echo "✓ Core bereit"
 if [ "$VOICE" = 1 ]; then
+  bash "$ROOT/scripts/build-audio-helper.sh" || echo "ℹ Audiohelfer nicht gebaut – Fallback ohne Echo-Unterdrückung"
   start_bg voice bash -c "cd '$ROOT/core' && exec uv run --frozen jarvisctl voice"
 fi
 if [ "$APP" = 1 ]; then

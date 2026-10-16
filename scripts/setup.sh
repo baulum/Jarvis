@@ -28,6 +28,7 @@ fi
 
 step "Python-Umgebung"
 (cd "$ROOT/core" && uv sync --all-extras && uv run playwright install chromium && uv run alembic upgrade head)
+bash "$ROOT/scripts/build-audio-helper.sh"
 
 step "Embedding-Modell für das Gedächtnis (läuft im Core, ~1,1 GB, kein Ollama)"
 (cd "$ROOT/core" && uv run python -c "

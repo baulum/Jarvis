@@ -1,18 +1,25 @@
 """Voice daemon: "Hey Jarvis" → listen → transcribe → Jarvis → streamed, interruptible speech.
 
-Runs as its own local process (``jarvisctl voice``) because it owns the microphone and the
-speakers (macOS-only concern, kept out of the server core). It talks to the core through the
-normal device API (role ``voice_owner``):
+Runs as its own local process (``jarvisctl voice``) because it owns the microphone and the speakers
+(macOS-only concern, kept out of the server core). It talks to the core with the voice device token.
 
-* wake word (openWakeWord ONNX) or push-to-talk start a turn; an energy VAD detects the end
-  of the utterance; whisper.cpp transcribes;
-* the reply streams back as ``chat.delta`` events; complete sentences are synthesised
-  immediately (TTS provider adapter in the core) → low latency;
-* saying "Hey Jarvis" while Jarvis speaks interrupts (barge-in) — playback stops and the
-  agent run is cancelled;
-* after a reply a short follow-up window allows answering without the wake word; silence or
-  phrases like "danke, das war's" end the conversation;
-* mute closes the microphone stream entirely (macOS mic indicator turns off).
+Pipeline (everything overlaps instead of running one after the other):
+
+* Microphone + speaker: the Swift helper ``jarvis-audio`` (Apple voice processing → echo
+  cancellation); fallback sounddevice + afplay.
+* Wake word (openWakeWord) or push-to-talk start a conversation.
+* ``Endpointer``: after ~280 ms of silence whisper.cpp already transcribes the utterance
+  (speculative STT) and the core warms TTS (``prepare``). A finished-sounding sentence ends the
+  turn after ``min_end_of_turn_silence_ms``; an unfinished one ("… und", "ähm") waits up to
+  ``end_of_turn_silence_ms``. Speech that resumes discards the speculative result.
+* ``/api/voice/speak`` (one WebSocket): the core runs the agent turn and streams PCM while the
+  answer is still being written; chunks go to the speaker the moment they arrive.
+* Barge-in: with echo cancellation Sir can simply start talking (``BargeInDetector``) – playback
+  stops at once, the core cancels TTS and the agent run, stale chunks (old tag) are dropped and
+  the interrupting words become the start of the next utterance. Without echo cancellation
+  "Hey Jarvis" interrupts.
+* After a reply a follow-up window allows answering without the wake word; "danke, das war's" ends.
+* Every turn is measured (end of speech → endpoint → transcript → first audio) and reported.
 """
 
 from __future__ import annotations
@@ -24,23 +31,19 @@ import json
 import logging
 import re
 import signal
-import subprocess
-import tempfile
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import httpx
 import numpy as np
 import numpy.typing as npt
-import sounddevice as sd
 import websockets
 
 from jarvis.config import Settings, get_settings
-from jarvis.voice.audio import EnergyVAD, pcm_to_wav, rms
-from jarvis.voice.speech import speakable, split_sentences
-from jarvis.voice.wakeword import CHUNK, RATE, WakeWordDetector
+from jarvis.voice.audio import BargeInDetector, Endpointer, looks_complete, pcm_to_wav, rms
+from jarvis.voice.audio_io import AudioIO, open_audio
+from jarvis.voice.wakeword import RATE, WakeWordDetector
 
 logger = logging.getLogger("jarvis.voice")
 PLAY_RATE = 24000
@@ -50,11 +53,27 @@ _END_PHRASES = re.compile(
 
 
 @dataclass
-class Turn:
+class Reply:
+    """State of one spoken reply (identified by a tag that is stamped on every audio frame)."""
+
+    tag: int
+    started: float = field(default_factory=time.perf_counter)
     session_id: str | None = None
-    text_buffer: str = ""
-    sentences: asyncio.Queue[str | None] = field(default_factory=asyncio.Queue)
-    done: asyncio.Event = field(default_factory=asyncio.Event)
+    first_audio: float | None = None
+    ended: asyncio.Event = field(default_factory=asyncio.Event)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    pieces: list[str] = field(default_factory=list)
+    error: str | None = None
+
+
+def earcon(rate: int = PLAY_RATE) -> bytes:
+    """Short, soft two-tone chime (played through the echo-cancelled path, unlike a system sound)."""
+    out = []
+    for f, dur in ((880.0, 0.06), (1320.0, 0.08)):
+        t = np.arange(int(rate * dur)) / rate
+        env = np.sin(np.pi * t / dur) ** 2
+        out.append(0.18 * env * np.sin(2 * np.pi * f * t))
+    return (np.concatenate(out) * 32767).astype(np.int16).tobytes()
 
 
 class VoiceDaemon:
@@ -68,53 +87,54 @@ class VoiceDaemon:
         )
         self.detector = WakeWordDetector(settings.paths.data_dir / "models", threshold=self.cfg.wake_threshold)
         self.loop: asyncio.AbstractEventLoop | None = None
-        self.mic_q: asyncio.Queue[npt.NDArray[np.int16]] = asyncio.Queue(maxsize=200)
-        self.stream: sd.InputStream | None = None
+        self.mic_q: asyncio.Queue[npt.NDArray[np.int16]] = asyncio.Queue(maxsize=400)  # raw microphone
+        self.aec_q: asyncio.Queue[npt.NDArray[np.int16]] = asyncio.Queue(maxsize=100)  # echo-cancelled
+        self.audio: AudioIO | None = None
         self.state = "idle"
         self.muted = False
         self.ptt = False
         self.session_id: str | None = None
-        self.turn: Turn | None = None
-        self.speaking = False
-        self._stop_playback = asyncio.Event()
+        self.speak_ws: Any = None
+        self._ws_ready = asyncio.Event()
+        self._send_lock = asyncio.Lock()
+        self.tag = 0
+        self.reply: Reply | None = None
+        self._prepared: int | None = None
         self._level = 0.0
-        self._last_status = 0.0
+        self._primed: npt.NDArray[np.int16] | None = None  # audio of a barge-in, start of the next utterance
+        self._interrupt = asyncio.Event()
 
     # ------------------------------------------------------------------ audio in
-    def _callback(self, indata: Any, frames: int, time_info: Any, status: Any) -> None:
-        pcm = (indata[:, 0] * 32767).astype(np.int16) if indata.dtype != np.int16 else indata[:, 0].copy()
-        if self.loop is not None:
-            self.loop.call_soon_threadsafe(self._enqueue, pcm)
-
-    def _enqueue(self, pcm: npt.NDArray[np.int16]) -> None:
+    def _on_mic(self, pcm: npt.NDArray[np.int16]) -> None:
         if self.mic_q.full():
             with contextlib.suppress(asyncio.QueueEmpty):
                 self.mic_q.get_nowait()
         self.mic_q.put_nowait(pcm)
 
-    def open_mic(self) -> None:
-        if self.stream is None:
-            self.stream = sd.InputStream(
-                samplerate=RATE, channels=1, dtype="int16", blocksize=CHUNK, callback=self._callback
-            )
-            self.stream.start()
+    def _on_aec(self, pcm: npt.NDArray[np.int16]) -> None:
+        if self.aec_q.full():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self.aec_q.get_nowait()
+        self.aec_q.put_nowait(pcm)
 
-    def close_mic(self) -> None:
-        if self.stream is not None:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
+    async def open_audio(self) -> None:
+        self.audio = await open_audio(self.s.paths.data_dir, self._on_mic, native=self.cfg.native_audio)
+        self.audio.on_aec = self._on_aec
+        logger.info("Audio: %s (echo cancellation %s)", type(self.audio).__name__, self.audio.aec)
+
+    async def close_audio(self) -> None:
+        if self.audio is not None:
+            await self.audio.stop()
+            self.audio = None
+
+    @property
+    def voice_barge_in(self) -> bool:
+        mode = self.cfg.barge_in
+        return mode == "voice" or (mode == "auto" and bool(self.audio and self.audio.aec))
 
     # ------------------------------------------------------------------ status
     async def set_state(self, state: str, detail: str | None = None) -> None:
         self.state = state
-        await self._post_status(detail=detail, force=True)
-
-    async def _post_status(self, detail: str | None = None, force: bool = False) -> None:
-        now = time.monotonic()
-        if not force and now - self._last_status < 0.2:
-            return
-        self._last_status = now
         try:
             await self.http.post(
                 "/api/voice/status",
@@ -123,15 +143,26 @@ class VoiceDaemon:
                     "muted": self.muted,
                     "wake_word": True,
                     "level": round(self._level, 3),
-                    "mic_permission": "granted" if self.stream is not None or self.muted else "unknown",
+                    "mic_permission": "granted" if self.audio is not None or self.muted else "unknown",
                     "detail": detail,
                 },
             )
         except httpx.HTTPError:
             pass
 
-    # ------------------------------------------------------------------ core events
+    async def _level_ticker(self) -> None:
+        """Live input/output levels for the interface (~12 Hz) over the speak socket – no HTTP per frame."""
+        while True:
+            await asyncio.sleep(0.083)
+            if self.speak_ws is None or self.muted:
+                continue
+            out = self.audio.out_level if self.audio else 0.0
+            with contextlib.suppress(Exception):
+                await self._send({"type": "level", "in": round(self._level, 3), "out": round(out, 3)})
+
+    # ------------------------------------------------------------------ core connections
     async def events(self) -> None:
+        """Bus events (commands from the app, notifications to speak)."""
         url = self.base.replace("http", "ws") + f"/ws?token={self.token}&client=voice"
         backoff = 1.0
         while True:
@@ -139,46 +170,80 @@ class VoiceDaemon:
                 async with websockets.connect(url, ping_interval=20) as ws:
                     backoff = 1.0
                     logger.info("Connected to core event stream")
-                    if self.turn is not None:  # events of a turn in flight were lost → end it cleanly
-                        logger.warning("Core reconnected during a turn; aborting it")
-                        await self.turn.sentences.put(None)
-                        self.turn.done.set()
                     async for raw in ws:
-                        await self._on_event(json.loads(raw))
+                        ev = json.loads(raw)
+                        t, d = ev.get("type"), ev.get("data", {})
+                        if t == "voice.command":
+                            await self._command(d.get("action", ""))
+                        elif t == "voice.say" and not self.muted and self.reply is None:
+                            await self.say_text(d.get("text", ""))
             except Exception as e:
                 logger.warning("Event stream lost (%s); reconnecting", e)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30)
 
-    async def _on_event(self, ev: dict[str, Any]) -> None:
-        t, d = ev.get("type"), ev.get("data", {})
-        turn = self.turn
-        if t == "chat.delta" and turn and d.get("session_id") == turn.session_id:
-            turn.text_buffer += d.get("text", "")
-            sentences, rest = split_sentences(turn.text_buffer)
-            turn.text_buffer = rest
-            for sentence in sentences:
-                await turn.sentences.put(sentence)
-        elif t == "chat.done" and turn and d.get("session_id") == turn.session_id:
-            if turn.text_buffer.strip():
-                await turn.sentences.put(turn.text_buffer.strip())
-            turn.text_buffer = ""
-            await turn.sentences.put(None)
-            turn.done.set()
-        elif t == "voice.command":
-            await self._command(d.get("action", ""))
-        elif t == "voice.say" and not self.muted and self.turn is None:
-            await self.say_text(d.get("text", ""))
+    async def speak_socket(self) -> None:
+        url = self.base.replace("http", "ws") + f"/api/voice/speak?token={self.token}"
+        backoff = 1.0
+        while True:
+            try:
+                async with websockets.connect(url, ping_interval=20, max_size=None) as ws:
+                    self.speak_ws = ws
+                    self._ws_ready.set()
+                    backoff = 1.0
+                    logger.info("Connected to speech stream")
+                    async for msg in ws:
+                        await self._on_speak(msg)
+            except Exception as e:
+                logger.warning("Speech stream lost (%s); reconnecting", e)
+            finally:
+                self.speak_ws = None
+                self._ws_ready.clear()
+                if self.reply is not None:  # a reply in flight cannot finish any more
+                    self.reply.error = "speech stream lost"
+                    self.reply.ended.set()
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30)
+
+    async def _send(self, obj: dict[str, Any]) -> None:
+        if self.speak_ws is None:
+            await asyncio.wait_for(self._ws_ready.wait(), 10)
+        async with self._send_lock:
+            await self.speak_ws.send(json.dumps(obj, ensure_ascii=False))
+
+    async def _on_speak(self, msg: Any) -> None:
+        r = self.reply
+        if isinstance(msg, bytes):
+            if r is None or not msg or msg[0] != r.tag or self.audio is None:
+                return  # stale chunk of an interrupted reply
+            if r.first_audio is None:
+                r.first_audio = time.perf_counter()
+                if self.state != "speaking":
+                    spawn_bg(self.set_state("speaking"))
+            await self.audio.play(msg[1:])
+            return
+        data = json.loads(msg)
+        if r is None or int(data.get("tag", -1)) != r.tag:
+            return
+        kind = data.get("type")
+        if kind == "session":
+            r.session_id = self.session_id = data.get("session_id")
+        elif kind == "piece":
+            r.pieces.append(str(data.get("text", "")))
+        elif kind == "speech_end":
+            r.metrics = data.get("metrics") or {}
+            r.error = data.get("error")
+            r.ended.set()
 
     async def _command(self, action: str) -> None:
         if action == "mute":
             self.muted = True
-            self.close_mic()
             await self.interrupt()
+            await self.close_audio()  # microphone closed → macOS indicator off
             await self.set_state("muted")
         elif action == "unmute":
             self.muted = False
-            self.open_mic()
+            await self.open_audio()
             await self.set_state("idle")
         elif action == "ptt_start" and not self.muted:
             self.ptt = True
@@ -189,187 +254,239 @@ class VoiceDaemon:
             await self.interrupt()
 
     async def interrupt(self) -> None:
-        if self.speaking or self.turn is not None:
-            self._stop_playback.set()
-            with contextlib.suppress(httpx.HTTPError):
-                await self.http.post("/api/chat/interrupt")
+        """Stop speaking now; the core cancels synthesis and the agent run."""
+        r = self.reply
+        if self.audio is not None:
+            await self.audio.flush()
+        if r is not None:
+            with contextlib.suppress(Exception):
+                await self._send({"type": "cancel", "tag": r.tag})
+            r.error = r.error or "interrupted"
+            r.ended.set()
+        self._interrupt.set()
+
+    def _next_tag(self) -> int:
+        self.tag = (self.tag + 1) % 256
+        return self.tag
 
     # ------------------------------------------------------------------ speech out
-    async def _synth(self, text: str) -> bytes:
-        r = await self.http.post("/api/voice/tts", json={"text": text, "sample_rate": PLAY_RATE})
-        r.raise_for_status()
-        return r.content
-
-    async def _play(self, pcm: bytes) -> bool:
-        """Play PCM through macOS' native player (afplay); returns False if interrupted.
-
-        Feeding audio from a Python callback underran under load and crackled; afplay plays the
-        whole buffer natively. A short fade-in/out removes clicks at sentence boundaries.
-        """
-        audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
-        fade = min(int(PLAY_RATE * 0.008), len(audio) // 2)
-        if fade > 0:
-            ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
-            audio[:fade] *= ramp
-            audio[-fade:] *= ramp[::-1]
-        wav = pcm_to_wav(np.clip(audio, -32768, 32767).astype(np.int16), PLAY_RATE)
-        with tempfile.NamedTemporaryFile(prefix="jarvis-tts-", suffix=".wav", delete=False) as f:
-            f.write(wav)
-            path = f.name
-        try:
-            proc = await asyncio.create_subprocess_exec("afplay", path)
-            stop_wait = asyncio.create_task(self._stop_playback.wait())
-            done_wait = asyncio.create_task(proc.wait())
-            await asyncio.wait({stop_wait, done_wait}, return_when=asyncio.FIRST_COMPLETED)
-            stop_wait.cancel()
-            if proc.returncode is None:
-                proc.terminate()
-                await proc.wait()
-        finally:
-            Path(path).unlink(missing_ok=True)
-        return not self._stop_playback.is_set()
-
-    async def speak_stream(self, turn: Turn) -> None:
-        """Pipelined TTS: sentence n+1 is synthesised while sentence n plays."""
-        self.speaking = True
-        self._stop_playback.clear()
-        audio_q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=2)
-
-        async def producer() -> None:
-            try:
-                while not self._stop_playback.is_set():
-                    try:
-                        sentence = await asyncio.wait_for(turn.sentences.get(), timeout=90)
-                    except TimeoutError:
-                        logger.warning("No reply within 90 s; ending turn")
-                        break
-                    if sentence is None:
-                        break
-                    text = speakable(sentence)
-                    if text:
-                        await audio_q.put(await self._synth(text))
-            except httpx.HTTPError as e:
-                logger.warning("TTS failed: %s", e)
-            finally:
-                with contextlib.suppress(asyncio.QueueFull):
-                    audio_q.put_nowait(None)
-
-        prod = asyncio.create_task(producer())
-        try:
-            while True:
-                # Wait for the next sentence OR an interrupt: never block on synthesis after a barge-in.
-                get_task = asyncio.create_task(audio_q.get())
-                stop_task = asyncio.create_task(self._stop_playback.wait())
-                await asyncio.wait({get_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
-                stop_task.cancel()
-                if not get_task.done():
-                    get_task.cancel()
-                    break
-                audio = get_task.result()
-                if audio is None:
-                    break
-                if self.state != "speaking":
-                    await self.set_state("speaking")
-                if not await self._play(audio):
-                    break
-        finally:
-            prod.cancel()
-            self.speaking = False
-
     async def say_text(self, text: str) -> None:
-        turn = Turn()
-        for s in split_sentences(text + " ")[0] or [text]:
-            await turn.sentences.put(s)
-        await turn.sentences.put(None)
-        await self.speak_stream(turn)
-        await self.set_state("idle")
+        if not text.strip():
+            return
+        r = Reply(self._next_tag())
+        self.reply = r
+        try:
+            await self._send({"type": "say", "tag": r.tag, "text": text})
+            await self._await_reply(r, listen_for_barge_in=True)
+        finally:
+            self.reply = None
+        if self.state == "speaking":
+            await self.set_state("idle")
 
-    # ------------------------------------------------------------------ conversation
-    async def record_utterance(self, require_speech_within: float | None = None) -> npt.NDArray[np.int16] | None:
-        """Push-to-talk: record while the button is held. Otherwise: VAD end-of-utterance detection."""
+    async def _await_reply(self, r: Reply, listen_for_barge_in: bool) -> str:
+        """Wait until the reply was spoken; watch the microphone for an interruption meanwhile.
+
+        Returns "done", "barge_in" or "error".
+        """
+        assert self.audio is not None
+        barge = BargeInDetector(RATE, need_ms=self.cfg.barge_in_ms, min_rms=max(450.0, self.cfg.vad_min_rms * 2.5))
+        self.detector.reset()
+        self._interrupt.clear()
+        drained: asyncio.Task[bool] | None = None
+        while True:
+            if r.ended.is_set() and drained is None:
+                if r.error == "interrupted":
+                    return "barge_in" if self._primed is not None else "done"
+                drained = asyncio.create_task(self.audio.drained(120))
+            if drained is not None and drained.done():
+                return "done" if drained.result() else ("barge_in" if self._primed is not None else "done")
+            if self._interrupt.is_set():
+                if drained is not None:
+                    drained.cancel()
+                return "barge_in" if self._primed is not None else "done"
+            try:
+                pcm = await asyncio.wait_for(self.mic_q.get(), timeout=0.1)
+            except TimeoutError:
+                pcm = None
+            voiced = False
+            while not self.aec_q.empty():  # echo-cancelled signal: Sir's voice without Jarvis' own
+                frame = self.aec_q.get_nowait()
+                if listen_for_barge_in and self.voice_barge_in and (self.audio.playing or r.first_audio is None):
+                    voiced = barge.feed(frame) or voiced
+            if pcm is None and not voiced:
+                continue
+            woke = False
+            if pcm is not None:
+                self._level = min(1.0, rms(pcm) / 6000)
+                if listen_for_barge_in:
+                    woke = self.detector.feed(pcm)
+            if not listen_for_barge_in:
+                continue
+            if woke or voiced:
+                logger.info("Barge-in (%s)", "wake word" if woke else "voice")
+                # keep what Sir said (voice barge-in) as the start of the next utterance
+                self._primed = barge.captured() if voiced else np.zeros(0, dtype=np.int16)
+                await self.interrupt()
+                if drained is not None:
+                    drained.cancel()
+                return "barge_in"
+
+    # ------------------------------------------------------------------ listening
+    async def _stt(self, audio: npt.NDArray[np.int16]) -> str:
+        r = await self.http.post(
+            "/api/voice/stt", content=pcm_to_wav(audio, RATE), headers={"Content-Type": "audio/wav"}
+        )
+        return str(r.json().get("text", "")).strip() if r.status_code == 200 else ""
+
+    async def listen(
+        self, require_speech_within: float | None
+    ) -> tuple[npt.NDArray[np.int16] | None, str | None, dict[str, float]]:
+        """Record one utterance. Returns (audio, transcript-if-already-known, timing marks)."""
+        marks: dict[str, float] = {}
         if self.ptt:
             collected: list[npt.NDArray[np.int16]] = []
             while self.ptt and sum(c.size for c in collected) < RATE * self.cfg.max_utterance_s:
                 pcm = await self.mic_q.get()
                 self._level = min(1.0, rms(pcm) / 6000)
-                await self._post_status()
                 collected.append(pcm)
-            return np.concatenate(collected) if collected else None
-        vad = EnergyVAD(
+            marks["speech_end"] = marks["endpoint"] = time.perf_counter()
+            return (np.concatenate(collected) if collected else None), None, marks
+
+        ep = Endpointer(
             RATE,
-            silence_ms=self.cfg.end_of_turn_silence_ms,
-            max_utterance_s=self.cfg.max_utterance_s,
             min_rms=self.cfg.vad_min_rms,
-            ratio=2.5,
+            spec_ms=self.cfg.speculative_stt_ms,
+            max_utterance_s=self.cfg.max_utterance_s,
         )
-        started = time.monotonic()
+        if self._primed is not None and self._primed.size:
+            ep.prime(self._primed)
+        self._primed = None
+        spec: asyncio.Task[str] | None = None
+        spec_len = 0
+        started = time.perf_counter()
         while True:
             pcm = await self.mic_q.get()
             self._level = min(1.0, rms(pcm) / 6000)
-            await self._post_status()
-            done = vad.feed(pcm)
+            for ev in ep.feed(pcm):
+                if ev == "pause":
+                    marks["speech_end"] = time.perf_counter() - ep.silence_ms / 1000
+                    audio_now = ep.audio()
+                    spec_len = audio_now.size
+                    spec = asyncio.create_task(self._stt(audio_now))
+                    marks["spec_started"] = time.perf_counter()
+                    await self._prepare()
+                elif ev == "resume":
+                    if spec is not None:
+                        spec.cancel()
+                    spec = None
+            if self.ptt:  # PTT pressed while listening → switch modes
+                return await self.listen(require_speech_within)
+            if not ep.active:
+                waited = time.perf_counter() - started
+                if (require_speech_within and waited > require_speech_within) or (
+                    not require_speech_within and waited > 8
+                ):
+                    return None, None, marks  # nobody spoke
+                continue
+            silence = ep.silence_ms
+            done = ep.too_long or silence >= self.cfg.end_of_turn_silence_ms
+            if not done and spec is not None and silence >= self.cfg.min_end_of_turn_silence_ms and spec.done():
+                with contextlib.suppress(Exception):
+                    done = looks_complete(spec.result())
             if done:
-                return done[0]
-            if self.ptt:  # PTT pressed while listening -> switch modes
-                return await self.record_utterance(require_speech_within)
-            if require_speech_within and not vad.active and time.monotonic() - started > require_speech_within:
-                return None
-            if not require_speech_within and not vad.active and time.monotonic() - started > 8:
-                return None  # woke up but nobody spoke
+                marks["endpoint"] = time.perf_counter()
+                marks.setdefault("speech_end", marks["endpoint"] - silence / 1000)
+                if not ep.has_speech:
+                    return None, None, marks
+                audio = ep.audio()
+                text: str | None = None
+                if spec is not None and spec_len == audio.size:  # nothing new since the speculative run
+                    try:
+                        text = await spec
+                        marks["stt_reused"] = 1
+                    except Exception:
+                        text = None
+                elif spec is not None:
+                    spec.cancel()
+                return audio, text, marks
 
-    async def handle_turn(self, audio: npt.NDArray[np.int16]) -> bool:
-        """Returns True if the conversation should continue (follow-up window)."""
+    async def _prepare(self) -> None:
+        tag = (self.tag + 1) % 256
+        if self._prepared == tag:
+            return
+        self._prepared = tag
+        with contextlib.suppress(Exception):
+            await self._send({"type": "prepare", "tag": tag})
+
+    # ------------------------------------------------------------------ conversation
+    async def handle_turn(self, audio: npt.NDArray[np.int16], text: str | None, marks: dict[str, float]) -> bool:
+        """Returns True if the conversation should continue (follow-up window or barge-in)."""
         await self.set_state("thinking")
-        r = await self.http.post(
-            "/api/voice/stt", content=pcm_to_wav(audio, RATE), headers={"Content-Type": "audio/wav"}
-        )
-        text = r.json().get("text", "").strip() if r.status_code == 200 else ""
+        if text is None:
+            text = await self._stt(audio)
+        marks["stt_done"] = time.perf_counter()
         if not text:
             await self.set_state("idle", "Nichts verstanden")
             return False
-        if len(re.sub(r"\W", "", text)) < 3:  # fragments like "K." (tail of the wake word, a cough) → keep listening
+        if len(re.sub(r"\W", "", text)) < 3:  # fragments like "K." (tail of the wake word, a cough)
             logger.info("Ignored fragment: %r", text)
             return True
         logger.info("Heard: %s", text)
         if _END_PHRASES.search(text) and len(text) < 40:
             await self.say_text("Sehr wohl, Sir.")
             return False
-        self.turn = Turn()
+        r = Reply(self._next_tag())
+        self._prepared = None
+        self.reply = r
         try:
-            r = await self.http.post(
-                "/api/chat", json={"message": text, "session_id": self.session_id, "channel": "voice"}
-            )
-            r.raise_for_status()
-            self.turn.session_id = self.session_id = r.json()["session_id"]
-            self.detector.reset()  # forget the audio that triggered this turn → no false barge-in
-            speaker = asyncio.create_task(self.speak_stream(self.turn))
-            # Keep listening for the wake word during the reply → barge-in.
-            while not speaker.done():
-                try:
-                    pcm = await asyncio.wait_for(self.mic_q.get(), timeout=0.2)
-                except TimeoutError:
-                    continue
-                self._level = min(1.0, rms(pcm) / 6000)
-                await self._post_status()
-                if self.detector.feed(pcm):
-                    logger.info("Barge-in")
-                    await self.interrupt()
-                    try:
-                        await asyncio.wait_for(speaker, timeout=3)
-                    except TimeoutError:
-                        speaker.cancel()
-                    self.detector.reset()
-                    return True
-            interrupted = self._stop_playback.is_set()
+            await self._send({"type": "turn", "tag": r.tag, "text": text, "session_id": self.session_id})
+            outcome = await self._await_reply(r, listen_for_barge_in=True)
         finally:
-            self.turn = None
-        return not interrupted
+            self.reply = None
+        await self._report(r, marks, text, outcome)
+        return outcome in ("done", "barge_in")
+
+    async def _report(self, r: Reply, marks: dict[str, float], text: str, outcome: str) -> None:
+        end = marks.get("speech_end", r.started)
+
+        def ms(t: float | None) -> float | None:
+            return round((t - end) * 1000, 1) if t is not None else None
+
+        record = {
+            "ts": time.time(),
+            "outcome": outcome,
+            "chars_heard": len(text),
+            "endpoint_ms": ms(marks.get("endpoint")),
+            "stt_done_ms": ms(marks.get("stt_done")),
+            "stt_reused": bool(marks.get("stt_reused")),
+            "first_audio_ms": ms(r.first_audio),  # end of Sir's speech → first audio chunk at the speaker
+            "audio_backend": type(self.audio).__name__ if self.audio else None,
+            "aec": bool(self.audio and self.audio.aec),
+            "core": r.metrics,
+            "error": r.error,
+        }
+        logger.info(
+            "Turn latency: endpoint %s ms · transcript %s ms · first audio %s ms (agent first token %s ms, "
+            "recall %s ms, tts first audio %s ms after first text)",
+            record["endpoint_ms"],
+            record["stt_done_ms"],
+            record["first_audio_ms"],
+            r.metrics.get("first_token_ms"),
+            r.metrics.get("recall_ms"),
+            _diff(r.metrics.get("first_audio_ms"), r.metrics.get("first_piece_ms")),
+        )
+        with contextlib.suppress(Exception):
+            await self._send({"type": "metrics", **record})
 
     async def run(self) -> None:
         self.loop = asyncio.get_running_loop()
-        events = asyncio.create_task(self.events())
+        tasks = [
+            asyncio.create_task(self.events()),
+            asyncio.create_task(self.speak_socket()),
+            asyncio.create_task(self._level_ticker()),
+        ]
         try:
-            self.open_mic()
+            await self.open_audio()
         except Exception as e:
             logger.error("Microphone unavailable: %s", e)
             await self.set_state("error", f"Mikrofon nicht verfügbar: {e}")
@@ -377,16 +494,16 @@ class VoiceDaemon:
         logger.info("Voice daemon ready – say 'Hey Jarvis'")
         try:
             while True:
-                if self.muted or self.stream is None:
+                if self.muted or self.audio is None:
                     await asyncio.sleep(0.3)
                     continue
                 pcm = await self.mic_q.get()
                 self._level = min(1.0, rms(pcm) / 6000)
-                await self._post_status()
                 woke = self.detector.feed(pcm)
                 if not woke and not self.ptt:
                     continue
-                _earcon()
+                if self.audio is not None:
+                    await self.audio.play(earcon())
                 self.detector.reset()
                 await self.set_state("listening")
                 follow_up = await self._converse(first=True)
@@ -396,21 +513,30 @@ class VoiceDaemon:
                 self.detector.reset()
                 await self.set_state("idle")
         finally:
-            events.cancel()
-            self.close_mic()
+            for t in tasks:
+                t.cancel()
+            await self.close_audio()
 
     async def _converse(self, first: bool) -> bool:
-        audio = await self.record_utterance(None if first else float(self.cfg.followup_window_s))
+        primed = self._primed is not None and self._primed.size > 0
+        audio, text, marks = await self.listen(None if first or primed else float(self.cfg.followup_window_s))
         if audio is None or audio.size < RATE * 0.3:
             return False
         await self.set_state("recording")
-        return await self.handle_turn(audio)
+        return await self.handle_turn(audio, text, marks)
 
 
-def _earcon() -> None:
-    sound = Path("/System/Library/Sounds/Tink.aiff")
-    if sound.exists():
-        subprocess.Popen(["afplay", "-v", "0.4", str(sound)])
+def _diff(a: float | None, b: float | None) -> float | None:
+    return round(a - b, 1) if a is not None and b is not None else None
+
+
+_bg: set[asyncio.Task[Any]] = set()
+
+
+def spawn_bg(coro: Any) -> None:
+    t = asyncio.get_running_loop().create_task(coro)
+    _bg.add(t)
+    t.add_done_callback(_bg.discard)
 
 
 def main() -> None:

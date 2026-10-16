@@ -17,6 +17,7 @@ from starlette.routing import Route
 from jarvis.api.exposure import PublicExposureGuard
 from jarvis.api.realtime import router as realtime_router
 from jarvis.api.routes import router as api_router
+from jarvis.api.voice_ws import router as voice_router
 from jarvis.app_state import VERSION, AppState
 from jarvis.config import Settings, get_settings
 from jarvis.db import dispose_engine
@@ -78,6 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(PublicExposureGuard)  # outermost: tunnel traffic only reaches /api/telephony/*
     app.include_router(api_router)
     app.include_router(realtime_router)
+    app.include_router(voice_router)
     # A Route (not Mount) so that "/mcp" is served without a trailing-slash redirect.
     app.router.routes.append(Route("/mcp", endpoint=MCPAuthApp(mcp_manager), methods=["GET", "POST", "DELETE"]))
     return app

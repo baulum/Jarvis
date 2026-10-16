@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 import wave
 from typing import Any
 
@@ -148,3 +149,183 @@ class EnergyVAD:
                 self.active = False
                 self.buffer = []
         return done
+
+
+_INCOMPLETE_TAIL = frozenset(
+    """und oder aber also dann weil dass ob wenn sodass ähm äh öhm hm mhm mit für von zu zum zur der die das den dem
+    des ein eine einen einem einer im am an auf in ich wir du er sie es noch bitte sowie bzw beziehungsweise sondern
+    nämlich sprich quasi irgendwie halt""".split()
+)
+
+
+def looks_complete(text: str) -> bool:
+    """Heuristic: does a transcript sound like a finished turn (vs. a thinking pause mid-sentence)?"""
+    t = text.strip()
+    if not t:
+        return False
+    words = re.findall(r"[\wäöüß]+", t.lower())
+    if not words:
+        return False
+    if words[-1] in _INCOMPLETE_TAIL or t.endswith((",", "-", "–", "…", "...")):
+        return False
+    return t.endswith(("?", "!", ".")) or len(words) >= 3
+
+
+class Endpointer:
+    """Streaming end-of-turn detection.
+
+    Emits ``"start"`` when speech begins, ``"pause"`` once a pause reaches ``spec_ms`` (the moment to start a
+    speculative transcription) and ``"resume"`` when speech continues after such a pause. The caller ends the
+    turn based on ``silence_ms`` and the speculative transcript (``looks_complete``): short pause when the
+    sentence is finished, the long one when it clearly is not.
+    """
+
+    def __init__(
+        self,
+        rate: int = 16000,
+        frame_ms: int = 20,
+        min_rms: float = 180,
+        ratio: float = 2.5,
+        min_speech_ms: int = 250,
+        spec_ms: int = 280,
+        max_utterance_s: float = 30,
+        preroll_ms: int = 240,
+    ) -> None:
+        self.rate = rate
+        self.frame = int(rate * frame_ms / 1000)
+        self.frame_ms = frame_ms
+        self.min_rms = min_rms
+        self.ratio = ratio
+        self.min_speech_frames = max(1, min_speech_ms // frame_ms)
+        self.spec_frames = max(1, spec_ms // frame_ms)
+        self.max_frames = int(max_utterance_s * 1000 / frame_ms)
+        self.preroll_frames = preroll_ms // frame_ms
+        self.floor = 200.0
+        self._pending = np.zeros(0, dtype=np.int16)
+        self._preroll: list[npt.NDArray[np.int16]] = []
+        self.reset()
+
+    def reset(self) -> None:
+        self.active = False
+        self.frames: list[npt.NDArray[np.int16]] = []
+        self.speech_frames = 0
+        self.silent_run = 0
+        self.paused = False
+        self.last_speech_frame = 0
+
+    def prime(self, audio: npt.NDArray[np.int16]) -> None:
+        """Start an utterance with audio that was already captured (e.g. the speech that caused a barge-in)."""
+        self.reset()
+        n = len(audio) // self.frame
+        if n:
+            self.active = True
+            self.frames = [audio[i * self.frame : (i + 1) * self.frame] for i in range(n)]
+            self.speech_frames = n
+            self.last_speech_frame = n
+
+    @property
+    def silence_ms(self) -> int:
+        return self.silent_run * self.frame_ms if self.active else 0
+
+    @property
+    def too_long(self) -> bool:
+        return len(self.frames) >= self.max_frames
+
+    @property
+    def has_speech(self) -> bool:
+        return self.speech_frames >= self.min_speech_frames
+
+    def audio(self) -> npt.NDArray[np.int16]:
+        """The utterance so far, trailing silence trimmed to 200 ms."""
+        keep = min(len(self.frames), self.last_speech_frame + 10)
+        return np.concatenate(self.frames[:keep]) if keep else np.zeros(0, dtype=np.int16)
+
+    def _is_speech(self, frame: npt.NDArray[np.int16]) -> bool:
+        level = rms(frame)
+        speech = level > max(self.min_rms, self.floor * self.ratio)
+        if not speech:
+            self.floor = 0.95 * self.floor + 0.05 * level
+        return speech
+
+    def feed(self, pcm: npt.NDArray[np.int16]) -> list[str]:
+        events: list[str] = []
+        data = np.concatenate([self._pending, pcm])
+        n = len(data) // self.frame
+        self._pending = data[n * self.frame :]
+        for i in range(n):
+            frame = data[i * self.frame : (i + 1) * self.frame]
+            speech = self._is_speech(frame)
+            if not self.active:
+                self._preroll = [*self._preroll[-(self.preroll_frames - 1) :], frame] if self.preroll_frames else []
+                if speech:
+                    self.active = True
+                    self.frames = list(self._preroll)
+                    self.speech_frames = 1
+                    self.silent_run = 0
+                    self.last_speech_frame = len(self.frames)
+                    events.append("start")
+                continue
+            self.frames.append(frame)
+            if speech:
+                self.speech_frames += 1
+                if self.paused:
+                    events.append("resume")
+                    self.paused = False
+                self.silent_run = 0
+                self.last_speech_frame = len(self.frames)
+            else:
+                self.silent_run += 1
+                if self.silent_run == self.spec_frames and self.has_speech:
+                    self.paused = True
+                    events.append("pause")
+        return events
+
+
+class BargeInDetector:
+    """Sustained speech of Sir while Jarvis talks (echo-cancelled microphone).
+
+    The residual echo sets an adaptive floor; speech must exceed ``max(min_rms, floor * ratio)`` for
+    ``need_ms`` within a short window. The recent audio is kept so the interrupting words are not lost.
+    """
+
+    def __init__(
+        self, rate: int = 16000, frame_ms: int = 20, need_ms: int = 320, min_rms: float = 450, ratio: float = 3.0
+    ) -> None:
+        self.frame = int(rate * frame_ms / 1000)
+        self.frame_ms = frame_ms
+        self.need = max(1, need_ms // frame_ms)
+        self.window = int(self.need * 1.6)
+        self.min_rms = min_rms
+        self.ratio = ratio
+        self.reset()
+
+    def reset(self) -> None:
+        self.floor = self.min_rms / self.ratio
+        self.hits: list[bool] = []
+        self.recent: list[npt.NDArray[np.int16]] = []
+        self._pending = np.zeros(0, dtype=np.int16)
+        self.warmup = 10  # ~200 ms for the echo canceller to settle after playback starts
+
+    def feed(self, pcm: npt.NDArray[np.int16]) -> bool:
+        data = np.concatenate([self._pending, pcm])
+        n = len(data) // self.frame
+        self._pending = data[n * self.frame :]
+        fired = False
+        for i in range(n):
+            frame = data[i * self.frame : (i + 1) * self.frame]
+            self.recent = [*self.recent[-(self.window + 10) :], frame]
+            level = rms(frame)
+            if self.warmup > 0:
+                self.warmup -= 1
+                self.floor = max(self.floor, 0.5 * self.floor + 0.5 * level)
+                continue
+            speech = level > max(self.min_rms, self.floor * self.ratio)
+            if not speech:
+                self.floor = 0.97 * self.floor + 0.03 * level
+            self.hits = [*self.hits[-(self.window - 1) :], speech]
+            if sum(self.hits) >= self.need:
+                fired = True
+        return fired
+
+    def captured(self) -> npt.NDArray[np.int16]:
+        return np.concatenate(self.recent) if self.recent else np.zeros(0, dtype=np.int16)
