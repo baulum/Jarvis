@@ -101,7 +101,12 @@ class AppState:
         self.agent: ClaudeCodeAgent | None = ClaudeCodeAgent(self) if settings.agent.provider == "claude_code" else None
         self.memory = MemoryService(Vault(settings.paths.vault_dir), self.embedder, self.structured_llm)
         self.bridge = BridgeClient(settings.paths.data_dir)
-        self.browser = BrowserService(settings.browser.headless, settings.browser.default_timeout_ms)
+        self.browser = BrowserService(
+            settings.browser.headless,
+            settings.browser.default_timeout_ms,
+            engine=settings.browser.engine,
+            profile_dir=settings.paths.data_dir / "edge-profile",
+        )
         self.stt = STTService(settings.voice.stt.server_url, settings.voice.language)
         self.tts = TTSService(settings.voice.tts)
         self.orchestrator = Orchestrator(self)

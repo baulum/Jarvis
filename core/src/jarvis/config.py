@@ -176,7 +176,12 @@ class CodingCfg(_Strict):
 
 
 class BrowserCfg(_Strict):
-    headless: bool = True
+    # "edge": Sir's installed Microsoft Edge, visible, with its own persistent Jarvis profile (cookies and
+    # consents persist like for a normal user → far fewer CAPTCHAs than a fresh headless browser).
+    # "chromium": Playwright's bundled browser, isolated context per call (previous behaviour).
+    engine: Literal["edge", "chromium"] = "edge"
+    headless: bool = False  # only used for "chromium"; Edge always runs as a normal window
+    search_engines: list[str] = Field(default_factory=lambda: ["bing", "duckduckgo", "google"])
     default_timeout_ms: int = 20000
     max_content_chars: int = 12000
 
