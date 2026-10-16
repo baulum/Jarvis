@@ -290,14 +290,15 @@ export interface StateInputs {
 
 /** One state for the whole interface, by priority (what Sir most needs to know right now). */
 export function deriveJarvisState(i: StateInputs): JarvisState {
-  if (i.connection === "unauthorized" || i.connection === "closed" || i.now - i.live.lastError < 4000) return "error";
+  const recentError = i.live.lastError > 0 && i.now - i.live.lastError < 4000;
+  if (i.connection === "unauthorized" || i.connection === "closed" || recentError) return "error";
   if (i.pendingApprovals > 0) return "approval";
   if (i.voice === "speaking") return "speaking";
   if (i.voice === "listening" || i.voice === "recording") return "listening";
   const streams = Object.values(i.live.streams);
   const toolRunning = streams.some((s) => s.status === "running" && (s.kind === "session" || s.kind === "task") && s.id.startsWith("tool:"));
   if (toolRunning) return "tools";
-  if (i.agentRunning && i.now - i.live.lastRecall < 1500) return "retrieving";
+  if (i.agentRunning && i.live.lastRecall > 0 && i.now - i.live.lastRecall < 1500) return "retrieving";
   if (i.agentRunning || i.voice === "thinking") return "thinking";
   if (streams.some((s) => s.kind === "coding" && s.status === "running")) return "coding";
   return "idle";
