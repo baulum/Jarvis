@@ -88,9 +88,11 @@ voice:
   min_end_of_turn_silence_ms: 650
   speculative_stt_ms: 280        # Whisper startet schon in der Pause (überlappt mit dem Endpointing)
   vad_min_rms: 180               # Mindestpegel für Sprache (niedriger = leise Silben zählen als Sprache)
-  barge_in: auto                 # auto | voice | wake_word – auto: Unterbrechen per Stimme, wenn Echo-Unterdrückung aktiv
-  barge_in_ms: 320               # so lange muss Sir sprechen, um Jarvis zu unterbrechen
-  native_audio: true             # Swift-Audiohelfer mit macOS-Echo-Unterdrückung (sonst sounddevice/afplay)
+  barge_in: auto                 # auto | voice | wake_word – auto: per Stimme nur mit Echo-Unterdrückung, sonst „Hey Jarvis“
+  barge_in_ms: 320               # so lange muss Sir sprechen, um Jarvis zu unterbrechen (Barge-in per Stimme)
+  native_audio: true             # Swift-Audiohelfer: lückenlose Streaming-Wiedergabe (sonst sounddevice/afplay)
+  echo_cancellation: false       # macOS-Echo-Unterdrückung – experimentell: dämpfte im Test auch Sirs Stimme im Raum
+  conversation_window_s: 30      # nach einer Antwort hört Jarvis so lange weiter zu – ohne „Hey Jarvis“
   max_utterance_s: 30
   followup_window_s: 6         # keep listening after a reply without wake word
 

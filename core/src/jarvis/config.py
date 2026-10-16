@@ -126,7 +126,11 @@ class VoiceCfg(_Strict):
     followup_window_s: int = 6
     barge_in: Literal["auto", "voice", "wake_word"] = "auto"  # auto: by voice when echo cancellation is active
     barge_in_ms: int = 320  # speech needed to interrupt Jarvis (voice barge-in)
-    native_audio: bool = True  # Swift helper with macOS echo cancellation (falls back to sounddevice/afplay)
+    native_audio: bool = True  # Swift helper: streaming playback without gaps (falls back to sounddevice/afplay)
+    # macOS voice processing (AEC) also suppressed Sir's voice in the room in a measurement on his Mac
+    # (room voice 30 vs. silence 20 RMS) → off by default; barge-in then works with "Hey Jarvis".
+    echo_cancellation: bool = False
+    conversation_window_s: int = 30  # after a reply Jarvis keeps listening this long – no wake word needed
 
 
 class TwilioCfg(_Strict):

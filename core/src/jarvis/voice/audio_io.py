@@ -304,11 +304,11 @@ def helper_path(data_dir: Path) -> Path:
     return data_dir / "bin" / "jarvis-audio"
 
 
-async def open_audio(data_dir: Path, on_mic: MicCallback, *, native: bool = True) -> AudioIO:
-    """Native helper with echo cancellation if available, otherwise the fallback."""
+async def open_audio(data_dir: Path, on_mic: MicCallback, *, native: bool = True, aec: bool = False) -> AudioIO:
+    """Native helper (optionally with echo cancellation) if available, otherwise the fallback."""
     helper = helper_path(data_dir)
     if native and helper.exists():
-        audio = NativeAudio(helper)
+        audio = NativeAudio(helper, aec=aec)
         try:
             await audio.start(on_mic)
             return audio

@@ -118,7 +118,9 @@ class VoiceDaemon:
         self.aec_q.put_nowait(pcm)
 
     async def open_audio(self) -> None:
-        self.audio = await open_audio(self.s.paths.data_dir, self._on_mic, native=self.cfg.native_audio)
+        self.audio = await open_audio(
+            self.s.paths.data_dir, self._on_mic, native=self.cfg.native_audio, aec=self.cfg.echo_cancellation
+        )
         self.audio.on_aec = self._on_aec
         logger.info("Audio: %s (echo cancellation %s)", type(self.audio).__name__, self.audio.aec)
 
@@ -388,6 +390,11 @@ class VoiceDaemon:
                 if (require_speech_within and waited > require_speech_within) or (
                     not require_speech_within and waited > 8
                 ):
+                    logger.info(
+                        "No speech detected (noise floor %.0f, threshold %.0f)",
+                        ep.floor,
+                        max(ep.min_rms, ep.floor * ep.ratio),
+                    )
                     return None, None, marks  # nobody spoke
                 continue
             silence = ep.silence_ms
@@ -427,9 +434,9 @@ class VoiceDaemon:
         if text is None:
             text = await self._stt(audio)
         marks["stt_done"] = time.perf_counter()
-        if not text:
-            await self.set_state("idle", "Nichts verstanden")
-            return False
+        if not text:  # noise or mumbling: stay in the conversation instead of dropping back to "ready"
+            logger.info("Nothing understood; still listening")
+            return True
         text = strip_wake_word(text)
         if len(re.sub(r"\W", "", text)) < 3:  # fragments like "K." (tail of the wake word, a cough)
             logger.info("Ignored fragment: %r", text)
@@ -513,7 +520,7 @@ class VoiceDaemon:
                 await self.set_state("listening")
                 follow_up = await self._converse(first=True)
                 while follow_up:
-                    await self.set_state("listening", "Folgefrage möglich")
+                    await self.set_state("listening", "Gespräch aktiv – einfach weitersprechen")
                     follow_up = await self._converse(first=False)
                 self.detector.reset()
                 await self.set_state("idle")
@@ -524,8 +531,11 @@ class VoiceDaemon:
 
     async def _converse(self, first: bool) -> bool:
         primed = self._primed is not None and self._primed.size > 0
-        audio, text, marks = await self.listen(None if first or primed else float(self.cfg.followup_window_s))
+        window = max(self.cfg.followup_window_s, self.cfg.conversation_window_s)
+        audio, text, marks = await self.listen(None if first or primed else float(window))
         if audio is None or audio.size < RATE * 0.3:
+            if audio is None:
+                logger.info("Conversation closed: no speech for %s s", window if not first else 8)
             return False
         await self.set_state("recording")
         return await self.handle_turn(audio, text, marks)
