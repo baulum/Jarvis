@@ -373,7 +373,8 @@ class BrowserConnector(Connector):
         return [
             ToolSpec(
                 "web_search",
-                "Recherchiert im Web (Google, Fallback DuckDuckGo). Liefert Titel, URL, Snippet.",
+                "Recherchiert im Web (Bing, DuckDuckGo und Google parallel, erster brauchbarer Treffer zählt). "
+                "Liefert Titel, URL, Snippet. Für Details danach browser_open (öffnet die Seite sichtbar in Edge).",
                 _obj(
                     {
                         "query": {"type": "string", "minLength": 2},

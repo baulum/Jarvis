@@ -1,4 +1,5 @@
 // Typed REST client for the J.A.R.V.I.S. core. Every endpoint the desktop uses lives here.
+import type { GraphDTO } from "../holo/graph/types";
 import type {
   ApprovalMode,
   AgentModelStatus,
@@ -197,6 +198,13 @@ export function createApi(opts: ApiOptions) {
     memoryPendingDecide: (mid: string, approve: boolean) =>
       post<Record<string, unknown>>(`/memory/pending/${id(mid)}`, { approve }),
     memoryGraph: () => get<MemoryGraph>("/memory/graph"),
+    graph: (limit = 1500) => get<GraphDTO>("/graph", { limit }),
+    graphCluster: (kind: string, offset: number) =>
+      get<Pick<GraphDTO, "nodes" | "edges">>(`/graph/cluster/${id(kind)}`, { offset }),
+    memoryEdit: (mid: string, body: { title?: string; content?: string; kind?: string }) =>
+      put<{ status: string }>(`/memory/items/${id(mid)}`, body),
+    memoryDelete: (mid: string) => del<{ status: string }>(`/memory/items/${id(mid)}`),
+    voiceMetrics: (limit = 20) => get<Record<string, unknown>[]>("/voice/metrics", { limit }),
     memoryExport: async (): Promise<Uint8Array> => {
       const res = await raw("GET", "/memory/export");
       return new Uint8Array(await res.arrayBuffer());

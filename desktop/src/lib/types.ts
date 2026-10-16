@@ -317,6 +317,21 @@ export interface MemoryItemDetail {
   superseded_by: string | null;
   created_at: string;
   updated_at: string;
+  layer?: string;
+  aliases?: string[];
+  confidence?: number;
+  access_count?: number;
+  last_accessed_at?: string | null;
+  related?: MemoryRelated[];
+}
+
+export interface MemoryRelated {
+  id: string | null;
+  node: string;
+  title: string;
+  kind: string;
+  relation: string;
+  direction: "in" | "out";
 }
 
 export interface MemoryGraphNode {
@@ -439,11 +454,17 @@ export type SettingsResponse = Record<string, unknown> & {
 };
 
 /** Envelope of every bus event sent over the WebSocket. */
+/** Unified event envelope (core/src/jarvis/events.py): who, what, when, which graph nodes. */
 export interface BusEvent<T = Record<string, unknown>> {
   id: string;
   type: string;
   ts: string;
   data: T;
+  seq?: number;
+  source?: string;
+  session_id?: string | null;
+  task_id?: string | null;
+  nodes?: string[];
 }
 
 export interface AgentModelStatus {
