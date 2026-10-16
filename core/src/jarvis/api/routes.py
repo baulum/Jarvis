@@ -537,6 +537,14 @@ class MemoryEdit(BaseModel):
     kind: str | None = None
 
 
+@router.post("/memory/items/{mid}/tidy")
+async def memory_tidy(mid: str, st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    try:
+        return await st.memory.tidy(_uuid(mid))
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+
+
 @router.put("/memory/items/{mid}")
 async def memory_edit(mid: str, body: MemoryEdit, st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
     try:

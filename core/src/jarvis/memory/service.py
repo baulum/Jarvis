@@ -47,6 +47,7 @@ from jarvis.memory.embeddings import LocalEmbedder
 from jarvis.memory.entities import (
     best_sentences,
     canonical_name,
+    lost_facts,
     new_information,
     query_terms,
     same_entity,
@@ -155,6 +156,10 @@ anderen Entitäten (z. B. relation "Ansprechpartner", target "Max Müller", type
 sensitive=true bei Gesundheits-, Finanzkonto-, Zugangs- oder Ausweisdaten. confidence 0..1 (wie sicher und
 dauerhaft ist der Fakt). Wenn nichts Relevantes vorkommt: {"facts": []}."""
 
+TIDY_PROMPT = """Schreibe die folgende Gedächtnisnotiz als saubere, konsolidierte Fassung neu: jede Information \
+genau einmal, keine "Ergänzung"-Marker, sachlich, vollständige Sätze. Behalte JEDE Tatsache (Namen, Beträge, \
+Daten, offene Punkte). Füge nichts hinzu. Gib nur den neuen Text als content zurück."""
+
 EPISODE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -187,6 +192,15 @@ def _split_body(body: str) -> tuple[str, str, list[str]]:
         bezug = bm.group(1).strip()
         body = (body[: bm.start()] + body[bm.end() :]).strip()
     return body.strip(), bezug, history
+
+
+def _strip_title_echo(text: str, title: str) -> str:
+    """Models like to repeat the title as a first line ("Titel: X", "# X", "X") – drop that."""
+    lines = text.strip().splitlines()
+    pattern = re.compile(r"^\s*(?:#+\s*|titel:\s*|title:\s*)?" + re.escape(title.strip()) + r"\s*:?\s*$", re.I)
+    while lines and (pattern.match(lines[0]) or not lines[0].strip()):
+        lines = lines[1:]
+    return "\n".join(lines).strip()
 
 
 def _join_body(main: str, bezug: str, history: list[str]) -> str:
@@ -821,8 +835,11 @@ class MemoryService:
                     .scalars()
                     .all()
                 )
+                facets = kind != "project"
                 for r in rows:
-                    if same_entity(title, r.title) or any(same_entity(title, a) for a in (r.aliases or [])):
+                    if same_entity(title, r.title, facets=facets) or any(
+                        same_entity(title, a, facets=facets) for a in (r.aliases or [])
+                    ):
                         return r, 1.0
             same = (
                 (
@@ -989,8 +1006,14 @@ class MemoryService:
         confidence: float = 1.0,
         actor: str = "memory-extractor",
         reason: str = "Gespräch",
+        refuse_on_loss: bool = False,
     ) -> dict[str, Any]:
-        """Rewrite a note with a consolidated version (old facts + new ones) instead of appending paraphrases."""
+        """Rewrite a note with a consolidated version (old facts + new ones) instead of appending paraphrases.
+
+        Guard: the rewrite must keep every number, name and alias of the old text (``lost_facts``). If it
+        does not, the old text stays and only genuinely new sentences are appended – or, with
+        ``refuse_on_loss`` (tidying), nothing changes at all.
+        """
         async with session_scope() as s:
             item = await s.get(MemoryItem, item_id)
             if item is None or item.status != "active":
@@ -1000,9 +1023,12 @@ class MemoryService:
             note = self.vault.read(path)
             main, _, history = _split_body(note.body)
             merged = merged_content.strip()
-            missing = new_information(main, merged)  # old sentences the rewrite dropped
-            if len(merged) < 0.5 * len(main) or len(missing) > max(1, len(main) // 400):
-                # The rewrite lost information → keep the old text and only add what is new.
+            merged = _strip_title_echo(merged, note.title)
+            lost = lost_facts(main, merged, [note.title, *note.aliases, *note.entities])
+            if lost or len(merged) < 0.4 * len(main):
+                logger.info("Consolidation of %s would lose %s – keeping the old text", path, lost[:5])
+                if refuse_on_loss:
+                    return {"status": "unchanged", "id": str(item_id), "path": path, "lost": lost[:10]}
                 fresh = new_information(merged, note.body)
                 if not fresh:
                     return {"status": "duplicate", "id": str(item_id), "path": path}
@@ -1235,7 +1261,9 @@ class MemoryService:
         for r in rows:
             for g in groups:
                 head = g[0]
-                if r.kind in KIND_GROUPS.get(head.kind, (head.kind,)) and same_entity(r.title, head.title):
+                if r.kind in KIND_GROUPS.get(head.kind, (head.kind,)) and same_entity(
+                    r.title, head.title, facets=head.kind != "project"
+                ):
                     g.append(r)
                     break
             else:
@@ -1288,14 +1316,42 @@ class MemoryService:
         await bus.publish("memory.changed", id=str(keep_id), path=keep.path, change="updated", origin="jarvis")
         return {"status": "merged", "id": str(keep_id), "path": keep.path, "merged": len(merge_ids)}
 
-    async def consolidate_duplicates(self, actor: str = "memory-consolidation") -> list[dict[str, Any]]:
+    async def consolidate_duplicates(
+        self, actor: str = "memory-consolidation", *, tidy: bool = True
+    ) -> list[dict[str, Any]]:
         """Merges every duplicate group into its most complete note (canonical name preferred)."""
         out = []
         for group in await self.find_duplicates():
             best = max(group, key=lambda g: (canonical_name(g["title"]) == g["title"].lower(), -len(g["title"])))
             others = [uuid.UUID(g["id"]) for g in group if g["id"] != best["id"]]
-            out.append(await self.merge_notes(uuid.UUID(best["id"]), others, actor))
+            res = await self.merge_notes(uuid.UUID(best["id"]), others, actor)
+            if tidy:
+                try:
+                    res["tidy"] = (await self.tidy(uuid.UUID(best["id"])))["status"]
+                except Exception as e:  # the merge itself is done; tidying is best effort
+                    logger.warning("tidy after merge failed: %s", e)
+                    res["tidy"] = "failed"
+            out.append(res)
         return out
+
+    async def tidy(self, item_id: uuid.UUID) -> dict[str, Any]:
+        """Let the utility model rewrite a note without repetitions; refused if facts would be lost."""
+        async with session_scope() as s:
+            item = await s.get(MemoryItem, item_id)
+            if item is None:
+                raise LookupError("Erinnerung nicht gefunden")
+            path = item.path
+        note = self.vault.read(path)
+        main, _, _ = _split_body(note.body)
+        data = await self.structured_llm(
+            TIDY_PROMPT,
+            f"Titel: {note.title}\n\n{main}",
+            {"type": "object", "properties": {"content": {"type": "string"}}, "required": ["content"]},
+        )
+        content = str((data or {}).get("content") or "").strip() if isinstance(data, dict) else ""
+        if not content:
+            return {"status": "unchanged", "id": str(item_id)}
+        return await self.consolidate(item_id, content, reason="bereinigt", refuse_on_loss=True)
 
     # ------------------------------------------------------------------ automatic extraction
     def enqueue_extraction(

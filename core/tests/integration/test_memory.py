@@ -81,3 +81,20 @@ async def test_llm_extraction(mem: MemoryService) -> None:
         "Notiert, Sir.",
     )
     assert facts and any("Schmidt" in f["title"] or "Schmidt" in f["content"] for f in facts)
+
+
+async def test_llm_extraction_updates_existing_entity(mem: MemoryService) -> None:
+    """Real model: a new fact about a known customer extends that note instead of creating a duplicate."""
+    base = await mem.remember("Bäckerei Schmidt", "Kunde aus Celle. Ansprechpartnerin ist Frau Schmidt.", "customer")
+    facts = await mem.extract(
+        "Bei der Bäckerei Schmidt ist ab sofort Herr Becker unser Ansprechpartner, Frau Schmidt ist in Rente.",
+        "Verstanden, Sir.",
+    )
+    assert facts
+    for f in facts:
+        await mem.apply_fact(f, {"session_id": "pytest"})
+    customers = await mem.list_items(kind="customer", status="active")
+    assert customers["total"] == 1, [i["title"] for i in customers["items"]]
+    hits = await mem.search("Wer ist Ansprechpartner bei der Bäckerei Schmidt?", limit=2)
+    assert "Becker" in hits[0]["content"]
+    assert hits[0]["id"] == base["id"] or (await mem.get(uuid.UUID(base["id"])))["status"] == "superseded"

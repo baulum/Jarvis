@@ -50,10 +50,16 @@ def fold(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def canonical_name(name: str) -> str:
-    """Matching key for an entity name: 'Kunde Müller Gebäudereinigung GmbH' -> 'müller gebäudereinigung'."""
+def canonical_name(name: str, *, facets: bool = True) -> str:
+    """Matching key for an entity name: 'Kunde Müller Gebäudereinigung GmbH' -> 'müller gebäudereinigung'.
+
+    ``facets=True`` drops a " – suffix" ("Westside Taxi UG – Kunde und Geschäftsführung" is about the
+    company). For projects the suffix names a different aspect ("Westside Taxi – Logo" vs "– Liefertermin")
+    and must be kept (``facets=False``).
+    """
     s = fold(name)
-    s = _SPLIT_TITLE.split(s, maxsplit=1)[0]  # "Westside Taxi – Logo" describes Westside Taxi
+    if facets:
+        s = _SPLIT_TITLE.split(s, maxsplit=1)[0]
     s = re.sub(r"\([^)]*\)", " ", s)
     words = [w for w in re.split(r"[\s,;]+", s) if w]
     while words and words[0].strip(".:") in _PREFIXES:
@@ -62,8 +68,8 @@ def canonical_name(name: str) -> str:
     return " ".join(w.strip(".,;:!?\"'") for w in words).strip()
 
 
-def same_entity(a: str, b: str) -> bool:
-    ka, kb = canonical_name(a), canonical_name(b)
+def same_entity(a: str, b: str, *, facets: bool = True) -> bool:
+    ka, kb = canonical_name(a, facets=facets), canonical_name(b, facets=facets)
     if not ka or not kb:
         return False
     if ka == kb:
@@ -140,3 +146,19 @@ def best_sentences(content: str, terms: list[str], limit_chars: int) -> str:
             out.append(s)
             used += len(s) + 1
     return " ".join(out) or sents[0][:limit_chars]
+
+
+_NUM = re.compile(r"\d+(?:[.,]\d+)*")
+
+
+def lost_facts(old: str, new: str, names: list[str]) -> list[str]:
+    """Facts of ``old`` missing from ``new``: numbers and the given names (title, aliases, entities)."""
+    o = re.sub(r"\*\*[^*]+\*\*:?", " ", old)  # ignore "**Ergänzung 2026-10-15:**" markers
+    new_f = fold(new)
+    new_digits = {n.replace(",", ".") for n in _NUM.findall(new)}
+    lost = [n for n in dict.fromkeys(_NUM.findall(o)) if n.replace(",", ".") not in new_digits]
+    for name in dict.fromkeys(names):
+        key = canonical_name(name, facets=False)
+        if key and fold(name) in fold(o) and key not in new_f and fold(name) not in new_f:
+            lost.append(name)
+    return lost

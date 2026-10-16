@@ -284,3 +284,22 @@ async def test_memory_changed_events_carry_node_ids(mem: MemoryService) -> None:
     finally:
         col.close()
     assert evs and evs[-1].nodes[0] == f"memory:{r['id']}" and evs[-1].data["change"] == "added"
+
+
+async def test_project_facets_are_not_duplicates(mem: MemoryService) -> None:
+    a = await mem.remember("Westside Taxi – Logo und Fahrzeugbilder", "Logo liegt als SVG vor.", "project")
+    b = await mem.remember("Westside Taxi – Liefertermin Website", "Lieferung am Freitag.", "project")
+    assert a["id"] != b["id"] and await mem.find_duplicates() == []
+
+
+async def test_tidy_rewrites_but_refuses_information_loss(mem: MemoryService) -> None:
+    r = await mem.remember("Müller Gebäudereinigung", "Neuer Kunde. Website für 499 Euro.", "customer")
+    await mem.remember("Müller Gebäudereinigung", "Ansprechpartner ist Max Müller aus Soltau.", "customer")
+    mem.llm.answers.append({"content": "Neuer Kunde."})  # drops facts -> must not be applied verbatim
+    await mem.tidy(uuid.UUID(r["id"]))
+    body = mem.vault.read(r["path"]).body
+    assert "499 Euro" in body and "Max Müller" in body
+    mem.llm.answers.append({"content": "Neuer Kunde, Website für 499 Euro. Ansprechpartner ist Max Müller aus Soltau."})
+    await mem.tidy(uuid.UUID(r["id"]))
+    body = mem.vault.read(r["path"]).body
+    assert "Ergänzung" not in body.split("## Verlauf")[0] and "Max Müller" in body and "499" in body
