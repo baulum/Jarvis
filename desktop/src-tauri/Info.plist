@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The app starts the voice daemon, so macOS attributes microphone access to J.A.R.V.I.S. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>J.A.R.V.I.S. hört auf „Hey Jarvis“ und versteht deine gesprochenen Befehle.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>J.A.R.V.I.S. steuert auf deinen Befehl andere Apps (z. B. Kurzbefehle und Skripte).</string>
+</dict>
+</plist>

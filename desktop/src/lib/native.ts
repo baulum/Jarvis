@@ -90,3 +90,14 @@ export async function onTrayAction(cb: (a: TrayAction) => void): Promise<Unliste
   if (!inTauri()) return () => undefined;
   return listen<TrayAction>("tray-action", (e) => cb(e.payload));
 }
+
+export interface ServicesEvent {
+  state: "starting" | "running" | "error";
+  detail?: string;
+}
+
+/** Background services (core, voice, whisper, bridge) are started by the app itself. */
+export async function onServices(cb: (e: ServicesEvent) => void): Promise<UnlistenFn> {
+  if (!inTauri()) return () => undefined;
+  return listen<ServicesEvent>("services", (e) => cb(e.payload));
+}

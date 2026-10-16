@@ -7,6 +7,7 @@
 //! - hide-to-tray on close, optional launch at login.
 
 mod core_client;
+mod launcher;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -49,10 +50,11 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Öffnen", true, None::<&str>)?;
     let ptt = MenuItem::with_id(app, "ptt", "Push-to-Talk starten", true, None::<&str>)?;
     let kill = MenuItem::with_id(app, "killswitch", "Not-Aus", true, None::<&str>)?;
+    let restart = MenuItem::with_id(app, "restart", "Dienste neu starten", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Beenden", true, Some("CmdOrCtrl+Q"))?;
     let sep_a = PredefinedMenuItem::separator(app)?;
     let sep_b = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&open, &ptt, &sep_a, &kill, &sep_b, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &ptt, &sep_a, &kill, &restart, &sep_b, &quit])?;
 
     let ptt_item = ptt.clone();
     TrayIconBuilder::with_id("jarvis-tray")
@@ -87,6 +89,13 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                         r#"{"engaged":true,"reason":"Not-Aus über die Menüleiste"}"#,
                     );
                     report(&handle, "killswitch", outcome);
+                });
+            }
+            "restart" => {
+                let handle = app.clone();
+                std::thread::spawn(move || {
+                    launcher::stop_services();
+                    launcher::start_services(&handle);
                 });
             }
             "quit" => app.exit(0),
@@ -135,6 +144,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![get_core_token, frontend_log])
         .setup(move |app| {
             build_tray(app)?;
+            launcher::start_services(app.handle());
             if let Err(e) = app.global_shortcut().register(summon) {
                 eprintln!("[jarvis-desktop] global shortcut Cmd+Shift+J unavailable: {e}");
             }
@@ -154,11 +164,15 @@ pub fn run() {
         .expect("error while building the J.A.R.V.I.S. desktop app");
 
     app.run(|handle, event| {
+        // Quitting J.A.R.V.I.S. stops its services too (Ollama and PostgreSQL keep running).
+        if let RunEvent::Exit = event {
+            launcher::stop_services();
+        }
         #[cfg(target_os = "macos")]
         if let RunEvent::Reopen { .. } = event {
             show_main_window(handle);
         }
         #[cfg(not(target_os = "macos"))]
-        let _ = (handle, event);
+        let _ = handle;
     });
 }

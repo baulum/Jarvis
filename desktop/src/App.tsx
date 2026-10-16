@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, type ComponentType } from "react";
 import { Shell } from "./components/Shell";
 import { ErrorState } from "./components/ui";
-import { loadCoreToken, nativeLog, onTrayAction } from "./lib/native";
+import { loadCoreToken, nativeLog, onServices, onTrayAction } from "./lib/native";
 import { api, startRealtime, useApp, type ViewId } from "./store/app";
 import { AgentsView } from "./views/AgentsView";
 import { ApprovalsView } from "./views/ApprovalsView";
@@ -45,7 +45,14 @@ export function App() {
     const unlisten = onTrayAction((a) =>
       pushToast({ tone: a.ok ? "ok" : "bad", title: a.ok ? "Erledigt" : "Aktion fehlgeschlagen", body: a.detail || a.action }),
     );
-    return () => void unlisten.then((u) => u());
+    const unlistenServices = onServices((e) => {
+      if (e.state === "error") pushToast({ tone: "bad", title: "Dienste konnten nicht starten", body: e.detail ?? "" });
+      if (e.state === "running") void useApp.getState().refreshStatus();
+    });
+    return () => {
+      void unlisten.then((u) => u());
+      void unlistenServices.then((u) => u());
+    };
   }, [setToken, pushToast]);
 
   if (tokenError) {
@@ -53,7 +60,7 @@ export function App() {
       <div className="flex h-full items-center justify-center p-10">
         <div className="max-w-xl">
           <ErrorState message={`Kein Zugang zum Core: ${tokenError}`} />
-          <p className="mt-3 text-sm text-ink-dim">Einmalig im Terminal ausführen: <span className="type-data">cd core && uv run jarvisctl init</span></p>
+          <p className="mt-3 text-sm text-ink-dim">Einmalig einrichten: <span className="type-data">scripts/setup.sh</span> (legt Zugangsschlüssel an und installiert die App).</p>
         </div>
       </div>
     );

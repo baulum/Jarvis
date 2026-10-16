@@ -74,21 +74,10 @@ fi
 step "Jarvis-Geräte"
 (cd "$ROOT/core" && uv run jarvisctl init)
 
-step "macOS Bridge (Swift)"
-# A stable signing identity keeps the macOS privacy grants across rebuilds (ad-hoc signatures lose them).
-if [ -z "${SIGN_IDENTITY:-}" ]; then
-  SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)"
-  export SIGN_IDENTITY="${SIGN_IDENTITY:--}"
-fi
-(cd "$ROOT/bridge" && ./scripts/build-app.sh)
-osascript -e 'quit app "JarvisBridge"' 2>/dev/null || true
-ditto "$ROOT/bridge/build/JarvisBridge.app" /Applications/JarvisBridge.app && echo "✓ JarvisBridge nach /Applications installiert"
-
-step "Desktop-App (Tauri)"
-if [ -f "$ROOT/desktop/package.json" ]; then
-  (cd "$ROOT/desktop" && pnpm install --frozen-lockfile && pnpm tauri build --bundles app)
-fi
+step "Apps bauen und nach /Applications installieren"
+(cd "$ROOT/desktop" && pnpm install --frozen-lockfile)
+"$ROOT/scripts/install-app.sh"
 
 step "Prüfung"
 (cd "$ROOT/core" && uv run jarvisctl doctor) || true
-echo -e "\nFertig. Starten mit: scripts/start.sh"
+echo -e "\nFertig. J.A.R.V.I.S. liegt in Programme und startet alle Dienste selbst."

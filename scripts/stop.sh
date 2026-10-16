@@ -11,4 +11,5 @@ for name in voice core whisper; do
     rm -f "$RUN/$name.pid"
   fi
 done
-osascript -e 'quit app "JarvisBridge"' 2>/dev/null && echo "■ JarvisBridge beendet" || true
+# SIGTERM instead of AppleScript "quit": no Automation prompt when the desktop app runs this.
+pkill -TERM -f "JarvisBridge.app/Contents/MacOS/JarvisBridge" && echo "■ JarvisBridge beendet" || true
