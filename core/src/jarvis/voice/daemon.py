@@ -172,6 +172,7 @@ class VoiceDaemon:
                 async with websockets.connect(url, ping_interval=20) as ws:
                     backoff = 1.0
                     logger.info("Connected to core event stream")
+                    await self.set_state(self.state)  # a restarted core knows nothing about us yet
                     async for raw in ws:
                         ev = json.loads(raw)
                         t, d = ev.get("type"), ev.get("data", {})
