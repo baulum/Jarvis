@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 Transport = Literal["hybrid", "http", "websocket"]
+ACK_PHRASE = "Einen Moment, Sir."
 
 _ABBREV = re.compile(
     r"(?:\b(?:bzw|ca|nr|dr|hr|fr|evtl|ggf|inkl|usw|vgl|bspw|mio|mrd|tel|str|"
@@ -180,6 +181,7 @@ class SpeechTurn:
         self._changed = asyncio.Event()
         self._finished = False
         self._cancelled = False
+        self._acked = False
         self._sem = asyncio.Semaphore(max_prefetch)
         self._sender: asyncio.Task[None] | None = None
         self.metrics: dict[str, Any] = {"transport": transport, "pieces": 0, "chars": 0}
@@ -220,6 +222,13 @@ class SpeechTurn:
         for piece in self.chunker.feed(delta):
             for s in self.guard.admit(piece):
                 self._enqueue(s)
+
+    def tool_started(self) -> None:
+        """Tools can take many seconds before the first word: acknowledge once – without claiming anything."""
+        if not self._acked and self.metrics["pieces"] == 0 and not self.chunker.buf.strip() and not self.guard.held:
+            self._acked = True
+            self._enqueue(ACK_PHRASE)
+            self.metrics["acknowledged"] = True
 
     def tool_finished(self, ok: bool) -> None:
         for s in self.guard.on_tool(ok):

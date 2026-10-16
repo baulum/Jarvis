@@ -195,3 +195,33 @@ async def test_guarded_claim_spoken_only_after_tool() -> None:
     turn.tool_finished(True)
     m = await turn.finish()
     assert b"".join(out) == "H:Sehr wohl, Sir.|H:Ich kümmere mich darum.|".encode() and m["dropped_claims"] == 0
+
+
+async def test_tool_start_acknowledges_once_when_nothing_was_said() -> None:
+    out: list[bytes] = []
+
+    async def sink(b: bytes) -> None:
+        out.append(b)
+
+    turn = SpeechTurn(FakeTTS(), sink, transport="http")  # type: ignore[arg-type]
+    await turn.prepare()
+    turn.tool_started()
+    turn.tool_started()  # second tool: no second acknowledgement
+    turn.tool_finished(True)
+    turn.text("Der Termin ist eingetragen. ")
+    await turn.finish()
+    assert b"".join(out) == b"H:Einen Moment, Sir.|H:Der Termin ist eingetragen.|"
+
+
+async def test_no_acknowledgement_after_speech_started() -> None:
+    out: list[bytes] = []
+
+    async def sink(b: bytes) -> None:
+        out.append(b)
+
+    turn = SpeechTurn(FakeTTS(), sink, transport="http")  # type: ignore[arg-type]
+    await turn.prepare()
+    turn.text("Ich schaue nach. ")
+    turn.tool_started()
+    await turn.finish()
+    assert b"".join(out) == b"H:Ich schaue nach.|"

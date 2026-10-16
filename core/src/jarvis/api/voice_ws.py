@@ -103,6 +103,8 @@ class VoiceSocket:
             async def on_event(ev: AgentEvent) -> None:
                 if ev.type == "delta" and ev.text:
                     speech.text(ev.text)
+                elif ev.type == "tool_started":
+                    speech.tool_started()
                 elif ev.type == "tool_completed":
                     speech.tool_finished(True)
                 elif ev.type == "tool_failed":
