@@ -74,6 +74,7 @@ class _Proc:
     last_used: float = field(default_factory=time.monotonic)
     busy: bool = False
     stderr_tail: list[str] = field(default_factory=list)
+    tool_names: dict[str, str] = field(default_factory=dict)  # tool_use id -> tool name (for results)
 
     @property
     def alive(self) -> bool:
@@ -325,16 +326,27 @@ class ClaudeCodeAgent:
             for block in ev.get("message", {}).get("content", []) or []:
                 if block.get("type") == "tool_use":
                     name = str(block.get("name", "")).removeprefix(MCP_PREFIX)
+                    use_id = str(block.get("id") or "")
+                    if use_id:
+                        p.tool_names[use_id] = name
                     out.append(
-                        AgentEvent("tool_started", data={"name": name, "args": json.dumps(block.get("input"))[:300]})
+                        AgentEvent(
+                            "tool_started",
+                            data={"name": name, "tool_use_id": use_id, "args": json.dumps(block.get("input"))[:300]},
+                        )
                     )
             return out
         if t == "user":
             out = []
             for block in ev.get("message", {}).get("content") or []:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
+                    use_id = str(block.get("tool_use_id") or "")
+                    name = p.tool_names.pop(use_id, "tool")
                     out.append(
-                        AgentEvent("tool_failed" if block.get("is_error") else "tool_completed", data={"name": "tool"})
+                        AgentEvent(
+                            "tool_failed" if block.get("is_error") else "tool_completed",
+                            data={"name": name, "tool_use_id": use_id},
+                        )
                     )
             return out
         if t == "result":

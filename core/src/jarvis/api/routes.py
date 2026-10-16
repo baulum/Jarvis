@@ -116,7 +116,7 @@ async def agent_model_set(body: ModelBody, st: AppState = StateDep, p: Principal
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     await audit(p.label, "agent.model", details=body.model_dump())
-    status = st.model_router.status(body.session_id)
+    status: dict[str, Any] = st.model_router.status(body.session_id)
     await bus.publish("agent.model", **status)
     return status
 
@@ -531,6 +531,20 @@ async def memory_correct(
         raise HTTPException(404, str(e)) from e
 
 
+class MemoryEdit(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    content: str | None = Field(default=None, max_length=50000)
+    kind: str | None = None
+
+
+@router.put("/memory/items/{mid}")
+async def memory_edit(mid: str, body: MemoryEdit, st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    try:
+        return await st.memory.edit(_uuid(mid), p.label, title=body.title, content=body.content, kind=body.kind)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+
+
 @router.delete("/memory/items/{mid}")
 async def memory_delete(mid: str, st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
     try:
@@ -550,6 +564,39 @@ async def memory_pending(mid: str, body: DecisionBody, st: AppState = StateDep, 
 @router.get("/memory/graph")
 async def memory_graph(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
     return await st.memory.graph()
+
+
+@router.get("/memory/duplicates")
+async def memory_duplicates(st: AppState = StateDep, p: Principal = Owner) -> list[list[dict[str, Any]]]:
+    return await st.memory.find_duplicates()
+
+
+@router.post("/memory/consolidate")
+async def memory_consolidate(st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    """Merge notes that describe the same entity; merged notes stay in the vault as superseded."""
+    merged = await st.memory.consolidate_duplicates(actor=p.label)
+    return {"merged": merged}
+
+
+# ------------------------------------------------------------------ live knowledge graph (3D interface)
+@router.get("/graph")
+async def graph(limit: int = 1500, st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    data = await st.graph.build(min(max(limit, 50), 5000))
+    if p.role != "owner":  # non-owner devices never see sensitive titles
+        hidden = {n["id"] for n in data["nodes"] if n["meta"].get("sensitivity") == "sensitive"}
+        data = {
+            **data,
+            "nodes": [n for n in data["nodes"] if n["id"] not in hidden],
+            "edges": [e for e in data["edges"] if e["source"] not in hidden and e["target"] not in hidden],
+        }
+    return data
+
+
+@router.get("/graph/cluster/{kind}")
+async def graph_cluster(
+    kind: str, offset: int = 0, limit: int = 300, st: AppState = StateDep, p: Principal = Reader
+) -> dict[str, Any]:
+    return await st.graph.cluster(kind, max(0, offset), min(limit, 1000))
 
 
 @router.get("/memory/export")

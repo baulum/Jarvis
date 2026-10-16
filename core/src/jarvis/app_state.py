@@ -36,6 +36,7 @@ from jarvis.connectors.telephony import TelephonyConnector
 from jarvis.db import init_engine, session_scope
 from jarvis.db.models import Approval, Task, UsageRecord
 from jarvis.events import Event, bus
+from jarvis.graph import GraphBuilder
 from jarvis.jobs.engine import TaskEngine
 from jarvis.jobs.notify import Notifier
 from jarvis.jobs.playbooks import register_playbooks
@@ -112,6 +113,7 @@ class AppState:
         self.connectors = ConnectorManager(self)
         self.mcp_hub = MCPClientHub(self)
         self.voice_state: dict[str, Any] = {"connected": False}
+        self.graph = GraphBuilder(self)
 
         for conn_cls in (
             SystemConnector,

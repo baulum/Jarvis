@@ -25,7 +25,7 @@ from jarvis.agent.model_router import MODELS, parse_command
 from jarvis.agent.persona import turn_instructions
 from jarvis.db import session_scope
 from jarvis.db.models import ChatMessage, ChatSession
-from jarvis.events import bus
+from jarvis.events import activity, bus
 from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
 
@@ -106,14 +106,20 @@ class Orchestrator:
             for m in reversed(rows)
         ]
 
-    async def _store(self, session_id: uuid.UUID, role: str, content: str, meta: dict[str, Any] | None = None) -> None:
+    async def _store(
+        self, session_id: uuid.UUID, role: str, content: str, meta: dict[str, Any] | None = None
+    ) -> uuid.UUID:
         async with session_scope() as s:
-            s.add(ChatMessage(session_id=session_id, role=role, content=content, meta=meta or {}))
+            msg = ChatMessage(session_id=session_id, role=role, content=content, meta=meta or {})
+            s.add(msg)
             sess = await s.get(ChatSession, session_id)
             if sess is not None:
                 sess.last_activity_at = datetime.now(UTC)
+                sess.summarized_at = None  # new activity → the episode is summarised again later
                 if not sess.title and role == "user":
                     sess.title = content[:80]
+            await s.flush()
+            return msg.id
 
     # ------------------------------------------------------------------ main entry
     async def handle(
@@ -127,10 +133,22 @@ class Orchestrator:
         images: list[str] | None = None,
     ) -> TurnResult:
         sess = await self.get_or_create_session(principal, channel, session_id)
-        await self._store(sess.id, "user", text, {"channel": channel})
+        with activity(session_id=str(sess.id)):
+            return await self._handle_turn(sess, principal, channel, text, on_event, images)
+
+    async def _handle_turn(
+        self,
+        sess: ChatSession,
+        principal: Principal,
+        channel: str,
+        text: str,
+        on_event: EventCallback | None,
+        images: list[str] | None,
+    ) -> TurnResult:
+        user_msg_id = await self._store(sess.id, "user", text, {"channel": channel})
         await bus.publish("chat.user", session_id=str(sess.id), text=text, channel=channel)
 
-        memory_context = await self._recall(text, principal)
+        memory_context = await self._recall(text, principal, channel)
         instructions = turn_instructions(channel, memory_context=memory_context, tainted=sess.tainted)
 
         async def emit(ev: AgentEvent) -> None:
@@ -175,19 +193,26 @@ class Orchestrator:
             and not result.error
             and principal.role in ("owner", "voice_owner", "telegram_owner", "phone_owner")
         ):
-            self.state.memory.enqueue_extraction(text, result.text, {"session_id": str(sess.id), "channel": channel})
+            recent = await self.history(sess.id, limit=8)
+            self.state.memory.enqueue_extraction(
+                text,
+                result.text,
+                {"session_id": str(sess.id), "channel": channel},
+                context=[{"role": m["role"], "content": m["content"]} for m in recent[:-2]],
+                message_id=str(user_msg_id),
+            )
         return result
 
-    async def _recall(self, text: str, principal: Principal) -> str:
-        if len(text) < 8:
-            return ""
+    async def _recall(self, text: str, principal: Principal, channel: str = "desktop") -> str:
+        """Hybrid memory lookup before the agent runs. Spoken turns get a tight budget (first audio matters)."""
+        budget = 250.0 if channel in ("voice", "phone") else None
         try:
-            hits = await self.state.memory.search(text, limit=4, include_sensitive=principal.role == "owner")
+            return await self.state.memory.context_for(
+                text, include_sensitive=principal.role == "owner", budget_ms=budget
+            )
         except Exception:
             logger.warning("Memory recall failed", exc_info=True)
             return ""
-        lines = [f"- {h['title']}: {h['content'][:400]} ({h['path']})" for h in hits if h["score"] >= 0.55]
-        return "\n".join(lines)
 
     async def _run_hermes(
         self,
@@ -278,7 +303,8 @@ class Orchestrator:
             elif principal.role in ("owner", "voice_owner", "telegram_owner", "phone_owner"):
                 router.set(cmd.model, cmd.scope, str(sess.id))
                 await audit(principal.label, "agent.model", details={"model": cmd.model, "scope": cmd.scope})
-                await bus.publish("agent.model", **router.status(str(sess.id)))
+                status: dict[str, Any] = router.status(str(sess.id))
+                await bus.publish("agent.model", **status)
             if not cmd.remainder:
                 label = MODELS[cmd.model]["label"] if cmd.model else "automatische Modellwahl"
                 where = {
@@ -391,7 +417,7 @@ class Orchestrator:
 
 
 def _safe_event_data(data: dict[str, Any]) -> dict[str, Any]:
-    keep = ("name", "tool", "status", "error", "duration_ms", "run_id", "preview", "args")
+    keep = ("name", "tool", "tool_use_id", "status", "error", "duration_ms", "run_id", "preview", "args")
     out = {k: data[k] for k in keep if k in data}
     if "args" in out:
         out["args"] = str(out["args"])[:300]

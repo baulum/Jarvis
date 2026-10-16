@@ -28,7 +28,7 @@ from sqlalchemy.orm import selectinload
 
 from jarvis.db import session_scope
 from jarvis.db.models import Task, TaskStep
-from jarvis.events import Event, bus
+from jarvis.events import Event, activity, bus
 from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
 from jarvis.tools.registry import ToolContext
@@ -350,7 +350,8 @@ class TaskEngine:
                 self, task_id, step.id, step.idx, dict(task.params), context, principal, task.session_id, previous
             )
             try:
-                out = await sd.fn(sctx) or {}
+                with activity(task_id=str(task_id), session_id=str(task.session_id) if task.session_id else None):
+                    out = await sd.fn(sctx) or {}
             except StepWait as w:
                 await self._set_step(
                     step.id,

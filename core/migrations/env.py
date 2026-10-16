@@ -12,7 +12,8 @@ from jarvis.db import database_url
 from jarvis.db.models import Base
 
 config = context.config
-if config.config_file_name is not None:
+# Embedded in the running core: keep the core's logging configuration.
+if config.config_file_name is not None and not config.attributes.get("embedded"):
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata

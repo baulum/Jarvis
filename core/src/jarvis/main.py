@@ -20,6 +20,7 @@ from jarvis.api.routes import router as api_router
 from jarvis.app_state import VERSION, AppState
 from jarvis.config import Settings, get_settings
 from jarvis.db import dispose_engine
+from jarvis.db.migrate import upgrade_to_head
 from jarvis.logging_setup import setup_logging
 from jarvis.mcp.server import MCPAuthApp, build_mcp
 
@@ -45,6 +46,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with mcp_manager.run():
+            try:
+                await upgrade_to_head()
+            except Exception:
+                logger.exception("Database migration failed")
             await state.start()
             logger.info("J.A.R.V.I.S. core %s listening on %s:%s", VERSION, settings.server.host, settings.server.port)
             try:

@@ -96,7 +96,7 @@ def _visible(ev: Event, p: Principal) -> bool:
     if p.role == "owner":
         return True
     # non-owner devices do not see audit/memory internals
-    return not ev.type.startswith(("audit.", "memory.pending"))
+    return not ev.type.startswith(("audit.", "memory.pending", "memory.recalled"))
 
 
 # ------------------------------------------------------------------ telephony

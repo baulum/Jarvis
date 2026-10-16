@@ -21,14 +21,39 @@ KIND_FOLDERS: dict[str, str] = {
     "preference": "Präferenzen",
     "project": "Projekte",
     "customer": "Kunden",
-    "process": "Abläufe",
-    "decision": "Entscheidungen",
-    "recurring": "Wiederkehrend",
-    "technical": "Technik",
+    "company": "Unternehmen",
     "person": "Personen",
-    "conversation": "Gespräche",
+    "process": "Abläufe",  # procedural memory
+    "recurring": "Wiederkehrend",
+    "decision": "Entscheidungen",
+    "commitment": "Aufgaben",  # tasks and obligations Sir mentioned
+    "appointment": "Termine",
+    "email": "E-Mails",
+    "document": "Dokumente",
+    "technical": "Technik",  # semantic memory: facts and knowledge
+    "conversation": "Gespräche",  # episodic memory: one note per conversation
     "note": "Notizen",
 }
+# Memory layers (for retrieval weighting and the UI); short-term memory is the live conversation itself.
+LAYERS: dict[str, str] = {
+    "conversation": "episodic",
+    "appointment": "episodic",
+    "email": "episodic",
+    "technical": "semantic",
+    "note": "semantic",
+    "document": "semantic",
+    "project": "project",
+    "customer": "customer",
+    "company": "customer",
+    "person": "customer",
+    "preference": "preference",
+    "decision": "decision",
+    "process": "procedural",
+    "recurring": "procedural",
+    "commitment": "procedural",
+}
+# Kinds that describe one real-world entity: a second note about the same name is a duplicate.
+ENTITY_KINDS = ("customer", "company", "person", "project")
 FOLDER_KINDS = {v: k for k, v in KIND_FOLDERS.items()}
 _FORBIDDEN = re.compile(r'[\\/:*?"<>|#^\[\]\x00-\x1f]')
 _LINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
@@ -55,6 +80,10 @@ class Note:
     source: dict[str, Any] = field(default_factory=dict)
     entities: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    confidence: float = 1.0
+    aliases: list[str] = field(default_factory=list)
+    # typed relations: {"relation": "arbeitet bei", "target": "Müller GmbH", "kind": "company"}
+    relations: list[dict[str, str]] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
     path: str = ""  # vault-relative
 
@@ -62,6 +91,7 @@ class Note:
     def links(self) -> list[str]:
         found = {m.group(1).strip() for m in _LINK_RE.finditer(self.body)}
         found.update(e for e in self.entities if e)
+        found.update(r["target"] for r in self.relations if r.get("target"))
         found.discard(self.title)
         return sorted(found)
 
@@ -80,6 +110,12 @@ class Note:
             fm["entities"] = self.entities
         if self.tags:
             fm["tags"] = self.tags
+        if self.confidence < 1.0:
+            fm["confidence"] = round(self.confidence, 2)
+        if self.aliases:
+            fm["aliases"] = self.aliases  # Obsidian understands `aliases` natively
+        if self.relations:
+            fm["relations"] = self.relations
         fm.update(self.extra)
         return fm
 
@@ -173,7 +209,29 @@ def parse_note(text: str, rel: str) -> Note:
         title = hm.group(1).strip()
         body = body[hm.end() :]
     folder = Path(rel).parts[0] if len(Path(rel).parts) > 1 else ""
-    known = {"id", "kind", "created", "updated", "status", "sensitivity", "source", "entities", "tags"}
+    known = {
+        "id",
+        "kind",
+        "created",
+        "updated",
+        "status",
+        "sensitivity",
+        "source",
+        "entities",
+        "tags",
+        "confidence",
+        "aliases",
+        "relations",
+    }
+    try:
+        confidence = max(0.0, min(1.0, float(fm.get("confidence", 1.0))))
+    except (TypeError, ValueError):
+        confidence = 1.0
+    relations = [
+        {"relation": str(r.get("relation") or "bezug"), "target": str(r["target"]), "kind": str(r.get("kind") or "")}
+        for r in (fm.get("relations") or [])
+        if isinstance(r, dict) and r.get("target")
+    ]
     return Note(
         title=title,
         body=body.strip(),
@@ -186,6 +244,9 @@ def parse_note(text: str, rel: str) -> Note:
         source=dict(fm["source"]) if isinstance(fm.get("source"), dict) else {},
         entities=[str(e) for e in (fm.get("entities") or []) if e],
         tags=[str(t) for t in (fm.get("tags") or []) if t],
+        confidence=confidence,
+        aliases=[str(a) for a in (fm.get("aliases") or []) if a] if isinstance(fm.get("aliases"), list) else [],
+        relations=relations,
         extra={k: v for k, v in fm.items() if k not in known},
         path=rel,
     )

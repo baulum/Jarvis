@@ -28,7 +28,7 @@ from sqlalchemy.exc import IntegrityError
 from jarvis.config import RISK_ORDER, Permissions
 from jarvis.db import session_scope
 from jarvis.db.models import Approval, ChatSession, ToolExecution
-from jarvis.events import bus
+from jarvis.events import activity, bus, current_activity
 from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
 from jarvis.security.guards import KillSwitch, rate_limiter
@@ -305,19 +305,29 @@ class ToolExecutor:
             if dup is not None:
                 return dup
 
+        call_id = uuid.uuid4().hex[:12]
+        task_id = ctx.extra.get("task_id") or current_activity().task_id
         await bus.publish(
             "tool.started",
             tool=spec.name,
+            connector=spec.connector,
+            call_id=call_id,
             risk=risk,
             actor=ctx.principal.label,
             session_id=str(ctx.session_id) if ctx.session_id else None,
+            task_id=task_id,
         )
         t0 = time.perf_counter()
         status: Status = "ok"
         message = ""
         data: Any = None
         try:
-            data = await asyncio.wait_for(spec.handler(ctx, args), timeout=spec.timeout_s)
+            with activity(
+                session_id=str(ctx.session_id) if ctx.session_id else None,
+                task_id=task_id,
+                tool=spec.name,
+            ):
+                data = await asyncio.wait_for(spec.handler(ctx, args), timeout=spec.timeout_s)
         except TimeoutError:
             status, message = "error", f"Zeitüberschreitung nach {spec.timeout_s:.0f}s"
         except ToolUserError as e:
@@ -347,6 +357,9 @@ class ToolExecutor:
         await bus.publish(
             "tool.finished",
             tool=spec.name,
+            connector=spec.connector,
+            call_id=call_id,
+            task_id=task_id,
             status=status,
             duration_ms=duration_ms,
             actor=ctx.principal.label,
