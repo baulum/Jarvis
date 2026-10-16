@@ -47,13 +47,15 @@ class VoiceSocket:
         self._lock = asyncio.Lock()
         self.speech: dict[int, SpeechTurn] = {}
         self.runs: dict[int, asyncio.Task[None]] = {}
+        self.sessions: dict[int, uuid.UUID] = {}  # tag → conversation of that turn (for a targeted cancel)
         self.rate = 24000
         cfg = state.settings.voice.tts.fish_audio
         self.transport = "hybrid" if cfg.streaming else "http"
 
     async def send_json(self, obj: dict[str, Any]) -> None:
         async with self._lock:
-            await self.ws.send_text(json.dumps(obj, ensure_ascii=False, default=str))
+            with contextlib.suppress(WebSocketDisconnect, RuntimeError):  # daemon went away mid-turn
+                await self.ws.send_text(json.dumps(obj, ensure_ascii=False, default=str))
 
     def _speech(self, tag: int) -> SpeechTurn:
         st = self.speech.get(tag)
@@ -61,7 +63,8 @@ class VoiceSocket:
 
             async def audio(pcm: bytes, tag: int = tag) -> None:
                 async with self._lock:
-                    await self.ws.send_bytes(bytes([tag & 0xFF]) + pcm)
+                    with contextlib.suppress(WebSocketDisconnect, RuntimeError):
+                        await self.ws.send_bytes(bytes([tag & 0xFF]) + pcm)
 
             async def piece(text: str, tag: int = tag) -> None:
                 await self.send_json({"type": "piece", "tag": tag, "text": text})
@@ -94,6 +97,7 @@ class VoiceSocket:
         try:
             sid = uuid.UUID(session_id) if session_id else None
             sess = await orch.get_or_create_session(self.principal, "voice", sid)
+            self.sessions[tag] = sess.id
             await self.send_json({"type": "session", "tag": tag, "session_id": str(sess.id)})
 
             async def on_event(ev: AgentEvent) -> None:
@@ -115,6 +119,7 @@ class VoiceSocket:
         metrics.update(result_timings)
         metrics["turn_ms"] = round((time.perf_counter() - t0) * 1000, 1)
         self.speech.pop(tag, None)
+        self.sessions.pop(tag, None)
         await self.send_json({"type": "speech_end", "tag": tag, "metrics": metrics, "error": error})
 
     async def say(self, tag: int, text: str) -> None:
@@ -129,8 +134,9 @@ class VoiceSocket:
         st = self.speech.pop(tag, None)
         if st is not None:
             await st.cancel()
-        if tag in self.runs:  # the run returns by itself once the agent is interrupted (transcript is kept)
-            await self.state.orchestrator.interrupt()
+        sid = self.sessions.pop(tag, None)
+        if tag in self.runs and sid is not None:  # the run returns once its agent turn is interrupted
+            await self.state.orchestrator.interrupt(sid)
 
     def _run(self, tag: int, coro: Any) -> None:
         task = spawn(coro, name=f"voice-{tag}")

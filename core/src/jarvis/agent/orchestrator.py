@@ -62,6 +62,7 @@ class Orchestrator:
         self.state = state
         self._run_lock = asyncio.Lock()
         self.active_run: RunContext | None = None
+        self._cancel_pending: set[uuid.UUID] = set()
 
     # ------------------------------------------------------------------ sessions
     async def get_or_create_session(
@@ -356,6 +357,9 @@ class Orchestrator:
         chunks: list[str] = []
         final_text = ""
         async with self._run_lock:
+            if sess.id in self._cancel_pending:  # interrupted while waiting for its turn
+                self._cancel_pending.discard(sess.id)
+                return TurnResult(sess.id, "Abgebrochen, Sir.", tools, error="cancelled", provider="claude_code")
             ctx = RunContext(principal=principal, session_id=sess.id)
             self.active_run = ctx
             try:
@@ -422,8 +426,14 @@ class Orchestrator:
         base = (self.state.personality.error_phrases or ["Das hat leider nicht funktioniert, Sir."])[0]
         return f"{base} ({detail[:160]})" if detail else base
 
-    async def interrupt(self) -> bool:
+    async def interrupt(self, session_id: uuid.UUID | None = None) -> bool:
+        """Stop the running agent turn. With ``session_id`` only that conversation's turn is stopped (a voice
+        barge-in must never cancel what another channel is doing); a turn of that session that is still
+        waiting for its slot is skipped when it gets there."""
         run = self.active_run
+        if session_id is not None and (run is None or run.session_id != session_id):
+            self._cancel_pending.add(session_id)
+            return False
         if run is None:
             return False
         run.cancelled = True

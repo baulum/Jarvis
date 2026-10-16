@@ -430,6 +430,7 @@ class VoiceDaemon:
         if not text:
             await self.set_state("idle", "Nichts verstanden")
             return False
+        text = strip_wake_word(text)
         if len(re.sub(r"\W", "", text)) < 3:  # fragments like "K." (tail of the wake word, a cough)
             logger.info("Ignored fragment: %r", text)
             return True
@@ -507,6 +508,8 @@ class VoiceDaemon:
                 if self.audio is not None:
                     await self.audio.play(earcon())
                 self.detector.reset()
+                while not self.mic_q.empty():  # the wake word itself is not part of the request
+                    self.mic_q.get_nowait()
                 await self.set_state("listening")
                 follow_up = await self._converse(first=True)
                 while follow_up:
@@ -526,6 +529,16 @@ class VoiceDaemon:
             return False
         await self.set_state("recording")
         return await self.handle_turn(audio, text, marks)
+
+
+_WAKE_PREFIX = re.compile(
+    r"^\s*(?:(?:hey|hi|he|ey|hallo|okay|ok)[\s,.!]*)?(?:jarvis|javis|travis|jarwis|dschawis|chavis)\b[\s,.!?]*", re.I
+)
+
+
+def strip_wake_word(text: str) -> str:
+    """Whisper often hears the tail of the wake word at the start ("Hey, Javis. Wie spät …")."""
+    return _WAKE_PREFIX.sub("", text, count=1).strip()
 
 
 def _diff(a: float | None, b: float | None) -> float | None:

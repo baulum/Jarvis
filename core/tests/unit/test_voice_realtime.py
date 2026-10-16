@@ -138,3 +138,14 @@ async def test_stale_chunks_of_interrupted_reply_are_dropped(monkeypatch, tmp_pa
     assert vd.audio.played == [] and not vd.reply.ended.is_set()  # type: ignore[union-attr]
     await vd._on_speak(bytes([5]) + b"\x03\x00" * 10)
     assert vd.audio.played == [b"\x03\x00" * 10] and vd.reply.first_audio is not None  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize(
+    "heard,clean",
+    [("Hey, Javis. Wie spät ist es?", "Wie spät ist es?"), ("Hey Jarvis, Frage und zwar: was steht heute an", "Frage und zwar: was steht heute an"),
+     ("Hey, Javis.", ""), ("Jarvis, mach das Licht an.", "mach das Licht an."), ("Wie geht es Jarvis heute?", "Wie geht es Jarvis heute?")],
+)
+def test_strip_wake_word(heard: str, clean: str) -> None:
+    from jarvis.voice.daemon import strip_wake_word
+
+    assert strip_wake_word(heard) == clean
