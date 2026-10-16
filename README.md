@@ -4,12 +4,12 @@ Persönlicher, lokal laufender KI-Assistent für macOS: spricht (Wake Word „He
 führt mehrstufige Geschäftsabläufe aus (Lexware, Google, Telegram, GitHub), merkt sich Wissen in einem Obsidian-Vault,
 telefoniert (Twilio) und delegiert Programmieraufträge an Claude Code – mit Freigabesystem, Audit-Log und Not-Aus.
 
-- **Gehirn:** Claude Code CLI mit der Claude-Subscription (Sonnet 5.5 Standard, Haiku 5.5 für Einfaches, Opus 5.5 auf Wunsch); optional Hermes + lokales Modell
+- **Gehirn:** Claude Code CLI mit der Claude-Subscription (Sonnet 5.5 Standard, Haiku 5.5 für Einfaches, Opus 5.5 auf Wunsch); keine lokalen LLMs
 - **Core:** Python/FastAPI (`core/`), **macOS-Bridge:** Swift (`bridge/`), **Desktop-App:** Tauri/React (`desktop/`)
 
 ```bash
-scripts/setup.sh   # einmalig
-scripts/start.sh   # starten
+scripts/setup.sh   # einmalig: installiert alles und legt J.A.R.V.I.S. in „Programme“
+# danach: J.A.R.V.I.S. aus „Programme“ öffnen – startet alle Dienste selbst
 ```
 
 | Dokument | Inhalt |

@@ -115,67 +115,8 @@ Preise/Kontingent: <https://fish.audio/plan/>
 
 ## 6. Telefonie mit Twilio (Anrufe an und von Jarvis)
 
-**Was du brauchst:** Twilio-Konto, eine Rufnummer mit Sprachfunktion, eine öffentliche HTTPS-Adresse (Cloudflare Tunnel) und eine PIN.
-
-### 6.1 Twilio-Konto und Nummer
-1. Registrieren: <https://www.twilio.com/try-twilio> (Testguthaben inklusive; für echte Anrufe Konto upgraden).
-2. Konsole: <https://console.twilio.com> → auf der Startseite **Account SID** und **Auth Token** kopieren.
-3. Nummer kaufen: <https://console.twilio.com/us1/develop/phone-numbers/manage/search> → Land wählen, Häkchen **Voice**.
-   Für **deutsche Nummern** verlangt Twilio ein *Regulatory Bundle* (Name, Adresse, ggf. Ausweis); das wird im Kaufdialog geführt
-   und kann einige Tage Prüfung dauern.
-4. Im Testkonto können nur verifizierte Nummern angerufen werden: deine Handynummer unter
-   <https://console.twilio.com/us1/develop/phone-numbers/manage/verified> verifizieren.
-
-### 6.2 Öffentliche Adresse per Cloudflare Tunnel (nur Telefonie-Pfade freigeben)
-1. Cloudflare-Konto + eigene Domain bei Cloudflare: <https://dash.cloudflare.com>
-2. Installieren und anmelden:
-   ```bash
-   brew install cloudflared
-   cloudflared tunnel login
-   cloudflared tunnel create jarvis
-   cloudflared tunnel route dns jarvis jarvis.<deine-domain.de>
-   ```
-3. `~/.cloudflared/config.yml` anlegen – **nur** die Telefonie-Endpunkte werden veröffentlicht, alles andere bekommt 404:
-   ```yaml
-   tunnel: jarvis
-   credentials-file: /Users/paul/.cloudflared/<Tunnel-UUID>.json
-   ingress:
-     - hostname: jarvis.<deine-domain.de>
-       path: ^/api/telephony/
-       service: http://127.0.0.1:8765
-     - service: http_status:404
-   ```
-   Prüfen: `cloudflared tunnel ingress validate`. Starten: `cloudflared tunnel run jarvis`
-   (dauerhaft: `sudo cloudflared service install`). Doku:
-   <https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/>
-
-### 6.3 Jarvis konfigurieren
-1. Zugangsdaten:
-   ```bash
-   cd ~/Documents/Programmieren/Jarvis/core
-   uv run jarvisctl secret set twilio-account-sid
-   uv run jarvisctl secret set twilio-auth-token
-   uv run jarvisctl secret set phone-pin          # 4–8 Ziffern, deine Telefon-PIN für Jarvis
-   ```
-2. In `config/jarvis.yaml`:
-   ```yaml
-   server:
-     public_base_url: https://jarvis.<deine-domain.de>
-   telephony:
-     owner_numbers: ["+49151…"]        # deine Handynummer (für Anrufe von Jarvis an dich)
-     twilio:
-       from_number: "+49…"             # die gekaufte Twilio-Nummer
-   ```
-3. Jarvis neu starten. Systemstatus › *Telefonie* zeigt „Twilio bereit“; die Liste „Fehlt“ ist leer.
-
-### 6.4 Nummer mit Jarvis verbinden
-1. <https://console.twilio.com/us1/develop/phone-numbers/manage/incoming> → deine Nummer öffnen.
-2. **Voice Configuration › A call comes in:** *Webhook*, URL
-   `https://jarvis.<deine-domain.de>/api/telephony/twilio/voice`, Methode **HTTP POST** → **Save**.
-3. Test eingehend: Twilio-Nummer anrufen → „Hier ist Jarvis … bitte PIN“ → PIN sprechen oder tippen + `#` → Frage stellen.
-4. Test ausgehend: im Chat „Ruf mich an und sag mir, dass der Test klappt.“ → Freigabe bestätigen → dein Telefon klingelt.
-
-Sicherheit: Jede Anfrage wird mit der Twilio-Signatur geprüft; die Rufnummer allein authentifiziert nie – ohne PIN keine Aktionen.
+Eigene, ausführliche Anleitung: **[ANLEITUNG-TWILIO.md](ANLEITUNG-TWILIO.md)**. Alles wird dort in der App eingetragen, ohne
+Terminal und ohne eigene Domain; die Anleitung vergleicht auch kostenlose Alternativen (FRITZ!Box).
 
 ---
 

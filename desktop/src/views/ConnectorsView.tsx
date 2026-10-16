@@ -1,4 +1,4 @@
-import { ExternalLink, KeyRound, Plug, RefreshCw } from "lucide-react";
+import { ExternalLink, KeyRound, Phone, Plug, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { Button, Dialog, Dot, EmptyState, ErrorState, Field, RiskBadge, Section, Skeleton, Tag, Toggle } from "../components/ui";
 import { useAction, useQuery } from "../hooks/useQuery";
@@ -107,6 +107,10 @@ function ConnectorCard({ c, refetch }: { c: Connector; refetch: () => Promise<vo
                     await openExternal(r.auth_url); // errors surface as a toast via act.run
                     return r;
                   }, "Google-Anmeldung im Browser geöffnet")}>Mit Google verbinden</Button>
+        )}
+        {c.id === "telephony" && c.enabled && h?.status === "ok" && (
+          <Button size="sm" variant="ghost" busy={act.busy === "call"} icon={<Phone className="size-3.5" />}
+                  onClick={() => void act.run("call", () => api.telephonyCallMe(), "Jarvis ruft dich jetzt an")}>Testanruf an mich</Button>
         )}
         {c.docs_url && <Button size="sm" variant="quiet" onClick={() => void act.run("docs", () => openExternal(c.docs_url))}>Doku</Button>}
       </footer>

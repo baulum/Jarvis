@@ -1,32 +1,32 @@
 # J.A.R.V.I.S. – Einrichtung
 
-Voraussetzungen: macOS auf Apple Silicon, Homebrew, Xcode (Command Line Tools), Ollama.app, Claude Code CLI (angemeldet mit
-der Claude-Subscription über `claude` → `/login`). Freier Speicher: ca. 10 GB.
+Voraussetzungen: macOS auf Apple Silicon, Homebrew, Xcode (Command Line Tools), Claude Code CLI (angemeldet mit
+der Claude-Subscription über `claude` → `/login`). Freier Speicher: ca. 6 GB. **Kein Ollama nötig.**
 
 ## 1. Installation (einmalig, idempotent)
 ```bash
 scripts/setup.sh
 ```
-Das Skript installiert/prüft Homebrew-Pakete (postgresql@17, pgvector, whisper-cpp, ffmpeg, uv, node, pnpm, rustup), legt die
-Datenbank `jarvis` an (Passwort im Schlüsselbund), richtet die Python-Umgebung ein, führt Migrationen aus, lädt die Modelle
-(`qwen3.5:4b` → Alias `jarvis-brain` mit 64k Kontext, `qwen3-embedding:0.6b`, Whisper large-v3-turbo, openWakeWord),
-installiert Hermes über den offiziellen Installer, erzeugt das Hermes-Profil `jarvis`, koppelt Desktop/Voice/Hermes als Geräte,
-baut die Swift-Bridge und die Desktop-App und schließt mit `jarvisctl doctor` ab.
+Das Skript installiert/prüft Homebrew-Pakete (postgresql@17, pgvector, whisper-cpp, ffmpeg, uv, node, pnpm, rustup,
+cloudflared), legt die Datenbank `jarvis` an (Passwort im Schlüsselbund), richtet die Python-Umgebung ein, führt Migrationen aus,
+lädt die Modelle (Embedding-Modell Qwen3-Embedding-0.6B als ONNX für das Gedächtnis, Whisper large-v3-turbo, openWakeWord),
+koppelt Desktop und Voice als Geräte, baut JarvisBridge und die Desktop-App, signiert beide mit deinem Apple-Development-Zertifikat,
+installiert sie nach **/Applications** (`scripts/install-app.sh`) und schließt mit `jarvisctl doctor` ab.
 
 ## 2. Starten / Stoppen
-```bash
-scripts/start.sh            # whisper-server, JarvisBridge, Core (+ Hermes-Gateway), Voice-Daemon, Desktop-App
-scripts/start.sh --no-voice # ohne Mikrofon
-scripts/stop.sh
-scripts/status.sh           # JSON-Systemstatus
-```
-Optional beim Login: `scripts/launchd/install.sh [--with-voice]` (entfernen: `scripts/launchd/uninstall.sh`).
-Die Desktop-App hat in den Einstellungen einen eigenen Schalter „Beim Anmelden starten“.
+**J.A.R.V.I.S. aus „Programme“ öffnen.** Das reicht: Die App startet whisper-server, JarvisBridge, Core und Voice-Daemon
+selbst (Log: `~/Library/Logs/Jarvis/launcher.log`).
+- Fenster schließen → Jarvis läuft in der Menüleiste weiter (inkl. „Hey Jarvis“).
+- Menüleiste › **Beenden** (⌘Q) → stoppt alle Dienste. Menüleiste › **Dienste neu starten** bei Problemen.
+- Einstellungen › „Beim Anmelden starten“ → Jarvis startet mit dem Mac.
+- Updates nach Code-Änderungen: `scripts/install-app.sh` (baut, signiert, installiert, startet neu).
+
+Für Entwicklung weiterhin: `scripts/start.sh [--no-voice] [--no-app]`, `scripts/stop.sh`, `scripts/status.sh`.
 
 ## 3. macOS-Berechtigungen (manuell, einmalig)
 Systemeinstellungen › Datenschutz & Sicherheit:
 - **Bedienungshilfen** und **Bildschirmaufnahme** → `JarvisBridge` (bzw. in der App unter Berechtigungen „Anfordern“)
-- **Mikrofon** → das Programm, das den Voice-Daemon startet (Terminal bzw. beim LaunchAgent `uv`/Python)
+- **Mikrofon** → **J.A.R.V.I.S.** (die App startet den Voice-Daemon; macOS fragt beim ersten Start)
 - **Automation** → wird bei der ersten AppleScript-Aktion abgefragt (AppleScript ist standardmäßig deaktiviert)
 
 ## 4. Connectoren einrichten
@@ -52,7 +52,7 @@ Lokaler Test ohne Twilio: `uv run jarvisctl phone-test --say "eins zwei drei vie
   „Zurück zur automatischen Modellwahl“.
 - In der Desktop-App: Umschalter über dem Eingabefeld (Auto / Haiku / Sonnet / Opus).
 - Konfiguration: `agent.model`, `agent.auto_downgrade`, `agent.utility_model` in `config/jarvis.yaml`.
-- Alternative ohne Subscription: `agent.provider: hermes` (Hermes + lokales Ollama-Modell, siehe unten).
+- Lokale Modelle (Ollama/Hermes) werden nicht verwendet; der frühere Hermes-Modus ist nur noch als Altoption im Code.
 
 ## 6. Globale Claude-Skills
 - Jarvis nutzt deine Skills aus `~/.claude/skills` sowie die Skills aktiver Claude-Code-Plugins.
@@ -72,7 +72,7 @@ Lokaler Test ohne Twilio: `uv run jarvisctl phone-test --say "eins zwei drei vie
 ```bash
 cd core
 uv run pytest tests/unit                       # ohne Infrastruktur
-uv run pytest -m integration tests/integration # Test-DB jarvis_test + Ollama
+uv run pytest -m integration tests/integration # Test-DB jarvis_test, Claude-CLI, Embedding-Modell
 uv run pytest -m e2e tests/e2e                 # laufender Stack (Sprachkette Ende-zu-Ende)
 cd ../desktop && pnpm test && pnpm lint && pnpm build
 cd ../bridge && swift test
@@ -83,5 +83,5 @@ cd ../bridge && swift test
 - Logs: `~/Library/Logs/Jarvis/` (`core.jsonl`, `hermes-gateway.log`, `whisper.log`, `voice.log`, `bridge.log`).
 - Nur bei `agent.provider: hermes`: Hermes nutzt **ein** Host-Gateway für alle Profile; Jarvis startet es als Kindprozess (`hermes gateway run --replace`),
   sobald der MCP-Endpunkt erreichbar ist. Der API-Listener wird über das Default-Profil (`~/.hermes/.env`) aktiviert.
-- Arbeitsspeicher: Whisper ≈ 1 GB, Embeddings ≈ 0,7 GB, je Claude-Code-Prozess ≈ 0,3 GB (mit Hermes-Option zusätzlich ≈ 5,5 GB). Speicherintensive Apps
-  (Xcode, Simulator, Rust-Builds) können Ollama-Fehler „Compute error“ auslösen; der Core wiederholt solche Anfragen.
+- Arbeitsspeicher: Whisper ≈ 1 GB, Embedding-Modell im Core ≈ 1,2 GB, je Claude-Code-Prozess ≈ 0,3 GB.
+- Telefonie: siehe [docs/ANLEITUNG-TWILIO.md](docs/ANLEITUNG-TWILIO.md) (inkl. Alternativen).

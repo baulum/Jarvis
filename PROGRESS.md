@@ -33,6 +33,15 @@
 - Bridge tippt ein Zeichen pro Event (Rechner hatte nur das erste Zeichen übernommen).
 - Bridge mit Apple-Development-Zertifikat signiert → macOS-Rechte bleiben über Updates erhalten.
 
+### 2026-10-16: App-Start, ohne Ollama, Telefonie in der App
+- J.A.R.V.I.S. liegt in /Applications (signiert, Mikrofon-Entitlement); die App startet whisper, Bridge, Core und Voice selbst,
+  „Beenden“ stoppt alles; live getestet (Start, Wake Word + Frage, Beenden, Neustart)
+- Ollama wird nicht mehr genutzt oder gestartet: Embeddings laufen im Core (Qwen3-Embedding-0.6B ONNX); 15 Notizen neu
+  eingebettet, semantische Suche live geprüft
+- Connector „Telefon (Twilio)“: Zugangsdaten und PIN in der App, automatischer Cloudflare-Schnelltunnel und Webhook-Eintrag,
+  Knopf „Testanruf an mich“; Tunnel live geprüft: von außen nur Telefonie-Webhook erreichbar (Rest 404)
+- Offen: echter Twilio-Anruf (wartet auf Konto, Nummer und Bundle); FRITZ!Box-SIP als kostenlose Alternative angeboten
+
 ### Live mit echten Zugangsdaten getestet (2026-10-15)
 - Google: Gmail (neueste Mails), Kalender (Termine 7 Tage), Drive (Suche) – über Jarvis im Chat
 - Lexware: Verbindung „PJE Systems“, offene Rechnungen + Kundensuche (nur lesend; Schreibtest wartet auf Sirs Ja)

@@ -9,10 +9,9 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/opt/rustup/bin:$PA
 step() { printf "\n\033[36m▸ %s\033[0m\n" "$*"; }
 
 step "Homebrew-Pakete prüfen"
-for pkg in postgresql@17 pgvector whisper-cpp ffmpeg uv node pnpm rustup; do
+for pkg in postgresql@17 pgvector whisper-cpp ffmpeg uv node pnpm rustup cloudflared; do
   brew list --formula "$pkg" >/dev/null 2>&1 || brew install "$pkg"
 done
-command -v ollama >/dev/null || { echo "Ollama fehlt: https://ollama.com/download installieren"; exit 1; }
 command -v claude >/dev/null || echo "⚠ Claude Code CLI fehlt (für Coding-Jobs): https://claude.com/claude-code"
 rustup show active-toolchain >/dev/null 2>&1 || rustup default stable
 
@@ -30,9 +29,14 @@ fi
 step "Python-Umgebung"
 (cd "$ROOT/core" && uv sync --all-extras && uv run playwright install chromium && uv run alembic upgrade head)
 
-step "Ollama-Modelle (Embeddings; lokales Agent-Modell nur mit JARVIS_WITH_HERMES=1)"
-ollama list | grep -q "qwen3-embedding:0.6b" || ollama pull qwen3-embedding:0.6b
-if [ "${JARVIS_WITH_HERMES:-0}" = 1 ] && ! ollama list | grep -q "jarvis-brain"; then
+step "Embedding-Modell für das Gedächtnis (läuft im Core, ~1,1 GB, kein Ollama)"
+(cd "$ROOT/core" && uv run python -c "
+import asyncio; from jarvis.config import get_settings; from jarvis.memory.embeddings import LocalEmbedder
+s = get_settings(); asyncio.run(LocalEmbedder(s.paths.data_dir / 'models' / 'fastembed', s.llm.embedding_model).embed(['ok']))
+print('✓ Embedding-Modell bereit')")
+
+# Legacy option only: Hermes + local Ollama model (not used by default).
+if [ "${JARVIS_WITH_HERMES:-0}" = 1 ] && command -v ollama >/dev/null && ! ollama list | grep -q "jarvis-brain"; then
   ollama list | grep -q "qwen3.5:4b" || ollama pull qwen3.5:4b
   printf 'FROM qwen3.5:4b\nPARAMETER num_ctx 65536\nPARAMETER temperature 0.4\n' > /tmp/jarvis-Modelfile
   ollama create jarvis-brain -f /tmp/jarvis-Modelfile && rm /tmp/jarvis-Modelfile

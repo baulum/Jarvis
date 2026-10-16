@@ -172,6 +172,7 @@ export function createApi(opts: ApiOptions) {
     // tasks
     tasks: (status?: string) => get<Task[]>("/tasks", { status }),
     task: (tid: string) => get<Task>(`/tasks/${id(tid)}`),
+    telephonyCallMe: () => post<{ call_id?: string; status?: string }>("/telephony/call-me"),
     taskInput: (tid: string, values: Record<string, unknown>) => post<Task>(`/tasks/${id(tid)}/input`, { values }),
     taskCancel: (tid: string) => post<{ cancelled: boolean }>(`/tasks/${id(tid)}/cancel`),
     taskRetry: (tid: string) => post<{ retried: boolean }>(`/tasks/${id(tid)}/retry`),

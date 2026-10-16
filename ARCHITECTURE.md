@@ -30,11 +30,12 @@
 | **Jarvis Core** | `core/src/jarvis` | Zentrale Orchestrierung, REST/WS-API, Policy-Engine, Tools, Gedächtnis, Aufgaben, Telefonie, Coding-Runner |
 | **Agent (Claude Code)** | `core/src/jarvis/agent/claude_agent.py` | Agent-Loop über die offizielle Claude Code CLI mit Sirs Subscription; einziges Werkzeug-Set = Jarvis-MCP-Server |
 | **Modellrouter** | `core/src/jarvis/agent/model_router.py` | Sonnet 5.5 Standard, einfache Anfragen → Haiku 5.5, Opus 5.5 nur auf Befehl/manuell |
-| **Hermes Agent** (optional) | `~/.hermes` | Alternative zu Claude (`agent.provider: hermes`) mit lokalem Ollama-Modell |
+| **Hermes Agent** (Altoption, ungenutzt) | `~/.hermes` | früherer Modus `agent.provider: hermes` mit lokalem Ollama-Modell; wird nicht gestartet |
 | **JarvisBridge** | `bridge/` (Swift) | Native macOS-Steuerung, eigene Token-/Kill-Switch-/Policy-Prüfung (Defense in Depth) |
 | **Voice-Daemon** | `core/src/jarvis/voice/daemon.py` | Wake Word, VAD, STT-Upload, Satz-für-Satz-TTS, Barge-in, Push-to-Talk |
 | **Desktop-App** | `desktop/` (Tauri 2, React, TS strict) | Kommandozentrale, Menüleisten-Icon, globaler Kurzbefehl ⌘⇧J |
-| **Ollama** | System | nur `qwen3-embedding:0.6b` für die semantische Gedächtnissuche (kein Sprachmodell für das Denken) |
+| **Embedding-Modell** | im Core (`memory/embeddings.py`) | Qwen3-Embedding-0.6B als ONNX (fastembed), 1024 Dim., für die semantische Gedächtnissuche – kein Ollama |
+| **Cloudflare Quick Tunnel** | Kindprozess des Core | öffentliche HTTPS-Adresse nur für die Twilio-Webhooks; `api/exposure.py` lässt darüber nur `/api/telephony/*` durch |
 | **whisper.cpp** | Homebrew | `whisper-server` mit large-v3-turbo (q5_0), Deutsch |
 | **PostgreSQL 17 + pgvector** | Homebrew | Sessions, Aufgaben, Freigaben, Ledger, Audit, Memory-Index, Anrufe, Jobs |
 | **Obsidian-Vault** | `~/Documents/Jarvis Vault` | Quelle der Wahrheit fürs Gedächtnis (Markdown + YAML-Frontmatter) |
