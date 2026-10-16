@@ -292,6 +292,8 @@ class VoiceDaemon:
         barge = BargeInDetector(RATE, need_ms=self.cfg.barge_in_ms, min_rms=max(450.0, self.cfg.vad_min_rms * 2.5))
         self.detector.reset()
         self._interrupt.clear()
+        while not self.aec_q.empty():  # frames of the question itself must not count as an interruption
+            self.aec_q.get_nowait()
         drained: asyncio.Task[bool] | None = None
         while True:
             if r.ended.is_set() and drained is None:
