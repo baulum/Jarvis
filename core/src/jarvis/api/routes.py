@@ -905,6 +905,21 @@ async def telephony_calls(p: Principal = Reader) -> list[dict[str, Any]]:
     ]
 
 
+@router.post("/telephony/call-me")
+async def telephony_call_me(st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    """Real outbound test call from the Twilio number to Sir's own number (button in the app)."""
+    if st.telephony is None:
+        raise HTTPException(400, "Telefonie ist deaktiviert")
+    try:
+        result = await st.telephony.call_owner(
+            "Guten Tag, Sir. Dies ist ein Testanruf von J.A.R.V.I.S. Die Telefonie funktioniert.", reason="test"
+        )
+    except RuntimeError as e:
+        raise HTTPException(400, str(e)) from e
+    await audit(p.label, "telephony.call_me", details={"to": st.settings.telephony.owner_numbers[:1]})
+    return result
+
+
 @router.post("/telephony/test-call")
 async def telephony_test_call(st: AppState = StateDep, p: Principal = Owner) -> dict[str, str]:
     """LOCAL TEST MODE: returns credentials for a simulated call over the media-stream protocol."""

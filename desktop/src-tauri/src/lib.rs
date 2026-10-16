@@ -164,7 +164,7 @@ pub fn run() {
         .expect("error while building the J.A.R.V.I.S. desktop app");
 
     app.run(|handle, event| {
-        // Quitting J.A.R.V.I.S. stops its services too (Ollama and PostgreSQL keep running).
+        // Quitting J.A.R.V.I.S. stops its services too (PostgreSQL keeps running).
         if let RunEvent::Exit = event {
             launcher::stop_services();
         }

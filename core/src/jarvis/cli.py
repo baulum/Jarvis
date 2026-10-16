@@ -239,27 +239,20 @@ def cmd_doctor(_: argparse.Namespace) -> None:
     def check(name: str, ok: bool, detail: str = "") -> None:
         checks.append((name, ok, detail))
 
-    for b in ("ollama", "claude", "git", "ffmpeg", "whisper-server", "psql"):
+    for b in ("claude", "git", "ffmpeg", "whisper-server", "psql", "cloudflared"):
         check(
             f"binary {b}",
             shutil.which(b) is not None or (b == "psql" and Path("/opt/homebrew/opt/postgresql@17/bin/psql").exists()),
         )
-    check("hermes", bool(shutil.which("hermes") or (Path.home() / ".local/bin/hermes").exists()))
     check("secret postgres", secret_store.exists(s.database.password_secret))
-    check("secret hermes-api-key", secret_store.exists(s.hermes.api_key_secret), "jarvisctl setup-hermes")
     check("desktop token", _token_file("desktop").exists(), "jarvisctl init")
     check("bridge token", _token_file("bridge").exists(), "JarvisBridge einmal starten")
     model = s.paths.data_dir / "models" / s.voice.stt.model
     check("whisper model", model.exists(), str(model))
     for f in ("melspectrogram.onnx", "embedding_model.onnx", "hey_jarvis_v0.1.onnx"):
         check(f"wake model {f}", (s.paths.data_dir / "models" / f).exists())
-    try:
-        r = httpx.get(s.llm.ollama_url + "/api/tags", timeout=3).json()
-        names = {m["name"].split(":latest")[0] for m in r.get("models", [])}
-        for m in (s.llm.agent_model, s.llm.embedding_model):
-            check(f"ollama model {m}", m in names or f"{m}:latest" in names)
-    except Exception as e:
-        check("ollama reachable", False, str(e))
+    emb_cache = s.paths.data_dir / "models" / "fastembed"
+    check("embedding model (memory)", any(emb_cache.glob("**/*.onnx")), "lädt beim ersten Start des Core (~1,1 GB)")
     for name, ok, detail in checks:
         print(f"{'✓' if ok else '✗'} {name}{'' if ok else f'  → {detail}'}")
     sys.exit(0 if all(ok for _, ok, _ in checks) else 1)

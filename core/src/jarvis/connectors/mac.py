@@ -190,6 +190,7 @@ class MacConnector(Connector):
                     f"Lies die Bilddatei {path} und beantworte auf Deutsch knapp: {question}", read_dir=shots_dir
                 )
             else:
+                assert self.state.ollama is not None
                 description = await self.state.ollama.chat(
                     self.state.settings.llm.agent_model,
                     [{"role": "user", "content": question, "images": [shot["png_base64"]]}],

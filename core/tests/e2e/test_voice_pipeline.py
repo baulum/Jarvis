@@ -1,6 +1,6 @@
 """E2E: synthetic speech → wake word → VAD → whisper STT → Hermes → streamed TTS (captured).
 
-Requires the running stack (core, Hermes, Ollama, whisper-server). The microphone and the
+Requires the running stack (core, whisper-server). The microphone and the
 speakers are replaced by injected/captured audio, so no macOS permission is needed.
 """
 

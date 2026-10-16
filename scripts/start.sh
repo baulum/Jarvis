@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the J.A.R.V.I.S. stack: whisper-server, JarvisBridge, core (+ Hermes gateway), voice daemon, desktop app.
+# Start the J.A.R.V.I.S. stack: whisper-server, JarvisBridge, core, voice daemon, desktop app (no Ollama).
 # Usage: scripts/start.sh [--no-voice] [--no-app]
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -24,8 +24,6 @@ wait_http() {  # url, seconds
   echo "✗ $1 nicht erreichbar"; return 1
 }
 
-pgrep -x ollama >/dev/null || pgrep -f "Ollama.app" >/dev/null || open -ga Ollama
-wait_http http://127.0.0.1:11434/api/version 30
 brew services list | grep -q "postgresql@17.*started" || brew services start postgresql@17 >/dev/null
 
 start_bg whisper whisper-server -m "$DATA/models/ggml-large-v3-turbo-q5_0.bin" --host 127.0.0.1 --port 8178 -l de -t 4

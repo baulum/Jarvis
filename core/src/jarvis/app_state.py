@@ -32,6 +32,7 @@ from jarvis.connectors.mac import BridgeClient, MacConnector
 from jarvis.connectors.memory_obsidian import ObsidianMemoryConnector
 from jarvis.connectors.system import SystemConnector
 from jarvis.connectors.telegram import TelegramConnector
+from jarvis.connectors.telephony import TelephonyConnector
 from jarvis.db import init_engine, session_scope
 from jarvis.db.models import Approval, Task, UsageRecord
 from jarvis.events import Event, bus
@@ -40,6 +41,7 @@ from jarvis.jobs.notify import Notifier
 from jarvis.jobs.playbooks import register_playbooks
 from jarvis.jobs.scheduler import Scheduler
 from jarvis.mcp.client import MCPClientHub
+from jarvis.memory.embeddings import LocalEmbedder
 from jarvis.memory.service import MemoryService
 from jarvis.memory.vault import Vault
 from jarvis.secrets import secret_store
@@ -77,7 +79,17 @@ class AppState:
         self.registry = ToolRegistry(self.permissions)
         self.approval_policy = ApprovalPolicy(settings.paths.data_dir / "approval-mode.json")
         self.executor = ToolExecutor(self.registry, self.permissions, self.kill_switch, self.approval_policy)
-        self.ollama = OllamaClient(settings.llm.ollama_url, settings.llm.keep_alive)
+        # Ollama is only used by the optional legacy Hermes provider; the default (Claude) never touches it.
+        self.ollama: OllamaClient | None = (
+            OllamaClient(settings.llm.ollama_url, settings.llm.keep_alive)
+            if settings.agent.provider == "hermes"
+            else None
+        )
+        self.embedder = LocalEmbedder(
+            settings.paths.data_dir / "models" / "fastembed",
+            settings.llm.embedding_model,
+            settings.llm.embedding_dimensions,
+        )
         self.hermes: HermesClient | None = None
         self.hermes_supervisor = HermesSupervisor(self)
         self.skills = SkillCatalog(settings.paths.data_dir)
@@ -86,9 +98,7 @@ class AppState:
             settings.agent.model, settings.agent.auto_downgrade, settings.paths.data_dir / "agent-model.json"
         )
         self.agent: ClaudeCodeAgent | None = ClaudeCodeAgent(self) if settings.agent.provider == "claude_code" else None
-        self.memory = MemoryService(
-            Vault(settings.paths.vault_dir), self.ollama, settings.llm.embedding_model, self.structured_llm
-        )
+        self.memory = MemoryService(Vault(settings.paths.vault_dir), self.embedder, self.structured_llm)
         self.bridge = BridgeClient(settings.paths.data_dir)
         self.browser = BrowserService(settings.browser.headless, settings.browser.default_timeout_ms)
         self.stt = STTService(settings.voice.stt.server_url, settings.voice.language)
@@ -117,6 +127,7 @@ class AppState:
             HttpApiConnector,
             WebhookConnector,
             FishAudioConnector,
+            TelephonyConnector,
         ):
             self.connectors.add(conn_cls(self))
         self._register_phone_tool()
@@ -159,14 +170,14 @@ class AppState:
     async def start(self) -> None:
         init_engine(self.settings)
         await self.connectors.load()
-        try:  # only the small local embedding model is used (semantic memory search)
-            await self.ollama.embed(self.settings.llm.embedding_model, ["warm-up"])
+        try:  # in-process embedding model for semantic memory search (loads in a worker thread)
+            await self.embedder.embed(["warm-up"])
         except Exception:
-            logger.warning("Embedding warm-up failed (is Ollama running?)", exc_info=True)
+            logger.warning("Embedding model failed to load", exc_info=True)
         try:
-            await self.memory.start()
+            await self.memory.start(self.settings.paths.data_dir / "memory-embedding-model")
         except Exception:
-            logger.exception("Memory engine failed to start (embeddings/Ollama?)")
+            logger.exception("Memory engine failed to start (embeddings?)")
         await self.coding.resume_interrupted()
         await self.tasks.start()
         await self.scheduler.start()
@@ -202,6 +213,7 @@ class AppState:
         if self.agent is not None:
             return await self.oneshot.run(prompt, schema=schema, system=system)
         messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+        assert self.ollama is not None
         return await self.ollama.chat_json(self.settings.llm.utility_model, messages, schema)
 
     async def stop(self) -> None:
@@ -214,7 +226,8 @@ class AppState:
         await self.connectors.shutdown()
         await self.mcp_hub.stop()
         await self.browser.close()
-        await self.ollama.close()
+        if self.ollama is not None:
+            await self.ollama.close()
         if self.hermes:
             await self.hermes.close()
         await self.bridge.close()
@@ -232,11 +245,13 @@ class AppState:
     # ------------------------------------------------------------------ status
     async def system_status(self, brief: bool = False) -> dict[str, Any]:
         comps: dict[str, str] = {}
-        try:
-            await self.ollama.version()
-            comps["ollama"] = "ok"
-        except Exception:
-            comps["ollama"] = "down"
+        comps["embeddings"] = "ok" if self.embedder.loaded else "loading"
+        if self.ollama is not None:  # legacy Hermes provider only
+            try:
+                await self.ollama.version()
+                comps["ollama"] = "ok"
+            except Exception:
+                comps["ollama"] = "down"
         if self.agent is not None:
             comps["agent"] = (
                 "ok"
@@ -284,10 +299,12 @@ class AppState:
             return out
         vm = psutil.virtual_memory()
         disk = shutil.disk_usage(str(self.settings.paths.data_dir))
-        try:
-            loaded = await self.ollama.loaded_models()
-        except Exception:
-            loaded = []
+        loaded: list[Any] = []
+        if self.ollama is not None:
+            try:
+                loaded = await self.ollama.loaded_models()
+            except Exception:
+                loaded = []
         since = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         async with session_scope() as s:
             usage = (

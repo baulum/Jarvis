@@ -62,7 +62,7 @@ class LlmCfg(_Strict):
     ollama_url: str = "http://127.0.0.1:11434"
     agent_model: str = "jarvis-brain"
     utility_model: str = "jarvis-brain"
-    embedding_model: str = "qwen3-embedding:0.6b"
+    embedding_model: str = "Qwen/Qwen3-Embedding-0.6B-Q"  # in-process ONNX (fastembed), no Ollama
     embedding_dimensions: int = 1024
     keep_alive: str = "30m"
 

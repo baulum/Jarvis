@@ -29,19 +29,18 @@ database:
   password_secret: postgres   # Keychain account holding the DB password
 
 llm:
-  # With agent.provider=claude_code Ollama is only used for the local embedding model (semantic memory search).
-  ollama_url: http://127.0.0.1:11434
-  # Agentic model used by Hermes (Modelfile alias of qwen3.5:4b with num_ctx 65536)
-  agent_model: jarvis-brain
-  # Fast model for internal tasks (memory extraction, summaries) — same model to avoid swapping
-  utility_model: jarvis-brain
-  embedding_model: qwen3-embedding:0.6b
+  # Semantic memory search: embedding model running inside the core (ONNX via fastembed) – no Ollama.
+  embedding_model: Qwen/Qwen3-Embedding-0.6B-Q
   embedding_dimensions: 1024
+  # Only for the optional legacy provider "hermes" (local Ollama models); unused with claude_code.
+  ollama_url: http://127.0.0.1:11434
+  agent_model: jarvis-brain
+  utility_model: jarvis-brain
   keep_alive: 30m
 
 agent:
   # Agent brain. "claude_code": official Claude Code CLI with Sir's subscription (default).
-  # "hermes": Hermes Agent + local Ollama model (kept as an optional alternative).
+  # "hermes": legacy option (Hermes Agent + local Ollama model); not used, Ollama is not started.
   provider: claude_code
   claude_binary: claude
   model: sonnet            # default for conversations: sonnet | opus | haiku  (= Claude * 5.5)

@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from jarvis.agent.llm import OllamaClient
 from jarvis.config import get_settings
+from jarvis.memory.embeddings import LocalEmbedder
 from jarvis.memory.service import MemoryService
 from jarvis.memory.vault import Vault
 
@@ -14,7 +14,7 @@ pytestmark = pytest.mark.integration
 @pytest.fixture
 async def mem(tmp_path: Path):
     s = get_settings()
-    client = OllamaClient(s.llm.ollama_url)
+    embedder = LocalEmbedder(s.paths.data_dir / "models" / "fastembed", s.llm.embedding_model)
     from types import SimpleNamespace
 
     from jarvis.agent.claude_agent import ClaudeOneShot
@@ -24,10 +24,9 @@ async def mem(tmp_path: Path):
     async def structured(system: str, prompt: str, schema: dict) -> object:
         return await oneshot.run(prompt, schema=schema, system=system)
 
-    svc = MemoryService(Vault(tmp_path / "vault"), client, s.llm.embedding_model, structured)
+    svc = MemoryService(Vault(tmp_path / "vault"), embedder, structured)
     svc.vault.ensure()
     yield svc
-    await client.close()
 
 
 async def test_remember_dedup_search_correct_forget(mem: MemoryService) -> None:

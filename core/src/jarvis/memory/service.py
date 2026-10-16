@@ -18,10 +18,10 @@ from typing import Any
 from sqlalchemy import delete, func, or_, select
 from watchfiles import Change, awatch
 
-from jarvis.agent.llm import OllamaClient
 from jarvis.db import session_scope
 from jarvis.db.models import MemoryItem, MemoryLink
 from jarvis.events import bus
+from jarvis.memory.embeddings import LocalEmbedder
 from jarvis.memory.vault import KIND_FOLDERS, Note, Vault
 from jarvis.security.audit import audit
 
@@ -90,13 +90,11 @@ class MemoryService:
     def __init__(
         self,
         vault: Vault,
-        ollama: OllamaClient,
-        embedding_model: str,
+        embedder: LocalEmbedder,
         structured_llm: Callable[[str, str, dict[str, Any]], Awaitable[Any]],
     ) -> None:
         self.vault = vault
-        self.ollama = ollama
-        self.embedding_model = embedding_model
+        self.embedder = embedder
         self.structured_llm = structured_llm
         self._watch_task: asyncio.Task[None] | None = None
         self._extract_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=200)
@@ -104,9 +102,16 @@ class MemoryService:
         self._self_writes: dict[str, float] = {}
 
     # ------------------------------------------------------------------ lifecycle
-    async def start(self) -> None:
+    async def start(self, marker: Path | None = None) -> None:
+        """``marker`` stores the embedding model the index was built with; a different model re-embeds all."""
         self.vault.ensure()
-        await self.reindex_all()
+        model = self.embedder.model_name
+        stale = marker is not None and (not marker.exists() or marker.read_text(encoding="utf-8").strip() != model)
+        if stale:
+            logger.info("Embedding model changed to %s: re-embedding all notes", model)
+        await self.reindex_all(force=stale)
+        if marker is not None:
+            marker.write_text(model, encoding="utf-8")
         self._watch_task = asyncio.create_task(self._watch())
         self._extract_task = asyncio.create_task(self._extract_worker())
 
@@ -117,13 +122,13 @@ class MemoryService:
 
     # ------------------------------------------------------------------ indexing
     async def _embed(self, text: str) -> list[float]:
-        return (await self.ollama.embed(self.embedding_model, [text[:8000]]))[0]
+        return (await self.embedder.embed([text]))[0]
 
-    async def index_note(self, note: Note) -> uuid.UUID:
+    async def index_note(self, note: Note, force: bool = False) -> uuid.UUID:
         chash = content_hash(note.title, note.body)
         async with session_scope() as s:
             item = (await s.execute(select(MemoryItem).where(MemoryItem.path == note.path))).scalar_one_or_none()
-            if item is not None and item.content_hash == chash and item.status == note.status:
+            if not force and item is not None and item.content_hash == chash and item.status == note.status:
                 return item.id
         embedding = await self._embed(f"{note.title}\n{note.body}")
         async with session_scope() as s:
@@ -153,12 +158,13 @@ class MemoryService:
             await s.flush()
             return item.id
 
-    async def reindex_all(self) -> dict[str, int]:
+    async def reindex_all(self, force: bool = False) -> dict[str, int]:
+        """Index new/changed notes; ``force`` re-embeds every note (e.g. after an embedding-model change)."""
         paths = self.vault.iter_notes()
         indexed = 0
         for rel in paths:
             try:
-                await self.index_note(self.vault.read(rel))
+                await self.index_note(self.vault.read(rel), force=force)
                 indexed += 1
             except Exception:
                 logger.exception("Indexing %s failed", rel)
