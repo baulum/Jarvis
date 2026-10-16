@@ -3,6 +3,99 @@
 > Wiedereinstiegspunkt für neue Sessions. Nach jeder größeren Änderung aktualisieren.
 > Doku: ARCHITECTURE.md (Aufbau), SETUP.md (Installation/Betrieb), SECURITY.md (Sicherheitsmodell).
 
+## Stand: 2026-10-16 (Abend) – J.A.R.V.I.S. 2.0
+
+### Neue Oberfläche: das 3D-Gedächtnis ist die Hauptansicht
+- `desktop/src/holo/`: Three.js/React Three Fiber, ein instanzierter Draw für alle Knoten (Glyphen-Atlas mit 14
+  Wissensarten, LOD: fern Lichtpunkt, nah Linien-Icon), ein Draw für alle Kanten (Signalfluss entlang aktiver Pfade),
+  J.A.R.V.I.S.-Kern reagiert auf Mikrofon-/Ausgabepegel und Zustand, dezenter Staub als Tiefenhinweis
+- Daten ausschließlich aus `/api/graph` (Agenten, Connectoren, 75 Werkzeuge, Skills, Erinnerungen, Entitäten, Aufgaben,
+  Coding-Jobs, Zeitpläne, Gespräche) mit echten Relationen; Layout (d3-force-3d) im Web Worker, Cluster je Wissensart,
+  stabile Positionen, neue Knoten wachsen aus ihrem Nachbarn, sanfte Reorganisation
+- Kamera (CameraControls): drehen, zoomen, verschieben; Klick fliegt zum Knoten, Detail-Overlay rechts (Inhalt, Kategorie,
+  Erstellt/Aktualisiert, Quelle, Aliase, Konfidenz, verknüpfte Personen/Projekte, Bearbeiten, Löschen mit Bestätigung);
+  Cluster-Fokus über Filter, Gesamtansicht (Doppelklick ins Leere / Esc), Idle-Drehung, sanfte Ausrichtung auf abgerufene
+  Erinnerungen; Suche `/` bzw. ⌘K (Labels + Hybrid-Gedächtnissuche + alle bisherigen Ansichten)
+- Live-Schicht aus echten Events (Werkzeugaufrufe, Gedächtnisabrufe, Coding-Jobs, Aufgaben, Freigaben) – keine erfundenen
+  Denkprozesse; ein abgeleiteter Zustand: Bereit · Hört zu · Denkt nach · Durchsucht das Gedächtnis · Arbeitet mit
+  Werkzeugen · Programmiert · Spricht · Wartet auf Freigabe · Fehler
+- Schwebendes Chat-Dock (Text, Push-to-Talk, Wellenform aus echten Pegeln), Freigaben und Not-Aus immer sichtbar, alle
+  bisherigen Ansichten (Aufgaben, Connectoren, Skills, Logs, Einstellungen …) im Systempanel (Raster-Symbol oder Suche)
+- Leistung (gemessen in Chrome auf dem M1, 3191 Knoten / 4209 Kanten synthetisch im Test-Tab): Hauptthread 120 Hz,
+  gerendert wird on demand mit max. 60 fps, 30 fps während Whisper transkribiert, 0 bei verdecktem Fenster;
+  adaptive Auflösung und Partikelzahl (PerformanceMonitor)
+
+### Einheitlicher Event-Stream
+- Jedes Event: `id, seq, ts, type, source, session_id, task_id, nodes, data` (`core/src/jarvis/events.py`);
+  Sitzung/Aufgabe/Werkzeug werden per `contextvars` in verschachtelte Aufrufe getragen (ein Gedächtnisabruf innerhalb
+  eines Werkzeugaufrufs einer Aufgabe kennt Aufgabe, Sitzung und Werkzeug); neues Event `memory.recalled`
+
+### Gedächtnis v2 (`core/src/jarvis/memory/`)
+- Analyse – warum Wissen verloren ging bzw. verwässerte: (1) gleiche Entität unter anderem Titel („Kunde Müller …“ vs.
+  „Müller …“) → zweite Notiz; (2) Paraphrasen als „Ergänzung“ angehängt; (3) Extraktion sah nur den einzelnen Satz, keine
+  Vorgeschichte und keine vorhandenen Notizen; (4) Extraktions-Warteschlange nur im RAM – Neustart/Claude-Ausfall = verloren;
+  (5) Recall nur Vektor-Top-4 mit Schwelle, keine Volltextsuche; (6) keine Gesprächs-Episoden
+- Jetzt: Entitätsauflösung (kanonische Namen, Aliase, Kind-Gruppen), satzweise Dedupe, LLM-Extraktion (Haiku über die
+  Subscription) mit Verlauf + ähnlichsten vorhandenen Notizen → create / update (konsolidierte Fassung) / supersede
+  (Widerspruch, alte Notiz bleibt „veraltet“) / skip, Konfidenz, typisierte Beziehungen; persistente Extraktion mit
+  Wiederholung; episodisches Gedächtnis (Zusammenfassung je Gespräch nach 20 min Ruhe); neue Arten Unternehmen, Aufgaben/
+  Verpflichtungen, Termine, E-Mails, Dokumente; Schutz gegen Informationsverlust bei Umformulierungen (Zahlen/Namen)
+- Hybrid-Suche: Volltext (tsvector) + pgvector parallel, RRF, Graph-Erweiterung, Re-Ranking (Ähnlichkeit, Schlagwort,
+  Aktualität, Nutzung, Konfidenz), komprimierter Kontextblock; Sprache: 250-ms-Budget + Vorabruf aus dem spekulativen
+  Transkript → Recall 54–66 ms (vorher ~290 ms)
+- Vault bereinigt: 3 Duplikat-Gruppen zusammengeführt (alte Notizen als „superseded“ erhalten), Backup:
+  `~/Library/Application Support/Jarvis/backups/vault-20261016-1225.tgz`
+
+### Sprache in Echtzeit
+Gemessene Ausgangslage (2026-10-16, Haiku, Fish Audio): Endpointing fix 1,6 s · Whisper 1,05–1,4 s · Recall 0,24–0,43 s ·
+Claude erstes Token ~3,2 s (neue Sitzung, inkl. unnötigem Modellwechsel) · TTS: Daemon wartete auf den ganzen Satz +
+afplay je Satz → geschätzt ~7 s bis zum ersten Ton.
+- Endpointing mit spekulativem STT: Whisper läuft ab 280 ms Pause; klingt der Satz fertig, endet der Turn nach 650 ms,
+  sonst nach bis zu 1,6 s (z. B. „… und“, „ähm“)
+- whisper-server `-ac 768 -nf`: 1,05 → 0,55 s (gleiche Transkripte); Äußerungen > 14 s werden an leisen Stellen geteilt
+- Ein WebSocket `/api/voice/speak`: Turn, Audio-Streaming (Tag je Antwort → veraltete Chunks werden verworfen), Abbruch,
+  Pegel, Metriken. Text wird schon während des Schreibens gesprochen (erster Teilsatz früh)
+- Fish Audio: gemessen HTTP auf warmer Verbindung ~260 ms TTFB vs. WebSocket ~440 ms nach Text (+~550 ms Aufbau) →
+  Hybrid: erstes Stück per warmem HTTP, Rest über den vorab geöffneten Live-Socket (durchgehende Prosodie); gleiche
+  Stimme (reference_id, Modell s1); Fallback HTTP → macOS-Stimme
+- Swift-Audiohelfer `jarvis-audio` (`core/native/JarvisAudio`): lückenlose Streaming-Wiedergabe, sofortiges Stoppen
+- Ehrlichkeit: Sätze wie „Ich kümmere mich darum“ werden erst gesprochen, wenn ein Werkzeug den Auftrag angenommen hat
+  (sonst verworfen); startet ein Turn mit Werkzeugen, sagt Jarvis sofort „Einen Moment, Sir.“ (keine Behauptung)
+- Gesprächsmodus: nach einer Antwort 30 s weiter zuhören ohne „Hey Jarvis“ (`voice.conversation_window_s`)
+- Claude-Prozesse starten mit dem Standardmodell des Routers (kein Modellwechsel beim ersten Turn)
+
+| Messung (Sprachende → …) | vorher | jetzt (warm) |
+|---|---|---|
+| Turn-Ende erkannt + Transkript fertig | 1,6 s + 1,05–1,4 s | 0,95–1,05 s (Transkript wiederverwendet) |
+| Gedächtnisabruf | 0,24–0,43 s | 0,05–0,07 s |
+| Claude erstes Token | ~3,2 s | 1,1–2,1 s (Rest nicht beeinflussbar) |
+| TTS erster Ton nach Text | Satz komplett + afplay | 0,26–0,46 s |
+| **Erster hörbarer Ton** | **~7 s (geschätzt)** | **2,9–3,5 s** (E2E-Test), 3,3–4,8 s in Sirs echten Gesprächen |
+
+Werkzeug-Aufgaben (Kalender, Recherche) dauern weiter so lange wie die Werkzeuge; Jarvis bestätigt jetzt sofort.
+Messwerte jedes Turns: `~/Library/Logs/Jarvis/voice-metrics.jsonl`, `GET /api/voice/metrics`, `scripts/bench/voice_latency.py`.
+
+### Recherche im echten Edge
+- Websuche nutzt Sirs Microsoft Edge (sichtbares Fenster, eigenes Jarvis-Profil `…/Jarvis/edge-profile`, Cookies bleiben)
+  statt eines frischen Headless-Browsers; Bing, DuckDuckGo und Google laufen parallel, der erste brauchbare Treffer zählt
+  (gemessen 0,7–2,3 s statt sequenzieller Timeouts; live: „Bennis Playland“ mit Adresse/Öffnungszeiten gefunden).
+  Bewusst keine Fingerprint-Tarnung/„undetectable“-Plugins.
+
+### Bekannte Grenzen / offen
+- Echounterdrückung (macOS Voice Processing) ist **aus**: im Test dämpfte sie auch Sirs Stimme im Raum (Pegel 30 vs.
+  Stille 20) und das Wake-Word-Modell erkannte auf dem bereinigten Signal nichts. Folge: Unterbrechen während Jarvis
+  spricht nur per „Hey Jarvis“. Barge-in per Stimme ist implementiert und getestet (E2E), aktiv mit
+  `voice.echo_cancellation: true` – braucht noch einen Test mit echter Stimme bzw. Headset
+- Claude Code (Subscription) bestimmt mit 1–2 s die Restlatenz; Ollama/Hermes werden nicht mehr genutzt (Altoption)
+- Fish-Audio-Modell `s1` ist laut Fish ab 31.12.2026 abgekündigt (wird dann von `s2.1-pro` bedient) – Stimme prüfen
+- Graph-API liefert die 1500 neuesten Erinnerungen; weitere je Art per „weitere laden“ (Filter unten links)
+- Echte Anrufe (Twilio) weiterhin ungetestet (Konto fehlt)
+
+### Tests (2026-10-16)
+Core: 80 Unit + 38 Integration (Gedächtnis-Schichten, Graph-Synchronisierung, Event-Envelope, Werkzeug-Events, echte
+Haiku-Extraktion) + 3 E2E-Sprache (voller Turn mit Latenzmessung, Barge-in per Stimme, per Wake Word); Desktop: 25
+(Graph-Modell, Live-Events, Zustand, Kamera, Layout, Detail-Overlay inkl. Bearbeiten/Löschen); mypy strict, ruff, eslint 0 Fehler.
+
 ## Stand: 2026-10-15
 
 ### Installiert / eingerichtet

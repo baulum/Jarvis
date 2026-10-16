@@ -85,3 +85,18 @@ cd ../bridge && swift test
   sobald der MCP-Endpunkt erreichbar ist. Der API-Listener wird über das Default-Profil (`~/.hermes/.env`) aktiviert.
 - Arbeitsspeicher: Whisper ≈ 1 GB, Embedding-Modell im Core ≈ 1,2 GB, je Claude-Code-Prozess ≈ 0,3 GB.
 - Telefonie: siehe [docs/ANLEITUNG-TWILIO.md](docs/ANLEITUNG-TWILIO.md) (inkl. Alternativen).
+
+## Neu in 2.0 (2026-10-16)
+- **Audiohelfer** `jarvis-audio` (Swift): wird von `scripts/setup.sh` bzw. beim Start automatisch gebaut
+  (`scripts/build-audio-helper.sh`, braucht `swiftc` aus den Xcode Command Line Tools). Fehlt er, nutzt der
+  Voice-Daemon den bisherigen Weg (sounddevice + afplay).
+- **Recherche** öffnet Microsoft Edge mit einem eigenen Profil (`~/Library/Application Support/Jarvis/edge-profile`).
+  Dort kann man sich bei Bedarf einmal anmelden (z. B. Google), Sirs normales Edge-Profil bleibt unberührt.
+  `browser.engine: chromium` in `config/jarvis.yaml` schaltet auf den bisherigen versteckten Browser zurück.
+- **Sprache**: Einstellungen unter `voice` in `config/jarvis.yaml` – `conversation_window_s` (weiterhören ohne Wake Word),
+  `min_end_of_turn_silence_ms` / `end_of_turn_silence_ms` (Endpointing), `echo_cancellation` (experimentell, aus).
+- **Datenbank-Migrationen** laufen beim Core-Start automatisch.
+- **Latenz messen**: `cd core && uv run python ../scripts/bench/voice_latency.py --wav <aufnahme.wav>`;
+  jeder echte Sprachturn landet in `~/Library/Logs/Jarvis/voice-metrics.jsonl`.
+- **Bedienung**: Ziehen = drehen, Scrollen = zoomen, Rechtsklick-Ziehen = verschieben, Klick = Knoten öffnen,
+  Doppelklick ins Leere / Esc = Gesamtansicht, `/` oder ⌘K = Suche, Enter = Chat, Raster-Symbol = alle Systemansichten.

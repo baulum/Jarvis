@@ -32,8 +32,11 @@
 | **Modellrouter** | `core/src/jarvis/agent/model_router.py` | Sonnet 5.5 Standard, einfache Anfragen → Haiku 5.5, Opus 5.5 nur auf Befehl/manuell |
 | **Hermes Agent** (Altoption, ungenutzt) | `~/.hermes` | früherer Modus `agent.provider: hermes` mit lokalem Ollama-Modell; wird nicht gestartet |
 | **JarvisBridge** | `bridge/` (Swift) | Native macOS-Steuerung, eigene Token-/Kill-Switch-/Policy-Prüfung (Defense in Depth) |
-| **Voice-Daemon** | `core/src/jarvis/voice/daemon.py` | Wake Word, VAD, STT-Upload, Satz-für-Satz-TTS, Barge-in, Push-to-Talk |
-| **Desktop-App** | `desktop/` (Tauri 2, React, TS strict) | Kommandozentrale, Menüleisten-Icon, globaler Kurzbefehl ⌘⇧J |
+| **Voice-Daemon** | `core/src/jarvis/voice/daemon.py` | Wake Word, Endpointing mit spekulativem STT, Streaming-Turns über `/api/voice/speak`, Barge-in, Gesprächsmodus, Push-to-Talk, Latenzmessung |
+| **Sprachausgabe** | `core/src/jarvis/voice/pipeline.py`, `fish_stream.py` | Text-Chunker, Commitment-Guard, Hybrid-TTS (warmes HTTP + Fish-Live-WebSocket), Fallback macOS |
+| **Audiohelfer** | `core/native/JarvisAudio` (Swift) | Mikrofon + lückenlose Streaming-Wiedergabe (AVAudioEngine), optional Echounterdrückung |
+| **Live-Graph** | `core/src/jarvis/graph.py`, `GET /api/graph` | Wissensgraph aus echten Daten (Gedächtnis, Agenten, Werkzeuge, Skills, Aufgaben, Jobs, Gespräche) |
+| **Desktop-App** | `desktop/` (Tauri 2, React, TS strict) | 3D-Gedächtnis als Hauptansicht (`src/holo`, React Three Fiber), Chat-Dock, Systempanel mit allen Ansichten, Menüleisten-Icon, ⌘⇧J |
 | **Embedding-Modell** | im Core (`memory/embeddings.py`) | Qwen3-Embedding-0.6B als ONNX (fastembed), 1024 Dim., für die semantische Gedächtnissuche – kein Ollama |
 | **Cloudflare Quick Tunnel** | Kindprozess des Core | öffentliche HTTPS-Adresse nur für die Twilio-Webhooks; `api/exposure.py` lässt darüber nur `/api/telephony/*` durch |
 | **whisper.cpp** | Homebrew | `whisper-server` mit large-v3-turbo (q5_0), Deutsch |
@@ -80,8 +83,22 @@ Beispiel `new_customer_project` („Müller Gebäudereinigung, Website, 499 €�
 → Rechnungsentwurf (Freigabe) → Projektordner + Git → BRIEF.md → Claude-Code-Job (Freigabe) → Tests abwarten →
 Gedächtnis aktualisieren → Benachrichtigung (Desktop/Telegram).
 
+**Events.** Jedes Bus-Event trägt `seq, ts, type, source, session_id, task_id, nodes` (Graph-Knoten-IDs wie
+`memory:<uuid>`, `tool:<name>`, `connector:<id>`, `agent:jarvis|coding|scheduler|voice|telephony`, `task:<uuid>`,
+`coding:<uuid>`, `session:<uuid>`). Sitzung/Aufgabe/Werkzeug fließen per `contextvars` (`events.activity`) in
+verschachtelte Aufrufe. Die Desktop-App faltet die Events in eine Live-Schicht (`desktop/src/holo/graph/live.ts`) –
+sichtbar wird nur, was tatsächlich passiert ist.
+
+**Sprachturn.** Mikrofon → Wake Word → Endpointer (spekulatives Whisper ab 280 ms Pause, Vorabruf des Gedächtnis-
+Embeddings, TTS-Vorwärmung) → `/api/voice/speak` `turn` → Orchestrator (Recall parallel zu Speicherung/Modellwahl) →
+Claude-Deltas → TextChunker → Commitment-Guard → Hybrid-TTS → getaggte PCM-Frames → Audiohelfer. Abbruch (`cancel`)
+stoppt Wiedergabe, Synthese und nur den Agent-Lauf dieser Sitzung.
+
 **Gedächtnis.** Notizen im Vault (eine Erinnerung = eine Markdown-Datei, Ordner je Art). Index in `memory_items`
-(Embedding 1024-dim, HNSW cosine) und `memory_links` (Wissensgraph aus `[[Links]]` und Entitäten). Duplikate: gleicher Titel+Art
+(Embedding 1024-dim, HNSW cosine; tsvector für Volltext; Konfidenz, Aliase, Nutzung) und `memory_links` (Wissensgraph aus
+`[[Links]]`, Entitäten und typisierten Beziehungen). Suche hybrid (Volltext + Vektor, RRF, Graph-Erweiterung, Re-Ranking).
+Schreiben über Entitätsauflösung + satzweise Dedupe; die Extraktion sieht Verlauf und vorhandene Notizen und wählt
+create/update/supersede/skip; episodische Notizen fassen abgeschlossene Gespräche zusammen. Duplikate: gleicher Titel+Art
 oder Kosinus ≥ 0,93 → Ergänzung statt neuer Notiz. Korrektur → alte Notiz bleibt als `superseded` erhalten. Sensible Inhalte
 (IBAN, Passwörter, Gesundheit …) landen erst nach Bestätigung auf der Platte. Ein Dateiwatcher übernimmt Änderungen aus Obsidian.
 
