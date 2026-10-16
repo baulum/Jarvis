@@ -12,6 +12,7 @@ import logging
 import re
 import shutil
 import tempfile
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -21,6 +22,7 @@ import numpy as np
 from jarvis.config import TtsCfg
 from jarvis.secrets import secret_store
 from jarvis.voice.audio import pcm_to_wav
+from jarvis.voice.fish_stream import FishStreamSession
 
 logger = logging.getLogger(__name__)
 
@@ -173,10 +175,39 @@ class FishAudioTTS(TTSProvider):
     name = "fish_audio"
     SUPPORTED_RATES = (8000, 16000, 24000, 32000, 44100)
 
-    def __init__(self, api_key_secret: str, reference_id: str, model: str) -> None:
+    def __init__(self, api_key_secret: str, reference_id: str, model: str, chunk_length: int = 100) -> None:
         self.api_key_secret = api_key_secret
         self.reference_id = reference_id
         self.model = model
+        self.chunk_length = chunk_length
+        # One pooled client: a warm TLS connection saves ~200 ms per request (measured 480 → 260 ms TTFB).
+        self._http: httpx.AsyncClient | None = None
+        self._warmed = 0.0
+
+    def _client(self) -> httpx.AsyncClient:
+        if self._http is None or self._http.is_closed:
+            self._http = httpx.AsyncClient(
+                base_url="https://api.fish.audio",
+                timeout=httpx.Timeout(60, connect=5),
+                limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=120),
+            )
+        return self._http
+
+    def api_key(self) -> str | None:
+        return secret_store.get(self.api_key_secret)
+
+    async def warm(self) -> None:
+        """Open (or keep) the TLS connection before the first sentence is ready."""
+        if time.monotonic() - self._warmed < 60:
+            return
+        key = self.api_key()
+        if not key or not self.reference_id:
+            return
+        try:
+            await self._client().get(f"/model/{self.reference_id}", headers={"Authorization": f"Bearer {key}"})
+            self._warmed = time.monotonic()
+        except httpx.HTTPError:
+            logger.debug("Fish Audio warm-up failed", exc_info=True)
 
     async def available(self) -> bool:
         return bool(secret_store.get(self.api_key_secret)) and bool(self.reference_id)
@@ -186,18 +217,19 @@ class FishAudioTTS(TTSProvider):
         if not key:
             raise RuntimeError("Fish-Audio-API-Key fehlt")
         rate = sample_rate if sample_rate in self.SUPPORTED_RATES else 16000
-        body = {"text": text, "format": "pcm", "sample_rate": rate, "latency": "balanced", "normalize": True}
+        body = {
+            "text": text,
+            "format": "pcm",
+            "sample_rate": rate,
+            "latency": "balanced",
+            "normalize": True,
+            "chunk_length": self.chunk_length,
+        }
         if self.reference_id:
             body["reference_id"] = self.reference_id
-        async with (
-            httpx.AsyncClient(timeout=httpx.Timeout(60, connect=5)) as c,
-            c.stream(
-                "POST",
-                "https://api.fish.audio/v1/tts",
-                json=body,
-                headers={"Authorization": f"Bearer {key}", "model": self.model},
-            ) as r,
-        ):
+        async with self._client().stream(
+            "POST", "/v1/tts", json=body, headers={"Authorization": f"Bearer {key}", "model": self.model}
+        ) as r:
             if r.status_code >= 400:
                 detail = (await r.aread()).decode(errors="replace")[:200]
                 raise RuntimeError(f"Fish Audio {r.status_code}: {detail}")
@@ -232,7 +264,12 @@ class TTSService:
     def __init__(self, cfg: TtsCfg) -> None:
         self.cfg = cfg
         self.macos = MacSayTTS(cfg.macos_voice, cfg.rate)
-        self.fish = FishAudioTTS(cfg.fish_audio.api_key_secret, cfg.fish_audio.reference_id, cfg.fish_audio.model)
+        self.fish = FishAudioTTS(
+            cfg.fish_audio.api_key_secret,
+            cfg.fish_audio.reference_id,
+            cfg.fish_audio.model,
+            cfg.fish_audio.chunk_length,
+        )
         # Set by the Fish Audio connector: when it is active, its settings win over config/jarvis.yaml.
         self.fish_connector_active = False
         self.fish_last_error: str | None = None
@@ -280,6 +317,27 @@ class TTSService:
 
     async def synthesize(self, text: str, sample_rate: int) -> bytes:
         return b"".join([c async for c in self.stream(text, sample_rate)])
+
+    async def warm(self) -> None:
+        if (await self.provider()) is self.fish:
+            await self.fish.warm()
+
+    async def live_session(self, sample_rate: int) -> FishStreamSession | None:
+        """A Fish Audio WebSocket session for streamed replies, or None (provider is not Fish / disabled)."""
+        fcfg = self.cfg.fish_audio
+        if not fcfg.streaming or (await self.provider()) is not self.fish or self.fish_last_error:
+            return None
+        key = self.fish.api_key()
+        if not key:
+            return None
+        return FishStreamSession(
+            key,
+            self.fish.reference_id,
+            self.fish.model,
+            sample_rate=sample_rate,
+            latency=fcfg.latency,
+            chunk_length=fcfg.chunk_length,
+        )
 
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…:;])\s+|\n+")

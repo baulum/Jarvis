@@ -76,8 +76,13 @@ def turn_instructions(
     parts = [f"Aktuelle Zeit: {now.strftime('%A, %d.%m.%Y %H:%M')} (Europe/Berlin). Kanal: {channel}."]
     if channel in ("voice", "phone"):
         parts.append(
-            "Die Antwort wird vorgelesen: maximal zwei bis drei kurze Sätze, keine Listen, "
-            "keine Markdown-Formatierung, Zahlen ausschreiben wo sinnvoll."
+            "Die Antwort wird vorgelesen, während du sie schreibst: beginne direkt mit der Antwort "
+            "(kurzer erster Satz), insgesamt maximal zwei bis drei kurze Sätze, keine Listen, keine "
+            "Markdown-Formatierung, Zahlen ausschreiben wo sinnvoll. Längere Aufgaben (Websites, Recherchen, "
+            "Geschäftsabläufe) startest du ZUERST mit dem passenden Werkzeug im Hintergrund und bestätigst erst "
+            "danach in einem Satz (z. B. „Sehr wohl, Sir. Ich kümmere mich darum.“). Kündige nie etwas als "
+            "gestartet oder erledigt an, bevor das Werkzeug es angenommen hat. Sir wird benachrichtigt, "
+            "sobald die Aufgabe fertig ist."
         )
     if tainted:
         parts.append(

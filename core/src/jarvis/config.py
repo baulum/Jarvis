@@ -99,6 +99,9 @@ class FishAudioCfg(_Strict):
     api_key_secret: str = "fish-audio-api-key"
     reference_id: str = ""
     model: str = "s1"
+    streaming: bool = True  # WebSocket live TTS (text in while the answer is still being written)
+    latency: Literal["low", "balanced", "normal"] = "balanced"
+    chunk_length: int = Field(default=100, ge=100, le=300)  # smaller = earlier first audio
 
 
 class TtsCfg(_Strict):
@@ -115,10 +118,15 @@ class VoiceCfg(_Strict):
     wake_threshold: float = 0.5
     stt: SttCfg = Field(default_factory=SttCfg)
     tts: TtsCfg = Field(default_factory=TtsCfg)
-    end_of_turn_silence_ms: int = 1600
+    end_of_turn_silence_ms: int = 1600  # longest pause before a turn ends (sentence clearly unfinished)
+    min_end_of_turn_silence_ms: int = 650  # pause that ends a turn when the transcript is complete
+    speculative_stt_ms: int = 280  # start transcribing after this much silence (overlaps STT with endpointing)
     vad_min_rms: float = 180
     max_utterance_s: int = 30
     followup_window_s: int = 6
+    barge_in: Literal["auto", "voice", "wake_word"] = "auto"  # auto: by voice when echo cancellation is active
+    barge_in_ms: int = 320  # speech needed to interrupt Jarvis (voice barge-in)
+    native_audio: bool = True  # Swift helper with macOS echo cancellation (falls back to sounddevice/afplay)
 
 
 class TwilioCfg(_Strict):

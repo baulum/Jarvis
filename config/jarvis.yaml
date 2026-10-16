@@ -79,8 +79,18 @@ voice:
       api_key_secret: fish-audio-api-key
       reference_id: ""         # Fish Audio voice model id
       model: s1
-  end_of_turn_silence_ms: 1600   # Stille, ab der eine Äußerung als beendet gilt (höher = mehr Zeit für Denkpausen)
+      streaming: true          # WebSocket-Live-TTS: Text geht schon während der Antwort an Fish Audio
+      latency: balanced        # low | balanced | normal (Stimme bleibt gleich, nur Pufferung)
+      chunk_length: 100        # 100–300; kleiner = früherer erster Ton
+  # Endpointing: endet die Äußerung grammatisch vollständig, reichen min_end_of_turn_silence_ms Stille;
+  # klingt sie unfertig („… und“, „ähm“), wartet Jarvis bis end_of_turn_silence_ms.
+  end_of_turn_silence_ms: 1600   # längste Denkpause
+  min_end_of_turn_silence_ms: 650
+  speculative_stt_ms: 280        # Whisper startet schon in der Pause (überlappt mit dem Endpointing)
   vad_min_rms: 180               # Mindestpegel für Sprache (niedriger = leise Silben zählen als Sprache)
+  barge_in: auto                 # auto | voice | wake_word – auto: Unterbrechen per Stimme, wenn Echo-Unterdrückung aktiv
+  barge_in_ms: 320               # so lange muss Sir sprechen, um Jarvis zu unterbrechen
+  native_audio: true             # Swift-Audiohelfer mit macOS-Echo-Unterdrückung (sonst sounddevice/afplay)
   max_utterance_s: 30
   followup_window_s: 6         # keep listening after a reply without wake word
 
