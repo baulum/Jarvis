@@ -1,5 +1,6 @@
 // Global app state (zustand). Bus events are folded in here; views read slices.
 import { create } from "zustand";
+import { useBrain } from "../holo/store";
 import { ApiError, CORE_URL, createApi } from "../lib/api";
 import { nativeLog, nativeNotify } from "../lib/native";
 import { RealtimeClient, type ConnectionState } from "../lib/realtime";
@@ -125,7 +126,11 @@ export const useApp = create<AppState>((set, get) => ({
   unread: 0,
   turnModels: {},
 
-  setView: (view) => set({ view }),
+  // The former views open in the system panel above the brain (toasts and buttons still call setView).
+  setView: (view) => {
+    set({ view });
+    useBrain.getState().openOverlay(view === "chat" ? null : "system", view);
+  },
   setToken: (token, err = null) => set({ token, tokenError: err }),
   setActiveSession: (activeSessionId) => set({ activeSessionId }),
   setThread: (t) => set((s) => ({ threads: { ...s.threads, [t.sessionId]: t } })),
@@ -196,6 +201,8 @@ function debounce(key: string, ms: number, fn: () => void) {
 }
 
 export function handleBusEvent(ev: BusEvent): void {
+  useBrain.getState().onEvent(ev); // live layer of the brain (tool calls, recalls, jobs …)
+  if (ev.type === "voice.level") return;
   const st = useApp.getState();
   const d = ev.data as Record<string, unknown>;
   const type = ev.type;

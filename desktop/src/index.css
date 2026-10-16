@@ -180,6 +180,47 @@
   }
 }
 
+/* ---------------------------------------------------------------- holographic surface
+   Floating elements sit above the 3D brain. They are dark and slightly translucent so the brain stays
+   readable behind them, separated by one hairline – no glow, no gradient borders. */
+.holo-panel {
+  background: color-mix(in oklab, var(--color-void) 84%, transparent);
+  border: 1px solid color-mix(in oklab, var(--color-seam-hi) 85%, transparent);
+  border-radius: 12px;
+  backdrop-filter: blur(10px) saturate(115%);
+  -webkit-backdrop-filter: blur(10px) saturate(115%);
+}
+.holo-dock {
+  background: color-mix(in oklab, var(--color-void) 80%, transparent);
+  border: 1px solid color-mix(in oklab, var(--color-seam-hi) 80%, transparent);
+  border-radius: 18px;
+  backdrop-filter: blur(12px) saturate(115%);
+  -webkit-backdrop-filter: blur(12px) saturate(115%);
+}
+.holo-dock:focus-within {
+  border-color: color-mix(in oklab, var(--color-arc-dim) 70%, transparent);
+}
+.holo-controls {
+  opacity: 0.55;
+  transition: opacity 200ms var(--ease-out-quint);
+}
+.holo-controls:hover,
+.holo-controls:focus-within {
+  opacity: 1;
+}
+.holo-label {
+  font-size: 0.75rem;
+  line-height: 1.2;
+  color: var(--color-ink);
+  text-shadow:
+    0 0 6px #030608,
+    0 0 2px #030608;
+  will-change: transform;
+}
+.holo-label[data-strong="0"] {
+  color: var(--color-ink-dim);
+}
+
 /* Live caret for streaming answers */
 @keyframes caret {
   0%,

@@ -21,4 +21,10 @@ export default tseslint.config(
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
     },
   },
+  {
+    // React Three Fiber render loop: mutating Three.js objects (uniforms, buffer attributes, camera) inside
+    // useFrame/useMemo is the intended pattern there; the compiler's immutability rule does not apply.
+    files: ["src/holo/graph/**/*.tsx"],
+    rules: { "react-hooks/immutability": "off" },
+  },
 );

@@ -167,7 +167,7 @@ function TopBar() {
   );
 }
 
-function Toasts() {
+export function Toasts() {
   const toasts = useApp((s) => s.toasts);
   const dismiss = useApp((s) => s.dismissToast);
   const setView = useApp((s) => s.setView);
