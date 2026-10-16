@@ -300,6 +300,13 @@ class MemoryService:
             self._qcache.popitem(last=False)
         return emb
 
+    async def prefetch(self, query: str) -> None:
+        """Embed a likely query ahead of time (voice: speculative transcript) – the turn then hits the cache."""
+        try:
+            await self._embed_query(query)
+        except Exception:
+            logger.debug("prefetch failed", exc_info=True)
+
     async def index_note(self, note: Note, force: bool = False) -> uuid.UUID:
         chash = content_hash(note.title, note.body)
         async with session_scope() as s:

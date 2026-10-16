@@ -378,6 +378,7 @@ class VoiceDaemon:
                     audio_now = ep.audio()
                     spec_len = audio_now.size
                     spec = asyncio.create_task(self._stt(audio_now))
+                    spec.add_done_callback(self._prefetch_recall)
                     marks["spec_started"] = time.perf_counter()
                     await self._prepare()
                 elif ev == "resume":
@@ -419,6 +420,14 @@ class VoiceDaemon:
                 elif spec is not None:
                     spec.cancel()
                 return audio, text, marks
+
+    def _prefetch_recall(self, task: asyncio.Task[str]) -> None:
+        """The speculative transcript lets the core embed the memory query before the turn is even sent."""
+        if task.cancelled() or task.exception() is not None:
+            return
+        text = strip_wake_word(task.result())
+        if len(text) >= 8:
+            spawn_bg(self._send({"type": "prefetch", "text": text}))
 
     async def _prepare(self) -> None:
         tag = (self.tag + 1) % 256

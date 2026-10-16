@@ -303,3 +303,10 @@ async def test_tidy_rewrites_but_refuses_information_loss(mem: MemoryService) ->
     await mem.tidy(uuid.UUID(r["id"]))
     body = mem.vault.read(r["path"]).body
     assert "Ergänzung" not in body.split("## Verlauf")[0] and "Max Müller" in body and "499" in body
+
+
+async def test_prefetch_makes_recall_hit_the_embedding_cache(mem: MemoryService) -> None:
+    await mem.remember("Server Zugang", "Der Staging-Server läuft auf Port 8443.", "technical")
+    await mem.prefetch("Auf welchem Port läuft der Staging-Server?")
+    hits = await mem.search("Auf welchem Port läuft der Staging-Server?", limit=1, budget_ms=1)
+    assert hits and "semantic" in hits[0]["match"]  # the query embedding was ready despite a 1 ms budget

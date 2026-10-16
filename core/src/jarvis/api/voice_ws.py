@@ -158,6 +158,8 @@ class VoiceSocket:
             self._run(tag, self.turn(tag, str(msg["text"]), msg.get("session_id")))
         elif kind == "say" and str(msg.get("text", "")).strip():
             self._run(tag, self.say(tag, str(msg["text"])))
+        elif kind == "prefetch" and str(msg.get("text", "")).strip():
+            spawn(self.state.memory.prefetch(str(msg["text"])), name="memory-prefetch")
         elif kind == "cancel":
             await self.cancel(tag)
         elif kind == "level":
