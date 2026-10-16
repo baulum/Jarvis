@@ -111,3 +111,26 @@ async def test_device_tokens() -> None:
     assert p is not None and p.role == "operator"
     assert await authenticate_token(token + "x") is None
     assert await authenticate_token(None) is None
+
+
+async def test_tool_events_carry_graph_nodes_and_task_attribution(stack) -> None:
+    """Live graph: every real tool call names its tool/connector node, a call id and the task it belongs to."""
+    from jarvis.events import activity, bus
+
+    q = bus.open_queue()
+    try:
+        with activity(task_id="task-42"):
+            r = await stack.executor.execute("t_read", {"x": 1}, ToolContext(principal=OWNER))
+        assert r.status == "ok"
+        evs = []
+        while not q.empty():
+            ev = q.get_nowait()
+            if ev.type.startswith("tool."):
+                evs.append(ev)
+    finally:
+        bus.close_queue(q)
+    started, finished = evs[0], evs[-1]
+    assert started.type == "tool.started" and finished.type == "tool.finished"
+    assert started.nodes[:2] == ["tool:t_read", "connector:test"] and started.source == "tool"
+    assert started.task_id == finished.task_id == "task-42"
+    assert started.data["call_id"] == finished.data["call_id"] and finished.data["status"] == "ok"
