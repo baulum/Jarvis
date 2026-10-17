@@ -239,10 +239,13 @@ class CallVoiceAgent:
         await self.send({"type": "session", "session_id": str(sess.id)})
         bus.subscribe("memory.recalled", self._on_bus_memory)
         listen = asyncio.create_task(self._listen_loop())  # running during the greeting: Sir may interrupt it
-        if self.greeting:
+        greeting: asyncio.Task[None] | None = None
+        if self.greeting:  # not awaited here: a hang-up during the greeting must end the call at once
             await orch.record_assistant(sess.id, self.greeting, {"channel": "phone", "call_id": str(self.call_id)})
-            await self._speak_greeting(self.greeting)
-        await self.set_state("listening")
+            greeting = asyncio.create_task(self._speak_greeting(self.greeting))
+            greeting.add_done_callback(lambda _t: spawn(self.set_state("listening"), name="call-state"))
+        else:
+            await self.set_state("listening")
         max_s = self.state.settings.mobile.calls.max_duration_minutes * 60
         try:
             await asyncio.wait_for(self._owner_left.wait(), max_s)
@@ -251,6 +254,8 @@ class CallVoiceAgent:
             await self._speak_fixed("Sir, wir sprechen schon eine ganze Weile. Ich lege jetzt auf.")
         finally:
             listen.cancel()
+            if greeting is not None:
+                greeting.cancel()
             bus.unsubscribe("memory.recalled", self._on_bus_memory)
 
     async def _listen_loop(self) -> None:
@@ -330,6 +335,7 @@ class CallVoiceAgent:
         assert self.principal is not None and self.session_id is not None
         await self.set_state("thinking")
         t0 = time.perf_counter()
+        logger.info("Call utterance: %.2f s (transcript %s)", audio.size / IN_RATE, "reused" if text else "new")
         if text is None:
             text = await self._stt(audio)
         text = text.strip()
@@ -428,9 +434,9 @@ class CallVoiceAgent:
             await self._speak_fixed(text)
             return
         self.metrics["greeting_ready_ms"] = round((time.monotonic() - self._started) * 1000)
+        await self._transcript("jarvis", text)  # recorded when it starts – it is being said
         await self._on_audio(pcm)
         await self._drain()
-        await self._transcript("jarvis", text)
 
     async def _speak_fixed(self, text: str) -> None:
         speech = self._new_speech()
@@ -464,5 +470,5 @@ class CallVoiceAgent:
             for i in range(0, len(pad), OUT_FRAME * 2):
                 await self._source.capture_frame(rtc.AudioFrame(pad[i : i + OUT_FRAME * 2], OUT_RATE, 1, OUT_FRAME))
         with contextlib.suppress(Exception):
-            await self._source.wait_for_playout()
+            await asyncio.wait_for(self._source.wait_for_playout(), 30)
         self._speaking = False

@@ -387,6 +387,18 @@ async def test_call(st: AppState = StateDep, p: Principal = OwnerOrMobile) -> An
         raise HTTPException(409, str(e)) from e
 
 
+@router.post("/test/ring-local")
+async def test_ring_local(request: Request, st: AppState = StateDep, p: Principal = OwnerOnly) -> Any:
+    """DEVICE TEST without FCM: creates a ringing Jarvis call; the phone is told over adb (see docs/MOBILE.md).
+    Owner device on loopback only – not reachable through the mobile gateway (not in its allowlist)."""
+    if request.client is None or request.client.host not in ("127.0.0.1", "::1"):
+        raise HTTPException(403, "loopback only")
+    await audit(p.label, "call.test_ring_local")
+    return await st.calls.ring_owner(
+        message="Dies ist ein lokaler Testanruf ohne Push. Die Website ist fertig.", reason="test", skip_push=True
+    )
+
+
 # ------------------------------------------------------------------ calls
 @router.get("/calls/availability")
 async def calls_availability(st: AppState = StateDep, p: Principal = OwnerOrMobile) -> dict[str, Any]:

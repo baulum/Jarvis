@@ -1,0 +1,57 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/services.dart';
+
+/// Typed wrapper around the Kotlin side (credentials, Keystore signing, Telecom calls, push).
+class NativeBridge {
+  NativeBridge({MethodChannel? channel, EventChannel? events})
+      : _ch = channel ?? const MethodChannel('jarvis/native'),
+        _ev = events ?? const EventChannel('jarvis/events');
+
+  final MethodChannel _ch;
+  final EventChannel _ev;
+  Stream<NativeEvent>? _events;
+
+  Stream<NativeEvent> get events => _events ??= _ev
+      .receiveBroadcastStream()
+      .map((e) => NativeEvent.fromJson(jsonDecode(e as String) as Map<String, dynamic>))
+      .asBroadcastStream();
+
+  Future<Map<String, dynamic>> status() async =>
+      jsonDecode(await _ch.invokeMethod<String>('status') ?? '{}') as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> pair(String payload, String name) async =>
+      jsonDecode(await _ch.invokeMethod<String>('pair', {'payload': payload, 'name': name}) ?? '{}')
+          as Map<String, dynamic>;
+
+  Future<String> accessToken() async => (await _ch.invokeMethod<String>('accessToken'))!;
+  Future<String> baseUrl({bool force = false}) async => (await _ch.invokeMethod<String>('baseUrl', {'force': force}))!;
+  Future<void> logout() => _ch.invokeMethod('logout');
+  Future<void> forget() => _ch.invokeMethod('forget');
+
+  Future<Map<String, dynamic>> configurePush(String? optionsJson) async =>
+      jsonDecode(await _ch.invokeMethod<String>('configurePush', {'options': optionsJson}) ?? '{}')
+          as Map<String, dynamic>;
+
+  /// Device-key signature (Android Keystore) over `purpose|device|ts|nonce|sha256(body)`.
+  Future<Map<String, String>> sign(String purpose, String body) async =>
+      (await _ch.invokeMapMethod<String, String>('sign', {'purpose': purpose, 'body': body}))!;
+
+  Future<Map<String, dynamic>> callState() async =>
+      jsonDecode(await _ch.invokeMethod<String>('callState') ?? '{}') as Map<String, dynamic>;
+  Future<void> startCall() => _ch.invokeMethod('startCall');
+  Future<void> answer() => _ch.invokeMethod('answer');
+  Future<void> decline() => _ch.invokeMethod('decline');
+  Future<void> hangup() => _ch.invokeMethod('hangup');
+  Future<void> setMuted(bool muted) => _ch.invokeMethod('setMuted', {'muted': muted});
+  Future<void> setEndpoint(String id) => _ch.invokeMethod('setEndpoint', {'id': id});
+  Future<void> openSettings(String kind) => _ch.invokeMethod('openSettings', {'kind': kind});
+}
+
+class NativeEvent {
+  const NativeEvent(this.type, this.data);
+  factory NativeEvent.fromJson(Map<String, dynamic> j) => NativeEvent(j['type'] as String, j['data']);
+  final String type;
+  final dynamic data;
+}

@@ -29,8 +29,12 @@ def _internal(request_url_path: str, query: str, base: str) -> str:
 async def rtc_ws(ws: WebSocket, rest: str = "") -> None:
     base = ws.app.state.jarvis.settings.mobile.livekit.internal_url
     target = _internal(ws.url.path, ws.url.query, base)
+    # newer SDKs send the room token as "Authorization: Bearer …" instead of ?access_token=
+    auth = {"Authorization": ws.headers["authorization"]} if "authorization" in ws.headers else None
     try:
-        upstream = await websockets.connect(target, max_size=None, open_timeout=10, ping_interval=None)
+        upstream = await websockets.connect(
+            target, max_size=None, open_timeout=10, ping_interval=None, additional_headers=auth
+        )
     except Exception as e:
         logger.warning("LiveKit signalling unreachable: %s", e)
         await ws.close(code=1011)
@@ -73,5 +77,6 @@ async def rtc_http(rest: str, request: Request) -> Response:
     """``/rtc/validate`` – the SDK calls it after a failed connect to get a readable error."""
     base = request.app.state.jarvis.settings.mobile.livekit.internal_url.replace("ws://", "http://")
     async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.get(_internal(request.url.path, request.url.query, base))
+        auth = {"Authorization": request.headers["authorization"]} if "authorization" in request.headers else {}
+        r = await c.get(_internal(request.url.path, request.url.query, base), headers=auth)
     return Response(r.content, status_code=r.status_code, media_type=r.headers.get("content-type"))

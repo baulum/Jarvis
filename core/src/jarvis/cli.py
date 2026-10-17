@@ -59,6 +59,29 @@ async def _with_db(coro_fn: Any) -> Any:
         await dispose_engine()
 
 
+def cmd_mobile_pair(args: argparse.Namespace) -> None:
+    """One-time pairing QR for the companion app (valid 10 minutes, owner-only API)."""
+    import segno
+
+    res = _api("POST", "/api/mobile/pairings", json={})
+    print("\nJ.A.R.V.I.S. – Smartphone koppeln")
+    print("In der App „QR-Code scannen“ wählen (gültig bis " + res["expires_at"][11:16] + " UTC).\n")
+    segno.make(res["payload"], error="m").terminal(compact=True, border=2)
+    print("\nAdressen:     " + ", ".join(res["urls"]))
+    print("Fingerabdruck: " + str(res["fingerprint"]))
+    print("\nOhne Kamera: diesen Text in der App unter „Kopplungstext einfügen“ eingeben:\n" + res["payload"] + "\n")
+    if args.svg:
+        Path(args.svg).write_text(res["svg"], encoding="utf-8")
+        print(f"SVG gespeichert: {args.svg}")
+
+
+def cmd_mobile_status(_: argparse.Namespace) -> None:
+    print(json.dumps(_api("GET", "/api/mobile/status"), indent=2, ensure_ascii=False))
+    for d in _api("GET", "/api/mobile/devices"):
+        state = "widerrufen" if d["revoked"] else ("Push ✓" if d["push"] else "kein Push")
+        print(f"  • {d['name']} ({d['model']}) – {state}, zuletzt {d['last_seen_at'] or '–'}")
+
+
 def cmd_migrate(_: argparse.Namespace) -> None:
     subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=CORE_DIR, check=True)
 
@@ -292,6 +315,10 @@ def main() -> None:
     pr.add_argument("name")
     pr.add_argument("--role", default="operator", choices=["operator", "viewer"])
     pr.set_defaults(fn=cmd_pair)
+    mp = sub.add_parser("mobile-pair", help="Smartphone (J.A.R.V.I.S.-App) koppeln: QR-Code anzeigen")
+    mp.add_argument("--svg", help="QR-Code zusätzlich als SVG-Datei speichern")
+    mp.set_defaults(fn=cmd_mobile_pair)
+    sub.add_parser("mobile-status", help="Mobile-Status").set_defaults(fn=cmd_mobile_status)
     sub.add_parser("status", help="Systemstatus").set_defaults(fn=cmd_status)
     sub.add_parser("doctor", help="Installation prüfen").set_defaults(fn=cmd_doctor)
     k = sub.add_parser("killswitch", help="Not-Aus")

@@ -40,3 +40,12 @@ def test_whisper_hallucinations_removed() -> None:
     assert _clean_transcript("[BLANK_AUDIO]") == ""
     assert _clean_transcript(" Untertitel im Auftrag des ZDF") == ""
     assert _clean_transcript("Hallo Jarvis") == "Hallo Jarvis"
+
+
+def test_whisper_repetition_loop_is_collapsed() -> None:
+    from jarvis.voice.speech import _clean_transcript
+
+    looped = "Ja wiss, wie viel ist 3 plus 4?\n Ja wiss, wie viel ist 3 plus 4?\n Ja wiss, wie viel ist 3 plus 4?"
+    assert _clean_transcript(looped) == "Ja wiss, wie viel ist 3 plus 4?"
+    assert _clean_transcript("Ja. Ja. Gut.") == "Ja. Gut."
+    assert _clean_transcript("Erstens. Zweitens.") == "Erstens. Zweitens."

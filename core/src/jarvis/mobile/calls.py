@@ -130,9 +130,16 @@ class CallService:
 
     # ------------------------------------------------------------------ Jarvis → Sir
     async def ring_owner(
-        self, *, message: str, reason: str, event_key: str | None = None, alert_id: uuid.UUID | None = None
+        self,
+        *,
+        message: str,
+        reason: str,
+        event_key: str | None = None,
+        alert_id: uuid.UUID | None = None,
+        skip_push: bool = False,
     ) -> dict[str, Any]:
-        blocker = await self.call_blocker(event_key)
+        """``skip_push`` only for the owner's local device test (the phone is triggered over adb instead of FCM)."""
+        blocker = None if skip_push else await self.call_blocker(event_key)
         if blocker:
             raise RuntimeError(blocker)
         call_id = uuid.uuid4()
@@ -151,6 +158,10 @@ class CallService:
             )
         greeting = f"{time_of_day_greeting(self.state.personality)} {message}".strip()
         self._start_agent(call_id, room, greeting, join_timeout=self.cfg.ring_timeout_s + 30)
+        if skip_push:
+            self._ring_timers[call_id] = spawn(self._ring_timeout(call_id), name=f"ring-{call_id}")
+            await bus.publish("call.ringing", call_id=str(call_id), direction="to_owner", message=message[:300])
+            return {"call_id": str(call_id), "room": room, "devices": [], "push": "skipped (local test)"}
         results = await self.state.push.send_all(
             "call",
             {

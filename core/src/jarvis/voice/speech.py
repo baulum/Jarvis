@@ -128,8 +128,18 @@ def split_long(pcm: np.ndarray, rate: int, max_s: float = MAX_SEGMENT_S) -> list
 _NOISE = re.compile(r"\[(?:BLANK_AUDIO|Musik|Music|MUSIK|Applaus|Stille|silence)\]|\((?:Musik|music)\)", re.I)
 
 
+def _collapse_repeats(text: str) -> str:
+    """whisper loops on (digital) silence: "Wie spät ist es?\n Wie spät ist es?\n …" → once."""
+    parts = [p.strip() for p in re.split(r"\n+|(?<=[.!?])\s+", text) if p.strip()]
+    out: list[str] = []
+    for p in parts:
+        if not out or p.lower() != out[-1].lower():
+            out.append(p)
+    return " ".join(out)
+
+
 def _clean_transcript(text: str) -> str:
-    text = _NOISE.sub("", text).strip()
+    text = _collapse_repeats(_NOISE.sub("", text).strip())
     # whisper hallucinations on silence
     if text.lower().strip(" .!") in (
         "",

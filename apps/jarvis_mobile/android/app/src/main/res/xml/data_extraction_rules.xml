@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Credentials are bound to this device's Keystore: never back them up or transfer them. -->
+<data-extraction-rules>
+    <cloud-backup><exclude domain="sharedpref" path="." /><exclude domain="database" path="." /></cloud-backup>
+    <device-transfer><exclude domain="sharedpref" path="." /><exclude domain="database" path="." /></device-transfer>
+</data-extraction-rules>
