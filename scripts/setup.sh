@@ -9,7 +9,7 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/opt/rustup/bin:$PA
 step() { printf "\n\033[36m▸ %s\033[0m\n" "$*"; }
 
 step "Homebrew-Pakete prüfen"
-for pkg in postgresql@17 pgvector whisper-cpp ffmpeg uv node pnpm rustup cloudflared; do
+for pkg in postgresql@17 pgvector whisper-cpp ffmpeg uv node pnpm rustup cloudflared livekit; do
   brew list --formula "$pkg" >/dev/null 2>&1 || brew install "$pkg"
 done
 command -v claude >/dev/null || echo "⚠ Claude Code CLI fehlt (für Coding-Jobs): https://claude.com/claude-code"

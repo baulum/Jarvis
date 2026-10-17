@@ -98,8 +98,9 @@ def mobile_tools(state: AppState) -> list[ToolSpec]:
         ),
         ToolSpec(
             "mobile_call_owner",
-            "Ruft Sir JETZT über die J.A.R.V.I.S.-App an (Internet-Anruf, kein Telefonnetz). NUR verwenden, wenn "
-            "Sir ausdrücklich angerufen werden möchte. Für 'ruf mich an, sobald …' stattdessen mobile_call_when.",
+            "Ruft Sir JETZT auf seinem Handy an – über die J.A.R.V.I.S.-App (Internet-Anruf, klingelt wie ein normaler "
+            "Anruf). Standard für „ruf mich an“ / „ruf mich am Handy an“. NUR verwenden, wenn Sir ausdrücklich "
+            "angerufen werden möchte. Für „ruf mich an, sobald …“ stattdessen mobile_call_when.",
             {
                 "type": "object",
                 "properties": {"message": {"type": "string", "minLength": 3, "maxLength": 500}},

@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 
-from jarvis.agent.persona import TZ
 from jarvis.events import Event
 from jarvis.mobile import alerts as alerts_mod
 from jarvis.mobile.alerts import Alert, AlertEngine
@@ -100,4 +99,3 @@ async def test_snooze_brings_it_back(tmp_path: Path) -> None:
         row.remind_at = datetime.now(UTC) - timedelta(seconds=1)  # due now
     await eng._due_snoozes()
     assert len(push.sent) == 2 and push.sent[1][1]["title"] == "Kunden zurückrufen"
-    _ = TZ

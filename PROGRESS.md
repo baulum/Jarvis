@@ -3,6 +3,63 @@
 > Wiedereinstiegspunkt für neue Sessions. Nach jeder größeren Änderung aktualisieren.
 > Doku: ARCHITECTURE.md (Aufbau), SETUP.md (Installation/Betrieb), SECURITY.md (Sicherheitsmodell).
 
+## Stand: 2026-10-17 – J.A.R.V.I.S. Mobile (Android)
+
+Neue Android-App `apps/jarvis_mobile` (Flutter 3.41 + Kotlin) und Mobile-Schicht im Core (`core/src/jarvis/mobile/`).
+Anleitung, Android-Auto-Analyse und vollständige Testmatrix: **docs/MOBILE.md**.
+
+### Core
+- **Mobile-Gateway** `:8767` (TLS, selbstsigniert, Fingerabdruck per QR gepinnt; nur Mobile-Pfade, Rest 404) als
+  zweiter Listener im Core; Core-API bleibt auf 127.0.0.1
+- **Kopplung/Tokens:** `jarvisctl mobile-pair` (QR im Terminal), Keystore-gebundene Geräte (Rolle `mobile_owner`),
+  10-min-Zugriffstoken, rotierende Refresh-Tokens mit Familienwiderruf, signierte Refresh-/Freigabe-Requests
+- **Benachrichtigungs- & Anruf-Engine** (`alerts.py`): Kategorien aus/still/Push/Anruf, Ruhezeit, Dedupe, Limits,
+  ein Anruf je Ereignis, ehrlicher Fallback auf Push, verpasst → Benachrichtigung, Snooze, Terminerinnerungen
+  (Google-Kalender), „wieder online“; Notifier-Kanal `mobile`
+- **Push:** FCM HTTP v1 mit Ende-zu-Ende-verschlüsselten Daten-Nachrichten (AES-GCM je Gerät)
+- **Anrufe über LiveKit** (selbst gehostet, vom Core überwacht): Jarvis tritt dem Raum bei, Whisper → Orchestrator
+  (gleicher Agent, gleiches Gedächtnis) → Fish-Audio-Streaming (gleiche Stimme), Barge-in, echte Werkzeug-/
+  Gedächtnis-Ereignisse über den Datenkanal, Transkripte; vorab synthetisierte Begrüßung
+- **Agent-Werkzeuge:** `mobile_notify`, `mobile_call_owner`, `mobile_call_when` („ruf mich an, sobald …“)
+- Whisper-Wiederholungsschleifen („…?\n …?\n …?“) werden jetzt für alle Sprachkanäle zusammengefasst
+
+| Messung (E2E, simuliertes Telefon über LiveKit) | Wert |
+|---|---|
+| Gesprächsbeginn → Begrüßung hörbar | 4,2 s → **1,3–1,6 s** (Vorsynthese während des Verbindens) |
+| Frageende → erster Antwortton | **3,6 s** (eine Messung 8,9 s; Claude-Latenz schwankt) |
+
+### App
+- Eigenes Design (tiefschwarz, Eisblau/Cyan, Saira + JetBrains Mono, Haarlinien statt Karten, keine Tab-Leiste):
+  Energiekern als Fragment-Shader (Impeller) – reagiert auf echten Pegel und abgeleiteten Zustand (Bereit, Hört zu,
+  Denkt nach, Gedächtnis, Werkzeuge, Spricht, Im Gespräch, Offline), adaptive Qualität, Reduced Motion
+- Startbildschirm mit schwebender Eingabe (Text, Diktat, Anrufknopf), Gespräch (Streaming, geräteübergreifender
+  Verlauf), Aktivität (Freigaben mit Biometrie + Signatur, Aufgaben, Benachrichtigungen, Anrufe, Rückrufe),
+  mobiles Gedächtnis (2D-Konstellation, Live-Hervorhebung), Anrufbildschirm, Einstellungen mit ehrlichem Status
+- Nativ: Keystore, gepinntes OkHttp, Core-Telecom-Anrufe (CallStyle, Sperrbildschirm, Remote-Surfaces, Halten),
+  LiveKit-Android mit `NoAudioHandler`, FCM-Dienst mit Entschlüsselung/Replay-Schutz, Benachrichtigungs-Aktionen,
+  Android-Auto-`CarAppService` (Kategorie CALLING)
+
+### Auf dem Emulator geprüft (Android 16, kein physisches Telefon angeschlossen)
+Kopplung über das echte TLS-Gateway · Jarvis anrufen (Begrüßung + Transkript) · eingehender Anruf bei offener App,
+auf dem Sperrbildschirm und bei beendeter App (Test-Hook statt FCM) · Annehmen aus der CallStyle-Benachrichtigung ·
+Ablehnen · Verpasst + Folgebenachrichtigung · Auflegen während der Begrüßung · Snooze/Antworten aus der
+Benachrichtigung · Chat · Aktivität · Gedächtnis · Einstellungen.
+Dabei gefunden und behoben: Refresh-Familienwiderruf wurde zurückgerollt; LiveKit-Token im Header wurde vom Proxy
+nicht weitergereicht; Telecom akzeptiert nur 4 DisconnectCause-Codes; `addCall` endet nicht von selbst (Folgeanruf
+wurde ignoriert); Anrufbildschirm als Startroute ließ sich nicht schließen; Begrüßung blockierte das Auflegen.
+
+### Tests (2026-10-17)
+Core: 108 Unit + 46 Integration + E2E (Mobile-Anruf mit Sprache, bestehende Sprach-E2E); Flutter 10; Kotlin 5;
+mypy strict, ruff, flutter analyze: 0 Befunde.
+
+### Offen / benötigt von Sir
+- **Firebase-Projekt** (kostenlos) für Benachrichtigungen und eingehende Anrufe – Schritte in docs/MOBILE.md §3
+- **Physisches Android-Telefon** per USB für den Gerätetest (Mikrofon, Bluetooth, Netzwechsel, Biometrie)
+- **Tailscale** (Konto nötig) für Erreichbarkeit unterwegs; ohne: nur im Heimnetz
+- **Android Auto**: Beta bei Google, Play nur interne/geschlossene Tests; ungetestet (kein Fahrzeug/DHU-Setup)
+- Release-Signierschlüssel (APKs derzeit mit Debug-Schlüssel signiert)
+- Test-Nebeneffekt: eine Antwort aus der Benachrichtigung hat einen echten Kalendereintrag „Erinnerung“ heute 16:00 angelegt
+
 ## Stand: 2026-10-16 (Abend) – J.A.R.V.I.S. 2.0
 
 ### Neue Oberfläche: das 3D-Gedächtnis ist die Hauptansicht

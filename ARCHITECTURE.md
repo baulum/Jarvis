@@ -36,6 +36,12 @@
 | **Sprachausgabe** | `core/src/jarvis/voice/pipeline.py`, `fish_stream.py` | Text-Chunker, Commitment-Guard, Hybrid-TTS (warmes HTTP + Fish-Live-WebSocket), Fallback macOS |
 | **Audiohelfer** | `core/native/JarvisAudio` (Swift) | Mikrofon + lückenlose Streaming-Wiedergabe (AVAudioEngine), optional Echounterdrückung |
 | **Live-Graph** | `core/src/jarvis/graph.py`, `GET /api/graph` | Wissensgraph aus echten Daten (Gedächtnis, Agenten, Werkzeuge, Skills, Aufgaben, Jobs, Gespräche) |
+| **Mobile-Gateway** | `core/src/jarvis/mobile/gateway.py` | Zweiter TLS-Listener `:8767` im Core-Prozess, nur Mobile-Pfade (Allowlist), Zertifikats-Pinning per QR |
+| **Kopplung/Tokens** | `mobile/pairing.py`, `mobile/tokens.py` | Keystore-gebundene Geräte, 10-min-Zugriffstoken, rotierende Refresh-Tokens, signierte Requests |
+| **Benachrichtigungs- & Anruf-Engine** | `mobile/alerts.py` | Kategorie-Regeln, Ruhezeit, Dedupe, Limits, Snooze, Terminerinnerungen; entscheidet nichts/still/Push/Anruf |
+| **Push** | `mobile/push.py` | FCM HTTP v1, Ende-zu-Ende verschlüsselte Daten-Nachrichten |
+| **Anrufe** | `mobile/calls.py`, `mobile/voice_agent.py`, `mobile/livekit_server.py`, `mobile/rtc_proxy.py` | LiveKit-Server (selbst gehostet, vom Core überwacht), Jarvis als Raumteilnehmer mit Whisper → Orchestrator → Fish-Streaming, Rückruf-Vormerkungen |
+| **Android-App** | `apps/jarvis_mobile` (Flutter + Kotlin) | UI (Riverpod, GoRouter, Fragment-Shader), Core-Telecom, CallStyle, natives LiveKit, FCM, Keystore, Android-Auto-CarAppService – siehe docs/MOBILE.md |
 | **Desktop-App** | `desktop/` (Tauri 2, React, TS strict) | 3D-Gedächtnis als Hauptansicht (`src/holo`, React Three Fiber), Chat-Dock, Systempanel mit allen Ansichten, Menüleisten-Icon, ⌘⇧J |
 | **Embedding-Modell** | im Core (`memory/embeddings.py`) | Qwen3-Embedding-0.6B als ONNX (fastembed), 1024 Dim., für die semantische Gedächtnissuche – kein Ollama |
 | **Cloudflare Quick Tunnel** | Kindprozess des Core | öffentliche HTTPS-Adresse nur für die Twilio-Webhooks; `api/exposure.py` lässt darüber nur `/api/telephony/*` durch |
@@ -111,6 +117,12 @@ Fehleranalyse (zweiter Lauf mit Testausgabe, `--resume`) → Commit auf `jarvis/
 Transkript in `calls`. SIP-Endpunkte werden über eine Twilio SIP Domain / Elastic SIP Trunk auf denselben Webhook geleitet.
 Der lokale Testmodus (`jarvisctl phone-test`) spricht exakt dasselbe Protokoll – ausdrücklich kein echtes Telefonat.
 
+**Smartphone-Anruf.** Jarvis → Sir: Ereignis/Auftrag → `AlertEngine.decide` → `CallService.ring_owner` (Prüfung:
+Agent, LiveKit, Whisper, Push, Limits, ein Anruf je Ereignis) → Raum + Sprachagent tritt bei und synthetisiert die
+Begrüßung vor → verschlüsselter FCM-Push `call` → Telefon: Core-Telecom `addCall` (Klingeln, Sperrbildschirm, Bluetooth,
+Auto) → Annehmen → `/answer` liefert das Raum-Token → natives LiveKit über `wss://gateway/rtc` → Gespräch. Kein
+Annehmen in 45 s → `missed` + Benachrichtigung. Sir → Jarvis: `/api/mobile/calls` nur wenn `availability` es erlaubt.
+
 ## Erweiterbarkeit
 
 - **Weitere LLM-Provider:** `agent.provider` (Claude Code oder Hermes); Adapter in `agent/claude_agent.py` bzw. `agent/llm.py`.
@@ -122,7 +134,8 @@ Der lokale Testmodus (`jarvisctl phone-test`) spricht exakt dasselbe Protokoll �
   Hermes + Ollama/anderer Provider, TLS-Reverse-Proxy (z. B. Caddy) vor `:8765`, `server.public_base_url` setzen,
   Secrets per `JARVIS_SECRET_<NAME>`-Umgebungsvariablen (systemd credentials) statt Schlüsselbund. Bridge/Voice bleiben am Mac
   und verbinden sich als Geräte.
-- **iPhone-App:** nutzt dieselbe REST/WS-API mit eigenem Gerätetoken (Rolle `operator`).
+- **Android-App:** `apps/jarvis_mobile`, Rolle `mobile_owner`, dieselbe REST/WS-API über das Mobile-Gateway.
+- **iPhone-App (später):** gleiche Gateway-/Token-Mechanik; CallKit statt Telecom, APNs-VoIP statt FCM.
 
 ## Datenhaltung
 

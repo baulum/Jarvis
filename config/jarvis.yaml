@@ -145,10 +145,10 @@ mobile:
     rtc_udp_start: 50000
     rtc_udp_end: 50100
   firebase:                      # aus google-services.json; Dienstkonto: jarvisctl secret set fcm-service-account
-    project_id: ""
-    api_key: ""
-    app_id: ""
-    sender_id: ""
+    project_id: "baulum-ecf31"
+    api_key: "AIzaSyAaqjhmolr2QvxGhalxwWtNG2pI-duE9FQ"   # öffentliche Client-Kennung der Android-App (kein Geheimnis)
+    app_id: "1:673885865193:android:27d44eb10bcb6a87789c78"
+    sender_id: "673885865193"
   calls:
     ring_timeout_s: 45
     max_calls_per_hour: 4
@@ -161,8 +161,11 @@ coding:
   job_timeout_minutes: 60
   allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm:*)", "Bash(npx:*)", "Bash(pnpm:*)",
                   "Bash(node:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git add:*)",
-                  "Bash(git commit:*)", "Bash(ls:*)", "Bash(mkdir:*)", "Bash(python3:*)", "Bash(uv:*)"]
-  sandbox: true
+                  "Bash(git commit:*)", "Bash(ls:*)", "Bash(mkdir:*)", "Bash(python3:*)", "Bash(uv:*)",
+                  "Bash(git rm:*)", "Bash(git mv:*)", "Bash(rm:*)", "Bash(mv:*)", "Bash(cp:*)", "Bash(cat:*)",
+                  "Bash(curl:*)", "Bash(lsof:*)", "Bash(open:*)"]
+  # false = Claude Code läuft direkt auf dem Mac (Netzwerk, lokale Ports, Google Fonts, next build funktionieren)
+  sandbox: false
 
 browser:
   headless: true

@@ -116,11 +116,19 @@ class CallService:
                 await s.execute(
                     select(func.count())
                     .select_from(CallSession)
-                    .where(CallSession.direction == "to_owner", CallSession.created_at > now - timedelta(hours=1))
+                    .where(
+                        CallSession.direction == "to_owner",
+                        CallSession.reason != "test",  # test calls never use up Sir's real call budget
+                        CallSession.created_at > now - timedelta(hours=1),
+                    )
                 )
             ).scalar_one()
             last = (
-                await s.execute(select(func.max(CallSession.created_at)).where(CallSession.direction == "to_owner"))
+                await s.execute(
+                    select(func.max(CallSession.created_at)).where(
+                        CallSession.direction == "to_owner", CallSession.reason != "test"
+                    )
+                )
             ).scalar_one()
         if recent >= self.cfg.max_calls_per_hour:
             return f"Anruflimit erreicht ({self.cfg.max_calls_per_hour}/Stunde)"

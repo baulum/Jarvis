@@ -14,6 +14,7 @@
 | owner | gepaarte Desktop-App/CLI | critical | low | ja (auch kritisch) |
 | voice_owner | „Hey Jarvis“ am Mac | high | low | **nein** (jeder im Raum kann sprechen) |
 | telegram_owner | gekoppelter Telegram-Chat | high | low | ja (nicht kritisch) |
+| mobile_owner | gekoppeltes Smartphone (Keystore-Schlüssel) | high | low | ja (nicht kritisch, signiert + biometrisch) |
 | phone_owner | Anruf **nach PIN** | high | low | ja (nicht kritisch) |
 | phone_unverified | Anruf ohne PIN | read | read | nein |
 | operator / viewer | weitere Geräte | high / read | low / read | nein |
@@ -72,6 +73,34 @@ Overrides in `permissions.yaml` können Risiken nur **erhöhen**.
 - **Die Rufnummer authentifiziert nie.** PIN-Pflicht (DTMF oder gesprochen, Konstantzeit-Vergleich), 3 Fehlversuche → Auflegen.
 - Rate-Limits pro Nummer und global; vollständige Anrufprotokolle mit Transkript.
 - Ausgehende Anrufe sagen nur den Benachrichtigungstitel an; alles Weitere erst nach PIN.
+
+## Smartphone (J.A.R.V.I.S.-App)
+- **Kopplung:** Einmalcode (144 Bit, 10 min) nur vom Owner-Gerät (`jarvisctl mobile-pair`); das Telefon beweist mit
+  einer Signatur den Besitz seines neuen **Android-Keystore-Schlüssels** (EC P-256, StrongBox wenn vorhanden,
+  nicht exportierbar). Rate-Limit 10 Versuche/Stunde/IP.
+- **Tokens:** Zugriffstoken `jat_…` (HMAC-SHA256, 10 min, Gerät/Rolle/Familie; Schlüssel `mobile-token-key` im
+  Schlüsselbund). Refresh-Token `jrt_…` nur als SHA-256 gespeichert, Einmalverwendung mit Rotation; ein bereits
+  benutztes Token widerruft die gesamte Familie (Diebstahlerkennung). Jede Erneuerung ist mit dem Geräteschlüssel
+  signiert (`refresh|gerät|ts|nonce|sha256(body)`, ±120 s, Nonce-Cache gegen Replay).
+- **Freigaben vom Telefon:** nur über `POST /api/mobile/approvals/<id>` mit frischer Gerätesignatur
+  (`approval:<id>`); die App verlangt vorher Fingerabdruck/Geräte-PIN. Kritische Aktionen bleiben am Desktop.
+- **Transport:** eigener Listener `:8767` (TLS, selbstsigniert, Fingerabdruck im QR-Code gepinnt) liefert nur eine
+  Allowlist von Mobile-Pfaden; alles andere – Audit, Connectoren, Geräte, MCP, Approval-Modus, Export – antwortet 404.
+  Requests mit Cloudflare-Headern werden dort immer abgewiesen. Core `:8765` bleibt auf 127.0.0.1.
+  LiveKit-Signalisierung nur über diesen TLS-Kanal (`/rtc`-Proxy), Medien DTLS-SRTP; Raum-Token je Anruf (1 h).
+- **Push:** FCM-Daten-Nachrichten Ende-zu-Ende AES-256-GCM-verschlüsselt (Schlüssel je Gerät, auf dem Telefon im
+  Keystore, AAD = Geräte-ID), mit ID + Ablauf; das Telefon verwirft Duplikate/Abgelaufenes. FCM-Dienstkonto nur im
+  Schlüsselbund (`fcm-service-account`).
+- **App:** kein Klartext-HTTP, keine Cloud-Backups/Geräteübertragung der Zugangsdaten, Refresh-Token AES-GCM mit
+  Keystore-Schlüssel verschlüsselt, keine Business-API-Schlüssel. Logs enthalten keine Tokens.
+- **Anrufe:** Jarvis ruft nur auf ausdrücklichen Auftrag oder per vom Owner gesetzter Kategorie an; ein Anruf je
+  Ereignis, Limits je Stunde, Ruhezeit. Agent-Werkzeuge `mobile_*` haben Risiko `low` (erreichen nur Sir), in
+  „tainted“ Sitzungen gilt die normale Freigabepflicht.
+- **Widerruf:** App › Abmelden, Einstellungen › Gekoppelte Telefone oder `DELETE /api/mobile/devices/<id>` – alle
+  Refresh-Tokens ungültig, Push-Token gelöscht, Zugriffstoken spätestens nach 5 s Cache abgelehnt.
+- **Test-Hooks:** `POST /api/mobile/test/ring-local` (Owner, nur Loopback, nicht im Gateway) und der
+  `DevPushReceiver` (nur System/adb, `android.permission.DUMP`) – ein simulierter Anruf ist ohne klingelnde
+  Sitzung im Core wertlos.
 
 ## Not-Aus
 - Desktop (immer sichtbar), Menüleiste, Telegram `/stop`, `jarvisctl killswitch on` oder `touch ~/Library/Application Support/Jarvis/KILL`.

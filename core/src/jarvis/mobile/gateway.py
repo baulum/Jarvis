@@ -59,7 +59,7 @@ def mobile_path_allowed(method: str, path: str) -> bool:
 
 # --------------------------------------------------------------------------- addresses
 def local_addresses() -> list[str]:
-    """IPv4 addresses a phone may reach: LAN first, then Tailscale (100.64.0.0/10), no loopback."""
+    """IPv4 addresses a phone may reach: Tailscale (100.64.0.0/10) first, then LAN, no loopback."""
     lan: list[str] = []
     tail: list[str] = []
     cgnat = ipaddress.ip_network("100.64.0.0/10")
@@ -74,11 +74,26 @@ def local_addresses() -> list[str]:
                 tail.append(a.address)
             elif ip.is_private and not name.startswith(("bridge", "vmnet", "docker")):
                 lan.append(a.address)
+    for ts_ip in _tailscale_ips():  # some utun setups are not listed by getifaddrs consumers
+        if ts_ip not in tail:
+            tail.append(ts_ip)
     primary = _primary_ip()
     if primary in lan:
         lan.remove(primary)
         lan.insert(0, primary)
-    return [*lan, *tail]
+    return [*tail, *lan]  # Tailscale first: reachable at home and on mobile data alike
+
+
+def _tailscale_ips() -> list[str]:
+    import shutil
+    import subprocess
+
+    cli = shutil.which("tailscale") or "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+    try:
+        out = subprocess.run([cli, "ip", "-4"], capture_output=True, text=True, timeout=3, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip().startswith("100.")]
 
 
 def _primary_ip() -> str | None:

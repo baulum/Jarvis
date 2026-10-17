@@ -92,7 +92,7 @@ def test_push_payload_is_encrypted_and_bound_to_device() -> None:
     env = encrypt_payload(key, "dev-1", {"type": "call", "call_id": "abc", "title": "Website fertig"})
     assert "Website" not in str(env) and "call" not in env["c"]
     assert decrypt_payload(key, "dev-1", env)["call_id"] == "abc"
-    with pytest.raises(Exception):  # noqa: B017 - AEAD tag mismatch
+    with pytest.raises(Exception):
         decrypt_payload(key, "dev-2", env)
 
 

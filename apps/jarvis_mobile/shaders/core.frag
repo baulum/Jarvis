@@ -4,7 +4,9 @@
 #version 460 core
 #include <flutter/runtime_effect.glsl>
 
-precision mediump float;
+// highp: mediump is fp16 on mobile GPUs – the dither hash (frag * 456) overflows it and the growing time
+// loses precision, both show up as blocky flicker.
+precision highp float;
 
 uniform vec2 uSize;
 uniform float uTime;
@@ -32,6 +34,8 @@ float noise(vec2 p) {
              mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 
+float sq(float x) { return x * x; } // pow(x, 2.0) is undefined for x < 0 (NaN on Metal/Vulkan)
+
 float fbm(vec2 p) {
   float v = 0.0;
   float a = 0.5;
@@ -58,15 +62,17 @@ void main() {
   vec2 q = vec2(cos(spin), sin(spin)) * 2.2 + vec2(r * 6.0 - t * 0.4, r * 2.0);
   float n = fbm(q * 1.3 + fbm(q + t * 0.1) * uTurb * 2.0);
   float shellR = 0.215 + 0.035 * lvl + 0.03 * (n - 0.5) * (1.0 + uTurb);
-  float shell = exp(-pow((r - shellR) * 30.0, 2.0)) * (0.5 + 0.65 * n);
+  float shell = exp(-sq((r - shellR) * 30.0)) * (0.5 + 0.65 * n);
 
   float plasma = fbm(uv * 9.0 + vec2(t * 0.3, -t * 0.25) + n * 2.0);
   float nucleus = smoothstep(coreR, 0.0, r);
   float inner = smoothstep(shellR, coreR * 0.5, r) * (0.3 + 0.7 * plasma);
 
   float glow = exp(-r * 7.5) * (0.55 + 0.8 * uEnergy + lvl);
-  float halo = exp(-pow((r - shellR - 0.06) * 9.0, 2.0)) * 0.22 * (0.5 + uEnergy);
+  float halo = exp(-sq((r - shellR - 0.06) * 9.0)) * 0.22 * (0.5 + uEnergy);
 
+  // ring sharpness capped at ~1.5 px so small orbs (chat header) don't alias into flicker
+  float ringK = min(150.0, min(uSize.x, uSize.y) / 1.5);
   float rings = 0.0;
   for (int i = 0; i < 3; i++) {
     float fi = float(i);
@@ -78,13 +84,13 @@ void main() {
     float target = 0.31 + 0.045 * fi;
     float pa = atan(p.y, p.x);
     float arc = smoothstep(0.15, 0.75, 0.5 + 0.5 * sin(pa * (1.0 + fi) + t * (0.6 + 0.3 * fi) + fi * 1.7));
-    rings += exp(-pow((rr - target) * 150.0, 2.0)) * arc * (0.14 + 0.08 * sin(a * 3.0 + t + fi));
+    rings += exp(-sq((rr - target) * ringK)) * arc * (0.14 + 0.08 * sin(a * 3.0 + t + fi));
   }
 
   float pulse = 0.0;
   if (uPulse > 0.0) {
     float ph = fract(t * 0.7);
-    pulse = exp(-pow((r - (0.25 + ph * 0.32)) * 30.0, 2.0)) * (1.0 - ph) * uPulse;
+    pulse = exp(-sq((r - (0.25 + ph * 0.32)) * 30.0)) * (1.0 - ph) * uPulse;
   }
 
   vec3 ice = vec3(0.81, 0.96, 1.0);

@@ -172,7 +172,10 @@ class AppState:
         self.registry.register(
             ToolSpec(
                 "phone_call_owner",
-                "Ruft Sir auf seinem Telefon an und übermittelt eine Nachricht.",
+                "Klassischer Anruf über das Telefonnetz (Twilio, kostenpflichtig) an Sirs Rufnummer. "
+                "Für „ruf mich an“ / „ruf mich am Handy an“ IMMER zuerst mobile_call_owner "
+                "(Anruf über die J.A.R.V.I.S.-App) verwenden; dieses Werkzeug nur, wenn Sir ausdrücklich "
+                "einen normalen Telefonanruf verlangt.",
                 {
                     "type": "object",
                     "properties": {"message": {"type": "string", "minLength": 3}},

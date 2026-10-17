@@ -68,6 +68,11 @@ Lokaler Test ohne Twilio: `uv run jarvisctl phone-test --say "eins zwei drei vie
 - `config/jarvis.yaml` – Modelle, Stimme, Benachrichtigungsregeln, Ruhezeiten, Pfade
 - `config/mcp_servers.yaml` – externe MCP-Server
 
+## 7a. Smartphone-App (Android)
+LiveKit installiert `setup.sh` (`brew install livekit`). Dann
+`cd core && uv run jarvisctl mobile-pair` und den QR-Code mit der App scannen. Für Benachrichtigungen und eingehende
+Anrufe ein kostenloses Firebase-Projekt verbinden. Alles Weitere: [docs/MOBILE.md](docs/MOBILE.md).
+
 ## 8. Tests
 ```bash
 cd core

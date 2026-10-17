@@ -49,7 +49,7 @@ class _CoreOrbState extends State<CoreOrb> with SingleTickerProviderStateMixin {
   Duration _last = Duration.zero;
   double _t = 0, _energy = 0.2, _turb = 0.1, _speed = 0.5, _dim = 0, _level = 0, _pulse = 0;
   Color _tint = J.cyan;
-  double _quality = 1;
+  double _quality = 1, _qualityTarget = 1;
   int _slowFrames = 0;
   late final TimingsCallback _timings;
 
@@ -67,8 +67,8 @@ class _CoreOrbState extends State<CoreOrb> with SingleTickerProviderStateMixin {
           _slowFrames--;
         }
       }
-      if (_slowFrames > 30 && _quality > 0.35) {
-        _quality = (_quality - 0.25).clamp(0.35, 1.0); // device struggling → fewer octaves, no rings
+      if (_slowFrames > 30 && _qualityTarget > 0.35) {
+        _qualityTarget = (_qualityTarget - 0.25).clamp(0.35, 1.0); // device struggling → fewer octaves, no rings
         _slowFrames = 0;
       }
     };
@@ -100,6 +100,7 @@ class _CoreOrbState extends State<CoreOrb> with SingleTickerProviderStateMixin {
     // fast attack, slow release – the core "breathes" with the voice instead of flickering
     _level += (lv - _level) * (lv > _level ? 1 - math.exp(-dt * 28) : 1 - math.exp(-dt * 6));
     _pulse += ((widget.ringing ? 1.0 : 0.0) - _pulse) * k;
+    _quality += (_qualityTarget - _quality) * (1 - math.exp(-dt * 1.5)); // fade, so rings don't pop out
     _t += dt * _speed;
     _repaint.value++;
   }
