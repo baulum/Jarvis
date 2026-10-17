@@ -51,6 +51,13 @@ async def create_device(name: str, role: str) -> tuple[Device, str]:
 
 
 async def authenticate_token(token: str | None) -> Principal | None:
+    if token and token.startswith("jat_"):  # short-lived access token of a paired phone
+        from jarvis.mobile.tokens import device_active, signer
+
+        claims = signer.verify(token)
+        if claims is None or not await device_active(claims.device_id):
+            return None
+        return Principal(id=claims.name, role=claims.role, channel="mobile", device_id=claims.device_id)
     if not token or not token.startswith("jdv_"):
         return None
     digest = hash_token(token)

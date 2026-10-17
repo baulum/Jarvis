@@ -38,6 +38,11 @@ roles:
     max_risk: high
     auto_approve: low
     can_approve: true          # approve via inline buttons (not for critical)
+  mobile_owner:
+    description: Sirs gekoppeltes Smartphone (J.A.R.V.I.S.-App, gerätegebundener Schlüssel im Android Keystore)
+    max_risk: high
+    auto_approve: low
+    can_approve: true          # signiert + biometrisch bestätigt; kritische Aktionen nur am Desktop
   phone_owner:
     description: Besitzer am Telefon, nach PIN-Prüfung
     max_risk: high

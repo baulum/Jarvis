@@ -27,6 +27,10 @@ TABLES = [
     "memory_links",
     "notifications",
     "schedules",
+    "mobile_refresh_tokens",
+    "mobile_devices",
+    "alert_dispatches",
+    "call_sessions",
 ]
 
 

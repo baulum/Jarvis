@@ -82,7 +82,7 @@ class ChatBody(BaseModel):
 
 @router.post("/chat")
 async def chat(body: ChatBody, st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
-    channel = body.channel if body.channel in ("desktop", "voice", "api") else "desktop"
+    channel = body.channel if body.channel in ("desktop", "voice", "api", "mobile") else "desktop"
     sid = _uuid(body.session_id) if body.session_id else None
     sess = await st.orchestrator.get_or_create_session(p, channel, sid)
     if body.wait:
@@ -130,7 +130,7 @@ async def chat_interrupt(st: AppState = StateDep, p: Principal = Actor) -> dict[
 async def sessions(st: AppState = StateDep, p: Principal = Reader, limit: int = 30) -> list[dict[str, Any]]:
     async with session_scope() as s:
         q = select(ChatSession).order_by(ChatSession.last_activity_at.desc()).limit(min(limit, 100))
-        if p.role != "owner":
+        if p.role not in ("owner", "mobile_owner"):
             q = q.where(ChatSession.actor_id == p.id)
         rows = (await s.execute(q)).scalars().all()
     return [

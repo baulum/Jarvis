@@ -25,6 +25,11 @@ dependencies = [
     "numpy>=2.1",
     "fastembed>=0.9.0",
     "msgpack>=1.1",
+    "livekit>=1.0",
+    "livekit-api>=1.0",
+    "cryptography>=43",
+    "google-auth>=2.35",
+    "segno>=1.6",
 ]
 
 [project.optional-dependencies]

@@ -319,3 +319,76 @@ class UsageRecord(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     latency_ms: Mapped[float] = mapped_column(Float, default=0)
+
+
+# --------------------------------------------------------------------------- mobile companion
+class MobileDevice(Base, TimestampMixin):
+    """A paired smartphone: device-bound key (Android Keystore), push registration, app metadata."""
+
+    __tablename__ = "mobile_devices"
+    device_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), primary_key=True)
+    platform: Mapped[str] = mapped_column(String(20), default="android")
+    model: Mapped[str] = mapped_column(String(120), default="")
+    app_version: Mapped[str] = mapped_column(String(40), default="")
+    public_key: Mapped[str] = mapped_column(Text)  # SPKI DER, base64 (EC P-256, non-exportable on the phone)
+    push_key_id: Mapped[str] = mapped_column(String(40), default="")  # version of the payload encryption key
+    push_token: Mapped[str | None] = mapped_column(Text)
+    push_token_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_ip: Mapped[str | None] = mapped_column(String(64))
+
+
+class MobileRefreshToken(Base):
+    """Refresh tokens rotate on every use; re-use of a spent token revokes the whole family."""
+
+    __tablename__ = "mobile_refresh_tokens"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    device_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    family: Mapped[uuid.UUID] = mapped_column(index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class AlertDispatch(Base, TimestampMixin):
+    """One decision of the notification & calling engine (dedupe key, channel, outcome)."""
+
+    __tablename__ = "alert_dispatches"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    event_key: Mapped[str] = mapped_column(String(200), index=True)
+    category: Mapped[str] = mapped_column(String(30))
+    level: Mapped[str] = mapped_column(String(20), default="info")
+    title: Mapped[str] = mapped_column(String(300))
+    body: Mapped[str] = mapped_column(Text, default="")
+    decision: Mapped[str] = mapped_column(String(20))  # none | silent | push | call
+    reason: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    # pending | sent | undeliverable | duplicate | suppressed | snoozed | call_* | failed
+    deep_link: Mapped[str] = mapped_column(String(300), default="")
+    actions: Mapped[list[Any]] = mapped_column(default=list)
+    data: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    delivered_to: Mapped[list[Any]] = mapped_column(default=list)
+    call_id: Mapped[uuid.UUID | None] = mapped_column()
+    remind_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class CallSession(Base, TimestampMixin):
+    """A VoIP call between Sir's phone and Jarvis (LiveKit room)."""
+
+    __tablename__ = "call_sessions"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    direction: Mapped[str] = mapped_column(String(20))  # to_owner (Jarvis rings Sir) | to_jarvis (Sir calls)
+    device_id: Mapped[uuid.UUID | None] = mapped_column()  # device that answered / placed the call
+    room: Mapped[str] = mapped_column(String(120), unique=True)
+    status: Mapped[str] = mapped_column(String(20), index=True, default="ringing")
+    # ringing | connecting | active | ended | missed | declined | failed | cancelled
+    reason: Mapped[str] = mapped_column(String(60), default="")  # agent | rule:<category> | user | test
+    message: Mapped[str] = mapped_column(Text, default="")
+    event_key: Mapped[str | None] = mapped_column(String(200), index=True)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    end_reason: Mapped[str] = mapped_column(String(60), default="")
+    transcript: Mapped[list[Any]] = mapped_column(default=list)
+    session_id: Mapped[uuid.UUID | None] = mapped_column()
+    metrics: Mapped[dict[str, Any]] = mapped_column(default=dict)

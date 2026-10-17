@@ -177,6 +177,9 @@ class EventBus:
     def subscribe(self, pattern: str, handler: Handler) -> None:
         self._handlers.append((pattern, handler))
 
+    def unsubscribe(self, pattern: str, handler: Handler) -> None:
+        self._handlers = [(p, h) for p, h in self._handlers if not (p == pattern and h == handler)]
+
     def open_queue(self, maxsize: int = 1000) -> asyncio.Queue[Event]:
         q: asyncio.Queue[Event] = asyncio.Queue(maxsize=maxsize)
         self._queues.add(q)

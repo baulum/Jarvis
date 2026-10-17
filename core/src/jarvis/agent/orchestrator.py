@@ -73,7 +73,7 @@ class Orchestrator:
             if session_id is not None:
                 sess = await s.get(ChatSession, session_id)
                 if sess is not None and not sess.closed:
-                    if sess.actor_id != principal.id and principal.role != "owner":
+                    if sess.actor_id != principal.id and principal.role not in ("owner", "mobile_owner"):
                         raise PermissionError("Sitzung gehört einem anderen Akteur")
                     if datetime.now(UTC) - sess.last_activity_at <= timeout:
                         return sess
@@ -108,6 +108,10 @@ class Orchestrator:
             }
             for m in reversed(rows)
         ]
+
+    async def record_assistant(self, session_id: uuid.UUID, text: str, meta: dict[str, Any] | None = None) -> None:
+        """Add a message Jarvis said outside a turn (e.g. the opening of a call) to the conversation context."""
+        await self._store(session_id, "assistant", text, meta)
 
     async def _store(
         self, session_id: uuid.UUID, role: str, content: str, meta: dict[str, Any] | None = None

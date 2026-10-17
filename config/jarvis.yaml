@@ -112,16 +112,48 @@ notifications:
   quiet_hours: {start: "22:30", end: "07:00"}
   rules:
     - event: task.completed
-      channels: [desktop, telegram]
+      channels: [desktop, telegram, mobile]
     - event: task.failed
-      channels: [desktop, telegram]
+      channels: [desktop, telegram, mobile]
     - event: approval.requested
-      channels: [desktop, telegram]
+      channels: [desktop, telegram, mobile]
     - event: coding.finished
-      channels: [desktop, telegram]
+      channels: [desktop, telegram, mobile]
     - event: system.critical
-      channels: [desktop, telegram, phone]
+      channels: [desktop, telegram, phone, mobile]
       bypass_quiet_hours: true
+
+mobile:
+  # J.A.R.V.I.S.-App (Android). Wer was bekommt (still/Push/Anruf), steht in der App unter
+  # „Benachrichtigungen“ bzw. in ~/Library/Application Support/Jarvis/alert-policy.json.
+  enabled: true
+  access_token_ttl_s: 600        # Zugriffstoken 10 min, danach Erneuerung mit Gerätesignatur
+  refresh_token_ttl_days: 30
+  gateway:                       # TLS-Zugang fürs Smartphone (nur Mobile-Pfade, Zertifikat per QR gepinnt)
+    enabled: true
+    host: 0.0.0.0
+    port: 8767
+    advertise_urls: []           # leer = LAN-/Tailscale-Adressen automatisch; z. B. https://mac.tailnet.ts.net:8767
+    tls: self_signed             # self_signed | external (Tailscale serve / Reverse-Proxy mit echtem Zertifikat)
+  livekit:                       # selbst gehosteter WebRTC-Server (brew install livekit)
+    enabled: true
+    manage_process: true
+    internal_url: ws://127.0.0.1:7880
+    public_url: ""               # leer = Signalisierung über das TLS-Gateway (wss://<gateway>/rtc)
+    node_ip: ""                  # leer = alle lokalen Schnittstellen (LAN + Tailscale) als ICE-Kandidaten
+    rtc_tcp_port: 7881
+    rtc_udp_start: 50000
+    rtc_udp_end: 50100
+  firebase:                      # aus google-services.json; Dienstkonto: jarvisctl secret set fcm-service-account
+    project_id: ""
+    api_key: ""
+    app_id: ""
+    sender_id: ""
+  calls:
+    ring_timeout_s: 45
+    max_calls_per_hour: 4
+    min_minutes_between_calls: 3
+    max_duration_minutes: 30
 
 coding:
   claude_binary: claude

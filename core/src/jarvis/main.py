@@ -24,6 +24,8 @@ from jarvis.db import dispose_engine
 from jarvis.db.migrate import upgrade_to_head
 from jarvis.logging_setup import setup_logging
 from jarvis.mcp.server import MCPAuthApp, build_mcp
+from jarvis.mobile.api import router as mobile_router
+from jarvis.mobile.rtc_proxy import router as rtc_router
 
 logger = logging.getLogger("jarvis")
 
@@ -52,10 +54,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             except Exception:
                 logger.exception("Database migration failed")
             await state.start()
+            if settings.mobile.enabled and settings.mobile.gateway.enabled:
+                await state.gateway.start(app)
             logger.info("J.A.R.V.I.S. core %s listening on %s:%s", VERSION, settings.server.host, settings.server.port)
             try:
                 yield
             finally:
+                await state.gateway.stop()
                 await state.stop()
                 await dispose_engine()
 
@@ -76,10 +81,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
-    app.add_middleware(PublicExposureGuard)  # outermost: tunnel traffic only reaches /api/telephony/*
+    # outermost: tunnel traffic only reaches /api/telephony/*, the mobile gateway port only mobile paths
+    app.add_middleware(PublicExposureGuard, mobile_port=settings.mobile.gateway.port)
     app.include_router(api_router)
     app.include_router(realtime_router)
     app.include_router(voice_router)
+    app.include_router(mobile_router)
+    app.include_router(rtc_router)
     # A Route (not Mount) so that "/mcp" is served without a trailing-slash redirect.
     app.router.routes.append(Route("/mcp", endpoint=MCPAuthApp(mcp_manager), methods=["GET", "POST", "DELETE"]))
     return app

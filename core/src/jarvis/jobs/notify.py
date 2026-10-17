@@ -24,6 +24,42 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+_CATEGORY = {
+    "task.completed": "task",
+    "task.failed": "error",
+    "task.input_required": "task",
+    "approval.requested": "approval",
+    "coding.finished": "task",
+    "memory.pending": "system",
+    "system.critical": "error",
+}
+
+
+def _alert_for(event: str, title: str, body: str, level: str, data: dict[str, Any], nid: Any) -> Any:
+    from jarvis.mobile.alerts import Alert
+
+    category = _CATEGORY.get(event, "system")
+    if event == "coding.finished" and data.get("status") != "completed":
+        category = "error"
+    key_id = data.get("approval_id") or data.get("id") or data.get("task_id") or data.get("job_id") or nid
+    link = "jarvis://home"
+    if data.get("task_id"):
+        link = f"jarvis://task/{data['task_id']}"
+    if event == "approval.requested" and data.get("approval_id"):
+        link = f"jarvis://approval/{data['approval_id']}"
+    extra = {"approval_id": data["approval_id"]} if data.get("approval_id") else {}
+    return Alert(
+        category,
+        title,
+        body,
+        "critical" if level == "critical" else "warning" if level == "warning" else "info",
+        event_key=f"{event}:{key_id}",
+        deep_link=link,
+        data={**{k: data[k] for k in ("task_id", "job_id") if data.get(k)}, **extra},
+        source=event,
+    )
+
+
 class Notifier:
     def __init__(self, state: AppState) -> None:
         self.state = state
@@ -62,8 +98,8 @@ class Notifier:
         data: dict[str, Any] | None = None,
     ) -> list[str]:
         chosen, bypass = (channels, level == "critical") if channels else self._channels_for(event)
-        if self._quiet() and not bypass:
-            chosen = [c for c in chosen if c == "desktop"]
+        if self._quiet() and not bypass:  # the phone applies its own quiet hours (silent instead of nothing)
+            chosen = [c for c in chosen if c in ("desktop", "mobile")]
         delivered: list[str] = []
         async with session_scope() as s:
             n = Notification(event=event, level=level, title=title[:300], body=body[:4000], data=data or {})
@@ -88,6 +124,13 @@ class Notifier:
                     logger.warning("Telegram notification failed: %s", e)
             elif tg is not None and tg.active:
                 delivered.append("telegram")
+        if "mobile" in chosen:
+            try:
+                res = await self.state.alerts.dispatch(_alert_for(event, title, body, level, data or {}, nid))
+                if res.get("delivered") or res.get("call_id"):
+                    delivered.append("mobile")
+            except Exception as e:
+                logger.warning("Mobile notification failed: %s", e)
         if "phone" in chosen and self.state.telephony is not None:
             try:
                 await self.state.telephony.call_owner(f"{title}. {body}"[:500], reason=event)

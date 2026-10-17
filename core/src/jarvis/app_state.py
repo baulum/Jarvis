@@ -45,6 +45,12 @@ from jarvis.mcp.client import MCPClientHub
 from jarvis.memory.embeddings import LocalEmbedder
 from jarvis.memory.service import MemoryService
 from jarvis.memory.vault import Vault
+from jarvis.mobile.alerts import AlertEngine
+from jarvis.mobile.calls import CallService
+from jarvis.mobile.gateway import GatewayServer
+from jarvis.mobile.livekit_server import LiveKitServer
+from jarvis.mobile.pairing import PairingService
+from jarvis.mobile.push import PushService
 from jarvis.secrets import secret_store
 from jarvis.security.audit import audit
 from jarvis.security.guards import KillSwitch
@@ -119,6 +125,13 @@ class AppState:
         self.mcp_hub = MCPClientHub(self)
         self.voice_state: dict[str, Any] = {"connected": False}
         self.graph = GraphBuilder(self)
+        # Mobile companion: TLS gateway, pairing, push (FCM), alert engine, VoIP calls (LiveKit)
+        self.pairing = PairingService(settings.mobile.pairing_ttl_s)
+        self.gateway = GatewayServer(settings)
+        self.livekit = LiveKitServer(settings.mobile.livekit, settings.paths.data_dir, settings.paths.log_dir)
+        self.push = PushService(settings.mobile.firebase)
+        self.alerts = AlertEngine(self)
+        self.calls = CallService(self)
 
         for conn_cls in (
             SystemConnector,
@@ -138,6 +151,7 @@ class AppState:
         ):
             self.connectors.add(conn_cls(self))
         self._register_phone_tool()
+        self._register_mobile_tools()
         register_playbooks(self)
 
     def _register_phone_tool(self) -> None:
@@ -173,6 +187,12 @@ class AppState:
             )
         )
 
+    def _register_mobile_tools(self) -> None:
+        from jarvis.mobile.tools import mobile_tools
+
+        for spec in mobile_tools(self):
+            self.registry.register(spec)
+
     # ------------------------------------------------------------------ lifecycle
     async def start(self) -> None:
         init_engine(self.settings)
@@ -189,6 +209,10 @@ class AppState:
         await self.tasks.start()
         await self.scheduler.start()
         self.notifier.start()
+        if self.settings.mobile.enabled:
+            await self.livekit.start()
+            self.alerts.start()
+            self.calls.start()
         await self.mcp_hub.start()
         if self.agent is not None:
             await self._start_claude_agent()
@@ -202,6 +226,23 @@ class AppState:
                 logger.warning("Hermes not provisioned yet – run `jarvisctl setup-hermes`")
         bus.subscribe("system.killswitch", self._on_killswitch)
         await audit("system", "core.start", details={"version": VERSION})
+        if self.settings.mobile.enabled:
+            from jarvis.events import spawn
+            from jarvis.mobile.alerts import Alert
+
+            spawn(
+                self.alerts.dispatch(
+                    Alert(
+                        "system",
+                        "J.A.R.V.I.S. ist wieder online",
+                        f"{self.personality.owner_title}, ich bin wieder erreichbar.",
+                        event_key=f"system:online:{int(self.started_at)}",
+                        deep_link="jarvis://home",
+                        allow_call=False,
+                    )
+                ),
+                name="mobile-online",
+            )
 
     async def _start_claude_agent(self) -> None:
         from jarvis.security.auth import create_device
@@ -230,6 +271,9 @@ class AppState:
         await self.tasks.stop()
         await self.scheduler.stop()
         await self.memory.stop()
+        await self.alerts.stop()
+        await self.livekit.stop()
+        await self.push.close()
         await self.connectors.shutdown()
         await self.mcp_hub.stop()
         await self.browser.close()
@@ -358,6 +402,11 @@ class AppState:
         ]
         out["tts"] = await self.tts.status()
         out["telephony"] = self.telephony.status() if self.telephony else {"enabled": False}
+        out["mobile"] = {
+            "gateway": self.gateway.status(),
+            "livekit": await self.livekit.status(),
+            "push_configured": self.push.fcm.configured(),
+        }
         out["mcp_servers"] = self.mcp_hub.status()
         out["voice"] = self.voice_state
         out["hermes_restarts"] = self.hermes_supervisor.restarts

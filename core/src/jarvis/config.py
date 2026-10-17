@@ -148,9 +148,12 @@ class TelephonyCfg(_Strict):
     twilio: TwilioCfg = Field(default_factory=TwilioCfg)
 
 
+Channel = Literal["desktop", "telegram", "phone", "voice", "mobile"]
+
+
 class NotificationRule(_Strict):
     event: str
-    channels: list[Literal["desktop", "telegram", "phone", "voice"]]
+    channels: list[Channel]
     bypass_quiet_hours: bool = False
 
 
@@ -160,7 +163,7 @@ class QuietHours(_Strict):
 
 
 class NotificationsCfg(_Strict):
-    default_channels: list[Literal["desktop", "telegram", "phone", "voice"]] = Field(
+    default_channels: list[Channel] = Field(
         default_factory=lambda: ["desktop"]  # type: ignore[arg-type]
     )
     quiet_hours: QuietHours = Field(default_factory=QuietHours)
@@ -191,6 +194,60 @@ class SchedulerCfg(_Strict):
     tick_seconds: int = 20
 
 
+class MobileGatewayCfg(_Strict):
+    """TLS listener for the companion app (LAN / Tailscale / VPS reverse proxy)."""
+
+    enabled: bool = True
+    host: str = "0.0.0.0"  # noqa: S104 - only mobile-safe paths are served on this listener (see api/exposure.py)
+    port: int = 8767
+    # Addresses the phone uses to reach the gateway (first reachable wins). Empty → LAN IPs detected at start.
+    advertise_urls: list[str] = Field(default_factory=list)
+    tls: Literal["self_signed", "external", "none"] = "self_signed"  # external: certificate from a proxy/Tailscale
+
+
+class LiveKitCfg(_Strict):
+    enabled: bool = True
+    binary: str = "livekit-server"
+    manage_process: bool = True  # the core starts and supervises a local livekit-server
+    internal_url: str = "ws://127.0.0.1:7880"  # core + voice agent → LiveKit (loopback)
+    public_url: str = ""  # what the phone uses; empty → proxied through the TLS gateway (wss://<gateway>/rtc)
+    node_ip: str = ""  # IP announced for WebRTC media (LAN or Tailscale IP); empty → detected
+    rtc_tcp_port: int = 7881
+    rtc_udp_start: int = 50000
+    rtc_udp_end: int = 50100
+    turn_enabled: bool = False  # embedded TURN needs a public domain + certificate (VPS)
+    api_key_secret: str = "livekit-api-key"
+    api_secret_secret: str = "livekit-api-secret"
+
+
+class FirebaseCfg(_Strict):
+    """FCM HTTP v1. The service account JSON lives in the Keychain; the client options are not secret."""
+
+    service_account_secret: str = "fcm-service-account"
+    project_id: str = ""
+    api_key: str = ""  # Android API key from google-services.json (public client identifier)
+    app_id: str = ""  # mobilesdk_app_id
+    sender_id: str = ""  # project_number
+
+
+class CallPolicyCfg(_Strict):
+    ring_timeout_s: int = 45
+    max_calls_per_hour: int = 4
+    min_minutes_between_calls: int = 3
+    max_duration_minutes: int = 30
+
+
+class MobileCfg(_Strict):
+    enabled: bool = True
+    access_token_ttl_s: int = 600
+    refresh_token_ttl_days: int = 30
+    pairing_ttl_s: int = 600
+    gateway: MobileGatewayCfg = Field(default_factory=MobileGatewayCfg)
+    livekit: LiveKitCfg = Field(default_factory=LiveKitCfg)
+    firebase: FirebaseCfg = Field(default_factory=FirebaseCfg)
+    calls: CallPolicyCfg = Field(default_factory=CallPolicyCfg)
+
+
 class Settings(_Strict):
     server: ServerCfg = Field(default_factory=ServerCfg)
     paths: PathsCfg
@@ -205,6 +262,7 @@ class Settings(_Strict):
     coding: CodingCfg = Field(default_factory=CodingCfg)
     browser: BrowserCfg = Field(default_factory=BrowserCfg)
     scheduler: SchedulerCfg = Field(default_factory=SchedulerCfg)
+    mobile: MobileCfg = Field(default_factory=MobileCfg)
 
 
 class Personality(_Strict):

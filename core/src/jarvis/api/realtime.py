@@ -55,7 +55,14 @@ async def events_ws(ws: WebSocket) -> None:
             ev: Event = await queue.get()
             if not _visible(ev, principal):
                 continue
-            await ws.send_text(json.dumps(ev.to_dict(), ensure_ascii=False, default=str))
+            payload = ev.to_dict()
+            if principal.role == "mobile_owner" and ev.type == "memory.recalled":
+                # titles may be sensitive (extraction lookups include them) – the phone gets ids only
+                payload["data"] = {
+                    **{k: v for k, v in ev.data.items() if k not in ("hits", "query")},
+                    "hits": [{"id": h.get("id"), "kind": h.get("kind")} for h in ev.data.get("hits") or []],
+                }
+            await ws.send_text(json.dumps(payload, ensure_ascii=False, default=str))
 
     async def pump_logs() -> None:
         while True:
@@ -95,6 +102,10 @@ async def events_ws(ws: WebSocket) -> None:
 def _visible(ev: Event, p: Principal) -> bool:
     if p.role == "owner":
         return True
+    if p.role == "mobile_owner":  # Sir's phone: live memory highlighting, but nothing sensitive
+        if ev.type == "memory.recalled":
+            return True
+        return not ev.type.startswith(("audit.", "memory.pending"))
     # non-owner devices do not see audit/memory internals
     return not ev.type.startswith(("audit.", "memory.pending", "memory.recalled"))
 
