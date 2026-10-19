@@ -410,6 +410,19 @@ class CodingRunner:
                 "network": {"allowedDomains": NETWORK_ALLOWLIST, "strictAllowlist": True},
                 "filesystem": {"allowWrite": [str(self.workspaces / ".cache")]},
             }
+        read_dirs = [str(p) for p in self.cfg.extra_read_dirs]
+        write_dirs = [str(p) for p in self.cfg.extra_write_dirs]
+        if read_dirs or write_dirs:
+            # Read-only extras get --add-dir plus an explicit Edit/Write deny; write extras are fully granted.
+            read_only = [d for d in read_dirs if d not in write_dirs]
+            settings["permissions"] = {"deny": [f"{t}(/{d}/**)" for d in read_only for t in ("Edit", "Write")]}
+            if self.cfg.sandbox and write_dirs:
+                settings.setdefault("sandbox", {}).setdefault("filesystem", {}).setdefault("allowWrite", []).extend(
+                    write_dirs
+                )
+        add_dirs: list[str] = []
+        for d in dict.fromkeys([*read_dirs, *write_dirs]):
+            add_dirs += ["--add-dir", d]
         argv = [
             exe,
             "-p",
@@ -438,6 +451,7 @@ class CodingRunner:
             "Skill",
             "--settings",
             json.dumps(settings),
+            *add_dirs,
         ]
         if resume_session:
             argv += ["--resume", resume_session]
