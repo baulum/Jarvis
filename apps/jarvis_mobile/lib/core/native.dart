@@ -59,6 +59,21 @@ class NativeBridge {
 
   /// Sends the current position if sharing is on; false otherwise.
   Future<bool> reportLocation() async => await _ch.invokeMethod<bool>('reportLocation') ?? false;
+
+  /// "Hey Jarvis": wake word state, permissions and default-assistant status.
+  Future<Map<String, dynamic>> wakeStatus() async =>
+      jsonDecode(await _ch.invokeMethod<String>('wakeStatus') ?? '{}') as Map<String, dynamic>;
+
+  /// Only the given values change; an empty [accessKey] removes the stored key.
+  Future<Map<String, dynamic>> wakeConfigure({bool? enabled, bool? screenOnly, String? accessKey}) async =>
+      jsonDecode(await _ch.invokeMethod<String>(
+                'wakeConfigure',
+                {'enabled': enabled, 'screenOnly': screenOnly, 'accessKey': accessKey},
+              ) ??
+              '{}') as Map<String, dynamic>;
+
+  /// Opens the voice overlay (same as saying "Hey Jarvis").
+  Future<void> openAssist() => _ch.invokeMethod('openAssist');
 }
 
 class NativeEvent {

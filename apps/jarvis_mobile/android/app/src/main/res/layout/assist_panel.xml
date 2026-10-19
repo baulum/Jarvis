@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Voice overlay: dimmed current screen, Jarvis sheet at the bottom (see assist/AssistPanel.kt) -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#99020407"
+    android:contentDescription="Sprachfenster schließen">
+
+    <LinearLayout
+        android:id="@+id/assist_card"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="@drawable/assist_card"
+        android:orientation="vertical"
+        android:paddingStart="24dp"
+        android:paddingTop="18dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="12dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <systems.pje.jarvis_mobile.assist.PulseView
+                android:id="@+id/assist_pulse"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:contentDescription="Fertig gesprochen" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="14dp"
+                android:layout_weight="1"
+                android:fontFamily="monospace"
+                android:letterSpacing="0.3"
+                android:text="J.A.R.V.I.S."
+                android:textColor="#FF4A6573"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/assist_close"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Schließen"
+                android:gravity="center"
+                android:text="✕"
+                android:textColor="#FF86A9B8"
+                android:textSize="18sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/assist_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:layout_marginEnd="12dp"
+            android:fontFamily="sans-serif-light"
+            android:textColor="#FFCFF4FF"
+            android:textSize="22sp" />
+
+        <TextView
+            android:id="@+id/assist_heard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:layout_marginEnd="12dp"
+            android:textColor="#FF86A9B8"
+            android:textSize="15sp"
+            android:textStyle="italic"
+            android:visibility="gone" />
+
+        <systems.pje.jarvis_mobile.assist.MaxHeightScrollView
+            android:id="@+id/assist_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:layout_marginEnd="12dp"
+            android:fadeScrollbars="false"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/assist_answer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:lineSpacingMultiplier="1.2"
+                android:textColor="#FFE6F7FF"
+                android:textIsSelectable="true"
+                android:textSize="16sp" />
+        </systems.pje.jarvis_mobile.assist.MaxHeightScrollView>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="end"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/assist_open"
+                style="@style/AssistAction"
+                android:text="IN DER APP"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/assist_talk"
+                style="@style/AssistAction"
+                android:text="SPRECHEN"
+                android:visibility="gone" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

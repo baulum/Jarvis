@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import systems.pje.jarvis_mobile.assist.WakeWord
 import systems.pje.jarvis_mobile.bridge.NativeBridge
 import systems.pje.jarvis_mobile.bridge.NativeEvents
 import systems.pje.jarvis_mobile.call.CallManager
@@ -37,6 +38,11 @@ class MainActivity : FlutterFragmentActivity() {
                 setTurnScreenOn(s.status == "ringing")
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        WakeWord.ensureRunning(this) // e.g. after a reboot: the microphone service may only start from the foreground
     }
 
     override fun onNewIntent(intent: Intent) {

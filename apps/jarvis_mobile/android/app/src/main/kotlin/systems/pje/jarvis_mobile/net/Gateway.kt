@@ -12,6 +12,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -204,19 +205,31 @@ class Gateway private constructor(private val context: Context) {
     }
 
     // ------------------------------------------------------------------ requests
-    suspend fun request(method: String, path: String, body: String? = null, signPurpose: String? = null): String =
+    /**
+     * [readTimeoutS] for slow calls (e.g. `/api/chat` with `wait`); such requests are not repeated after a read
+     * timeout – the core may already be working on them.
+     */
+    suspend fun request(method: String, path: String, body: String? = null, signPurpose: String? = null, readTimeoutS: Long? = null): String {
+        val rb = if (body != null) body.toRequestBody(JSON) else if (method == "GET" || method == "DELETE") null else "".toRequestBody(JSON)
+        return send(method, path, rb, (body ?: "").toByteArray(), signPurpose, readTimeoutS)
+    }
+
+    /** Raw POST body (e.g. WAV audio for `/api/voice/stt`). */
+    suspend fun upload(path: String, data: ByteArray, contentType: String, readTimeoutS: Long? = null): String =
+        send("POST", path, data.toRequestBody(contentType.toMediaType()), data, null, readTimeoutS)
+
+    private suspend fun send(method: String, path: String, rb: RequestBody?, bytes: ByteArray, signPurpose: String?, readTimeoutS: Long?): String =
         withContext(Dispatchers.IO) {
+            val client = http().let { c -> if (readTimeoutS != null) c.newBuilder().readTimeout(readTimeoutS, TimeUnit.SECONDS).build() else c }
             var attempt = 0
             while (true) {
                 attempt++
                 val base = resolveBase(force = attempt > 1 && baseUrl == null)
-                val bytes = (body ?: "").toByteArray()
                 var b = Request.Builder().url("$base$path").header("Authorization", "Bearer ${accessToken()}")
                 if (signPurpose != null) b = signed(b, signPurpose, deviceId!!, bytes)
-                val rb = if (body != null) body.toRequestBody(JSON) else if (method == "GET" || method == "DELETE") null else "".toRequestBody(JSON)
                 val req = b.method(method, rb).build()
                 try {
-                    http().newCall(req).execute().use { r ->
+                    client.newCall(req).execute().use { r ->
                         val text = r.body?.string().orEmpty()
                         if (r.code == 401 && attempt == 1) {
                             access = null; return@use null
@@ -225,6 +238,7 @@ class Gateway private constructor(private val context: Context) {
                         text
                     }?.let { return@withContext it }
                 } catch (e: java.io.IOException) {
+                    if (readTimeoutS != null && e is java.net.SocketTimeoutException) throw ApiException(0, "Jarvis antwortet nicht rechtzeitig")
                     baseUrl = null
                     if (attempt >= 2) throw ApiException(0, "Jarvis ist nicht erreichbar")
                 }

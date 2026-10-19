@@ -98,8 +98,8 @@ object PushKey {
  * Small encrypted key/value store (refresh token, device id, gateway, pin). Values are AES-GCM encrypted
  * with a Keystore key; SharedPreferences only ever holds ciphertext.
  */
-class SecureStore(context: Context) {
-    private val prefs = context.getSharedPreferences("jarvis_secure", Context.MODE_PRIVATE)
+class SecureStore(context: Context, name: String = "jarvis_secure") {
+    private val prefs = context.getSharedPreferences(name, Context.MODE_PRIVATE)
 
     private fun key(): SecretKey {
         val ks = keyStore()
