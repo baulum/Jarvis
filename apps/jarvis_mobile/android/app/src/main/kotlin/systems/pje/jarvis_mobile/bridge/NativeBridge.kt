@@ -102,9 +102,12 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
             }
             "reportLocation" -> async { LocationShare.report(context) }
             "wakeStatus" -> result.success(WakeWord.status(context))
-            "wakeConfigure" -> {
+            "wakeConfigure" -> try {
                 WakeWord.configure(context, call.argument<Boolean>("enabled"), call.argument<Boolean>("screenOnly"), call.argument<String>("accessKey"))
                 result.success(WakeWord.status(context))
+            } catch (e: Exception) {
+                android.util.Log.w("JarvisWake", "configure failed: ${e.javaClass.simpleName}")
+                result.error("jarvis", "„Hey Jarvis“ konnte nicht gespeichert werden: ${e.javaClass.simpleName}", null)
             }
             "openAssist" -> { Assist.launch(context, "app"); result.success(true) }
             else -> result.notImplemented()

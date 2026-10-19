@@ -13,6 +13,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.service.voice.VoiceInteractionService
 import android.util.Log
@@ -72,16 +73,33 @@ object WakeWord {
             if (screenOnly != null) putBoolean("screen_only", screenOnly)
         }.apply()
         when {
-            !enabled(c) -> WakeWordService.stop(c)
+            !enabled(c) -> {
+                clearResumeReminder(c); WakeWordService.stop(c)
+            }
             WakeWordService.state.value.running -> WakeWordService.refresh(c, rebuild = accessKey != null)
             else -> ensureRunning(c)
         }
     }
 
+    /** Why the enabled wake word cannot start, or null. */
+    fun blocker(c: Context): String? = when {
+        !hasMic(c) -> "Mikrofonberechtigung fehlt"
+        accessKey(c) == null -> "Picovoice-AccessKey fehlt"
+        else -> null
+    }
+
     /** Called from the foreground (app opened): Android only grants background microphone access to a service started then. */
     fun ensureRunning(c: Context) {
-        if (enabled(c) && hasMic(c) && accessKey(c) != null && !WakeWordService.state.value.running) WakeWordService.start(c)
+        if (!enabled(c) || WakeWordService.state.value.running) return
+        val blocked = blocker(c)
+        if (blocked != null) {
+            Log.w(TAG, "not starting: $blocked"); return
+        }
+        Log.i(TAG, "starting wake word service")
+        WakeWordService.start(c)
     }
+
+    fun batteryUnrestricted(c: Context) = c.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(c.packageName)
 
     fun status(c: Context): String {
         val s = WakeWordService.state.value
@@ -92,6 +110,9 @@ object WakeWord {
             .put("listening", s.listening)
             .put("reason", s.reason)
             .put("error", s.error)
+            .put("blocked", if (enabled(c) && !s.running) blocker(c) else null)
+            .put("last_wake", s.lastWake)
+            .put("battery_unrestricted", batteryUnrestricted(c))
             .put("has_key", accessKey(c) != null)
             .put("screen_only", screenOnly(c))
             .put("keyword", if (custom) "eigenes Schlüsselwort (assets/wakeword)" else "„Jarvis“ (eingebaut, erkennt auch „Hey Jarvis“)")
@@ -115,7 +136,7 @@ object WakeWord {
         nm.createNotificationChannels(listOf(service, assist))
     }
 
-    /** After a reboot Android does not let a background service open the microphone – Sir taps once. */
+    /** After a reboot (or a refused background restart) Android does not let a service open the microphone – Sir taps once. */
     @SuppressLint("MissingPermission")
     fun postResumeReminder(c: Context) {
         createChannels(c)
@@ -129,7 +150,7 @@ object WakeWord {
                 NotificationCompat.Builder(c, CHANNEL_SERVICE)
                     .setSmallIcon(R.drawable.ic_stat_jarvis).setColor(Color.parseColor("#5CE1FF"))
                     .setContentTitle("„Hey Jarvis“ wieder aktivieren")
-                    .setContentText("Nach dem Neustart einmal tippen – Android verlangt das für das Mikrofon.")
+                    .setContentText("Einmal tippen – Android startet den Mikrofondienst nur aus der geöffneten App.")
                     .setContentIntent(open).setAutoCancel(true).build(),
             )
         }

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -48,15 +49,21 @@ class _WakeSettingsState extends ConsumerState<WakeSettings> with WidgetsBinding
     if (mounted) setState(() => _s = s);
   }
 
-  Future<void> _configure({bool? enabled, bool? screenOnly, String? accessKey}) async {
-    final s = await ref.read(nativeProvider).wakeConfigure(enabled: enabled, screenOnly: screenOnly, accessKey: accessKey);
-    if (mounted) setState(() => _s = s);
+  Future<bool> _configure({bool? enabled, bool? screenOnly, String? accessKey}) async {
+    try {
+      final s = await ref.read(nativeProvider).wakeConfigure(enabled: enabled, screenOnly: screenOnly, accessKey: accessKey);
+      if (mounted) setState(() => _s = s);
+      return true;
+    } on PlatformException catch (e) {
+      if (mounted) setState(() => _note = e.message ?? 'Speichern fehlgeschlagen.');
+      return false;
+    }
   }
 
   Future<void> _saveKey() async {
     final k = _key.text.trim();
     if (k.isEmpty) return;
-    await _configure(accessKey: k);
+    if (!await _configure(accessKey: k)) return;
     _key.clear();
     if (mounted) setState(() => _note = 'AccessKey gespeichert (verschlüsselt im Android Keystore).');
   }
@@ -135,14 +142,19 @@ class _WakeSettingsState extends ConsumerState<WakeSettings> with WidgetsBinding
       else ...[
         const SizedBox(height: J.s2),
         _switch('„Hey Jarvis“ erkennen', s['enabled'] == true, _toggle),
-        _row('Status', _state(s), color: s['error'] != null ? J.amber : (s['listening'] == true ? J.green : J.text2)),
+        _row('Status', _state(s), color: _stateColor(s)),
+        if ((s['last_wake'] as num? ?? 0) > 0) _row('Zuletzt erkannt', _time(s['last_wake'] as num)),
         _row('Schlüsselwort', s['keyword']?.toString() ?? '–'),
         _switch('Nur bei eingeschaltetem Bildschirm', s['screen_only'] == true, (v) => _configure(screenOnly: v)),
         Text('Spart Akku: bei ausgeschaltetem Bildschirm ist das Mikrofon dann ganz aus.', style: J.mono(11, color: J.text3)),
         const SizedBox(height: J.s4),
         _perm('Mikrofon', s['mic'] == true, 'Für das Aktivierungswort und Ihre Frage.', () async {
-          await _microphone();
-          await _load();
+          // granted → start the service right away (Android only allows it while the app is in front)
+          if (await _microphone()) {
+            await _configure();
+          } else {
+            await _load();
+          }
         }),
         _perm('Benachrichtigungen', s['notifications'] == true, 'Android zeigt den laufenden Dienst als stillen Hinweis.', () async {
           if (!(await Permission.notification.request()).isGranted) await native.openSettings('notifications');
@@ -155,6 +167,10 @@ class _WakeSettingsState extends ConsumerState<WakeSettings> with WidgetsBinding
             'Dann startet Jarvis auch per Assistent-Geste (Ecke wischen / Ein-Taste halten) – dort „J.A.R.V.I.S.“ wählen.',
             () => native.openSettings('assistant'),
             optional: true, action: 'Festlegen'),
+        _perm('Akku-Optimierung aus', s['battery_unrestricted'] == true,
+            'Empfohlen: sonst beenden manche Hersteller den Dienst im Hintergrund. In der Liste J.A.R.V.I.S. auf „Nicht optimieren“.',
+            () => native.openSettings('battery'),
+            optional: true, action: 'Öffnen'),
         const SizedBox(height: J.s4),
         Text(s['has_key'] == true ? 'Picovoice-AccessKey: gespeichert' : 'Picovoice-AccessKey: fehlt',
             style: J.mono(12, color: s['has_key'] == true ? J.green : J.amber)),
@@ -186,11 +202,24 @@ class _WakeSettingsState extends ConsumerState<WakeSettings> with WidgetsBinding
     ]);
   }
 
+  /// läuft / gestoppt / Fehler – always with the reason, so a deaf wake word never looks fine.
   String _state(Map<String, dynamic> s) {
-    if (s['error'] != null) return s['error'].toString();
-    if (s['enabled'] != true) return 'aus';
-    if (s['running'] != true) return 'startet beim Öffnen der App';
-    return s['listening'] == true ? 'hört zu' : 'pausiert · ${s['reason']}';
+    if (s['enabled'] != true) return 'gestoppt · ausgeschaltet';
+    if (s['error'] != null) return 'Fehler · ${s['error']}';
+    if (s['running'] != true) return s['blocked'] != null ? 'gestoppt · ${s['blocked']}' : 'gestoppt · startet beim Öffnen der App …';
+    return s['listening'] == true ? 'läuft · hört zu' : 'läuft · pausiert (${s['reason']})';
+  }
+
+  Color _stateColor(Map<String, dynamic> s) {
+    if (s['enabled'] != true) return J.text2;
+    if (s['error'] != null || s['running'] != true) return J.amber;
+    return s['listening'] == true ? J.green : J.text2;
+  }
+
+  String _time(num ms) {
+    final t = DateTime.fromMillisecondsSinceEpoch(ms.toInt());
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${two(t.day)}.${two(t.month)}. ${two(t.hour)}:${two(t.minute)}:${two(t.second)}';
   }
 
   Widget _row(String k, String v, {Color color = J.text}) => Padding(

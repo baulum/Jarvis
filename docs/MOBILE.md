@@ -354,12 +354,27 @@ verlangt einen **AccessKey**:
 3. Porcupine braucht beim ersten Start Internet zur Aktivierung des Schlüssels; danach erkennt es offline.
 
 Fehler wie „AccessKey ungültig“ oder „Gerätelimit erreicht“ erscheinen im Status und in der Dienst-Benachrichtigung.
+Vorübergehende Fehler (kein Internet bei der Aktivierung, Mikrofon belegt) wiederholt der Dienst selbst
+(30 s, dann länger, höchstens alle 15 min).
+
+**Status in Einstellungen › Hey Jarvis:** `läuft · hört zu`, `läuft · pausiert (Grund)`, `gestoppt · Grund`
+(z. B. „Mikrofonberechtigung fehlt“, „Picovoice-AccessKey fehlt“) oder `Fehler · Grund`; dazu „Zuletzt erkannt“.
+
+**Fehlersuche per adb** (der AccessKey wird nie geloggt):
+
+```
+adb logcat -s JarvisWake:V PorcupineManager:V AndroidRuntime:E
+```
+
+Erwartet beim Einschalten: `starting wake word service` → `service created` → `foreground service started (type
+microphone)` → `building Porcupine with built-in keyword JARVIS` → `state: listen` → `listening`; beim Sprechen
+`wake word detected`.
 
 **Schlüsselwort:** Standard ist das eingebaute **„Jarvis“** – es löst auch bei „Hey Jarvis“ aus. Für exakt
 „Hey Jarvis“: in der Picovoice Console ein Schlüsselwort „Hey Jarvis“ für **Android** trainieren und die `.ppn`-Datei
 nach `apps/jarvis_mobile/android/app/src/main/assets/wakeword/` legen (für ein deutsches Modell zusätzlich
 `porcupine_params_de.pv` in denselben Ordner), dann neu bauen. Die App nimmt automatisch die erste `.ppn`.
-Die Datei muss zur Porcupine-Version 3.x passen.
+Die Datei muss zur Porcupine-Version 4.x passen (die App nutzt `porcupine-android:4.0.2`).
 
 ### Einrichtung auf dem Telefon (einmalig)
 
@@ -370,8 +385,8 @@ Die Datei muss zur Porcupine-Version 3.x passen.
    Mit Standard-Assistent funktionieren zusätzlich die Assistent-Geste (Ecke wischen, Ein-Taste/Home lang drücken).
    Hinweis: Damit ersetzt Jarvis Google Assistant/Gemini für diese Geste.
 3. **Sprachfenster testen** prüft Mikrofon, Whisper und Antwort ohne Wake-Word.
-4. Empfohlen: Akku-Optimierung für J.A.R.V.I.S. ausschalten (Einstellungen › Berechtigungen › Akku), sonst beenden
-   manche Hersteller den Dienst.
+4. Empfohlen: Akku-Optimierung für J.A.R.V.I.S. ausschalten (Zeile „Akku-Optimierung aus“ › **Öffnen**), sonst
+   beenden manche Hersteller den Dienst.
 
 ### Akku und Verhalten
 
@@ -389,9 +404,9 @@ Die Datei muss zur Porcupine-Version 3.x passen.
 
 ### Grenzen / Stand
 
-- **Nicht gebaut, nicht auf einem Gerät getestet:** In der Arbeitsumgebung dieser Änderung war kein Flutter-SDK
-  verfügbar. Vor der Nutzung `cd apps/jarvis_mobile && flutter build apk --debug` ausführen (Gradle `assembleDebug`);
-  die Abhängigkeit `ai.picovoice:porcupine-android:3.0.2` wird dabei aus Maven Central geladen.
+- **Noch nicht gebaut, nicht auf einem Gerät getestet:** In den Arbeitsumgebungen der bisherigen Änderungen ließen
+  sich Flutter-SDK, JDK und adb nicht nutzen. Vor der Nutzung `cd apps/jarvis_mobile && flutter build apk --debug`
+  ausführen; `ai.picovoice:porcupine-android:4.0.2` (auf Maven Central vorhanden, API wie 3.x) wird dabei geladen.
 - Echtes „Always-on“ bei ausgeschaltetem Bildschirm über den Hotword-DSP (wie Google) ist Drittanbietern verwehrt
   (`AlwaysOnHotwordDetector` braucht Systemrechte) – deshalb Porcupine im Vordergrunddienst.
 - Die Antwort wird mit der Android-Stimme (TTS auf dem Gerät) vorgelesen, nicht mit Jarvis' Fish-Audio-Stimme:
