@@ -20,7 +20,8 @@ Anleitung, Android-Auto-Analyse und vollständige Testmatrix: **docs/MOBILE.md**
 - **Anrufe über LiveKit** (selbst gehostet, vom Core überwacht): Jarvis tritt dem Raum bei, Whisper → Orchestrator
   (gleicher Agent, gleiches Gedächtnis) → Fish-Audio-Streaming (gleiche Stimme), Barge-in, echte Werkzeug-/
   Gedächtnis-Ereignisse über den Datenkanal, Transkripte; vorab synthetisierte Begrüßung
-- **Agent-Werkzeuge:** `mobile_notify`, `mobile_call_owner`, `mobile_call_when` („ruf mich an, sobald …“)
+- **Agent-Werkzeuge:** `mobile_notify`, `mobile_call_owner`, `mobile_call_when` („ruf mich an, sobald …“),
+  `mobile_get_location` (letzter Standort des Handys, nur mit Freigabe in der App – docs/MOBILE.md › Standortfreigabe)
 - Whisper-Wiederholungsschleifen („…?\n …?\n …?“) werden jetzt für alle Sprachkanäle zusammengefasst
 
 | Messung (E2E, simuliertes Telefon über LiveKit) | Wert |

@@ -197,9 +197,10 @@ async def token(body: RefreshBody, request: Request, st: AppState = StateDep) ->
 
 
 @router.post("/logout")
-async def logout(p: Principal = Mobile) -> dict[str, bool]:
+async def logout(st: AppState = StateDep, p: Principal = Mobile) -> dict[str, bool]:
     assert p.device_id is not None
     await revoke_mobile_device(p.device_id)
+    st.location.clear(p.device_id, sharing_off=False)
     await audit(p.label, "mobile.logout", target=str(p.device_id))
     return {"ok": True}
 
@@ -243,6 +244,37 @@ async def push_token(body: PushTokenBody, p: Principal = Mobile) -> dict[str, bo
     return {"ok": True}
 
 
+# ------------------------------------------------------------------ location (only while Sir shares it)
+class LocationBody(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    accuracy_m: float | None = Field(default=None, ge=0, le=100_000)
+    timestamp_ms: int = Field(gt=0, description="when the phone measured the fix (Unix ms)")
+
+
+@router.put("/location")
+async def location_put(body: LocationBody, st: AppState = StateDep, p: Principal = Mobile) -> dict[str, bool]:
+    """Latest fix only (in memory). Deliberately no audit/log entry: the coordinates must not end up anywhere."""
+    assert p.device_id is not None
+    if not rate_limiter.check(f"location:{p.device_id}", 240, 3600):
+        raise HTTPException(429, "too many location updates")
+    try:
+        measured = datetime.fromtimestamp(body.timestamp_ms / 1000, UTC)
+        stored = st.location.update(p.device_id, body.latitude, body.longitude, body.accuracy_m, measured)
+    except (ValueError, OverflowError, OSError) as e:
+        raise HTTPException(422, "invalid timestamp") from e
+    return {"ok": True, "stored": stored}
+
+
+@router.delete("/location")
+async def location_delete(st: AppState = StateDep, p: Principal = Mobile) -> dict[str, bool]:
+    """Sir switched sharing off in the app: forget the stored fix."""
+    assert p.device_id is not None
+    st.location.clear(p.device_id)
+    await audit(p.label, "mobile.location.sharing_off", target=str(p.device_id))
+    return {"ok": True}
+
+
 @router.get("/devices")
 async def devices(p: Principal = OwnerOrMobile) -> list[dict[str, Any]]:
     async with session_scope() as s:
@@ -271,11 +303,12 @@ async def devices(p: Principal = OwnerOrMobile) -> list[dict[str, Any]]:
 
 
 @router.delete("/devices/{did}")
-async def device_revoke(did: str, p: Principal = OwnerOrMobile) -> dict[str, bool]:
+async def device_revoke(did: str, st: AppState = StateDep, p: Principal = OwnerOrMobile) -> dict[str, bool]:
     device_id = _uuid(did)
     if p.role != "owner" and device_id != p.device_id:
         raise HTTPException(403, "only the owner may remove other devices")
     await revoke_mobile_device(device_id)
+    st.location.clear(device_id, sharing_off=False)
     await audit(p.label, "mobile.device.revoke", target=did)
     return {"revoked": True}
 

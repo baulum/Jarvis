@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import systems.pje.jarvis_mobile.bridge.NativeEvents
 import systems.pje.jarvis_mobile.call.CallManager
+import systems.pje.jarvis_mobile.location.LocationShare
 import systems.pje.jarvis_mobile.net.Gateway
 import systems.pje.jarvis_mobile.notify.AlertNotifier
 import systems.pje.jarvis_mobile.secure.PushKey
@@ -71,6 +72,8 @@ class JarvisMessagingService : FirebaseMessagingService() {
                 AlertNotifier.show(this, msg)
                 NativeEvents.emit("alert", msg.toString())
             }
+            // Jarvis needs a current position; ignored unless Sir enabled location sharing in the app
+            "location_request" -> scope.launch { LocationShare.report(this@JarvisMessagingService) }
             else -> Log.i(TAG, "Unknown push type ${msg.optString("type")}")
         }
     }

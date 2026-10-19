@@ -19,6 +19,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import systems.pje.jarvis_mobile.JarvisApp
 import systems.pje.jarvis_mobile.call.CallManager
+import systems.pje.jarvis_mobile.location.LocationShare
 import systems.pje.jarvis_mobile.net.Gateway
 import systems.pje.jarvis_mobile.net.randomNonce
 import systems.pje.jarvis_mobile.net.sha256Hex
@@ -91,6 +92,12 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
             "setMuted" -> { CallManager.setMuted(context, call.argument<Boolean>("muted") == true); result.success(true) }
             "setEndpoint" -> { CallManager.setEndpoint(context, call.argument<String>("id")!!); result.success(true) }
             "openSettings" -> { openSettings(call.argument<String>("kind") ?: "app"); result.success(true) }
+            "locationStatus" -> result.success(LocationShare.status(context).toString())
+            "setLocationSharing" -> async {
+                val sent = LocationShare.setEnabled(context, call.argument<Boolean>("enabled") == true)
+                LocationShare.status(context).put("sent", sent).toString()
+            }
+            "reportLocation" -> async { LocationShare.report(context) }
             else -> result.notImplemented()
         }
     }
