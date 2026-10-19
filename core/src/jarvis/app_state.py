@@ -49,6 +49,7 @@ from jarvis.mobile.alerts import AlertEngine
 from jarvis.mobile.calls import CallService
 from jarvis.mobile.gateway import GatewayServer
 from jarvis.mobile.livekit_server import LiveKitServer
+from jarvis.mobile.location import LocationStore
 from jarvis.mobile.pairing import PairingService
 from jarvis.mobile.push import PushService
 from jarvis.secrets import secret_store
@@ -132,6 +133,7 @@ class AppState:
         self.push = PushService(settings.mobile.firebase)
         self.alerts = AlertEngine(self)
         self.calls = CallService(self)
+        self.location = LocationStore(self.push)
 
         for conn_cls in (
             SystemConnector,

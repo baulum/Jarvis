@@ -178,6 +178,24 @@ Quellen: Aufgaben/Coding-Jobs fertig oder fehlgeschlagen, Angaben benötigt, Fre
 „Jarvis wieder online“, sowie der Agent selbst (`mobile_notify`, z. B. für Kundenanfragen). Für „Neue Kundenanfrage“
 gibt es im Core noch kein eigenes Ereignis – der Agent kann sie melden, ein automatischer Mail-Watcher fehlt.
 
+### Standortfreigabe
+
+Standardmäßig aus. Einschalten in der App unter **Einstellungen › Standortfreigabe** („Standort mit Jarvis teilen“);
+die App fragt dabei nach dem Ortungsrecht und danach nach „Immer zulassen“. Ist die Freigabe an, sendet das Handy
+Breiten-/Längengrad, Genauigkeit und Messzeitpunkt (`PUT /api/mobile/location`, gepinntes TLS, Zugriffstoken)
+- beim Einschalten, bei jedem Öffnen der App und über „Jetzt senden“,
+- wenn Jarvis fragt: Das Werkzeug `mobile_get_location` schickt bei einem Standort älter als 2 min einen
+  verschlüsselten Push `location_request` (ohne Inhalt) und wartet bis zu 12 s auf die Antwort. Bei geschlossener App
+  geht das nur mit „Immer zulassen“.
+
+Der Core hält **nur den letzten Standort im Arbeitsspeicher** (keine Historie, keine Datenbank, kein Log-/Audit-Eintrag
+mit Koordinaten; nach einem Neustart ist er weg). Ausschalten in der App, Abmelden und Entfernen des Geräts löschen
+ihn (`DELETE /api/mobile/location`; ist Jarvis gerade nicht erreichbar, beim nächsten Öffnen der App). Ortung über
+den Android-`LocationManager`, keine Google-Play-Dienste. `mobile_get_location` liefert den Standort mit Alter in
+Minuten und einen Hinweis, wenn er älter als 10 min ist oder fehlt. Eine Fahrzeitberechnung gibt es nicht: Im Projekt
+ist kein Routendienst vorhanden, der ohne zusätzliche Zugangsdaten nutzbar wäre, und jeder externe Dienst würde den
+Standort an Dritte geben.
+
 ## 8. Sicherheit (Kurzfassung – Details in SECURITY.md › Smartphone)
 
 - Kopplung per Einmalcode im QR; Gerätebindung durch Keystore-Schlüssel (nicht exportierbar).

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/api.dart';
 import '../../core/live.dart';
@@ -26,6 +28,7 @@ final _statusProvider = FutureProvider.autoDispose<Map<String, dynamic>>(
     (ref) async => (await ref.read(apiProvider).get('/api/mobile/status') as Map).cast<String, dynamic>());
 final _devicesProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async =>
     ((await ref.read(apiProvider).get('/api/mobile/devices')) as List).map((e) => (e as Map).cast<String, dynamic>()).toList());
+final _locationProvider = FutureProvider.autoDispose<Map<String, dynamic>>((ref) => ref.read(nativeProvider).locationStatus());
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -59,6 +62,37 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  Future<void> _setLocationSharing(bool on) async {
+    final native = ref.read(nativeProvider);
+    try {
+      if (on) {
+        if (!(await Permission.locationWhenInUse.request()).isGranted) {
+          setState(() => _toast = 'Ohne Ortungsrecht kann Jarvis Ihren Standort nicht sehen.');
+          return;
+        }
+        // Answering Jarvis while the app is closed needs "Immer zulassen" (Android opens its settings page)
+        await Permission.locationAlways.request();
+      }
+      final ok = (await native.setLocationSharing(on))['sent'] == true;
+      setState(() => _toast = switch ((on, ok)) {
+            (true, true) => 'Standortfreigabe an. Standort gesendet.',
+            (true, false) => 'Standortfreigabe an, aber kein Standort gesendet – Ortung an, Jarvis erreichbar?',
+            (false, true) => 'Standortfreigabe aus. Jarvis hat den gespeicherten Standort gelöscht.',
+            (false, false) => 'Standortfreigabe aus. Jarvis ist gerade nicht erreichbar – der gespeicherte Standort '
+                'wird beim nächsten Öffnen der App gelöscht.',
+          });
+    } on PlatformException catch (e) {
+      setState(() => _toast = e.message ?? 'Fehler');
+    }
+    ref.invalidate(_locationProvider);
+  }
+
+  Future<void> _sendLocation() async {
+    setState(() => _toast = 'Ermittle Standort …');
+    final sent = await ref.read(nativeProvider).reportLocation().catchError((Object _) => false);
+    setState(() => _toast = sent ? 'Standort gesendet.' : 'Kein Standort ermittelt oder Jarvis nicht erreichbar.');
+  }
+
   Future<void> _pickTime(String key, String current) async {
     final parts = current.split(':');
     final t = await showTimePicker(
@@ -77,6 +111,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final policy = ref.watch(_policyProvider);
     final status = ref.watch(_statusProvider);
     final devices = ref.watch(_devicesProvider);
+    final location = ref.watch(_locationProvider);
     final link = ref.watch(linkProvider).valueOrNull ?? Link.connecting;
     final pairing = ref.watch(pairingProvider).valueOrNull;
 
@@ -179,6 +214,33 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     Text('In der Ruhezeit: Push wird still, Anrufe werden zur Benachrichtigung.', style: J.mono(11, color: J.text3)),
                     _switch('Kritisches durchlassen', p['critical_bypasses_quiet_hours'] == true,
                         (v) => _patch({'critical_bypasses_quiet_hours': v})),
+                  ];
+                },
+              ),
+              const SizedBox(height: J.s6),
+              const Caps('Standortfreigabe'),
+              const SizedBox(height: J.s1),
+              Text('Jarvis kennt dann Ihren letzten Standort, z. B. für „Wie lange brauche ich zu …?“. Er geht nur an Ihren '
+                  'Jarvis-Server, nur der letzte wird gespeichert; Ausschalten löscht ihn dort.',
+                  style: J.bodyDim.copyWith(fontSize: 13.5)),
+              ...location.when(
+                loading: () => [const SizedBox(height: J.s4)],
+                error: (e, _) => [Text('$e', style: J.bodyDim)],
+                data: (l) {
+                  final perm = l['permission'] as String? ?? 'none';
+                  return [
+                    _switch('Standort mit Jarvis teilen', l['enabled'] == true, _setLocationSharing),
+                    _kv('Ortung', perm == 'always' ? 'immer erlaubt' : perm == 'while_in_use' ? 'nur bei geöffneter App' : 'nicht erlaubt',
+                        color: perm == 'always' ? J.green : J.amber),
+                    if (l['enabled'] == true && perm == 'while_in_use')
+                      Text('Damit Jarvis Sie auch bei geschlossener App orten kann: Standort „Immer zulassen“.',
+                          style: J.mono(11, color: J.text3)),
+                    if (l['precise'] != true && perm != 'none') Text('Nur ungefährer Standort erlaubt.', style: J.mono(11, color: J.text3)),
+                    if (l['location_on'] != true) Text('Die Standortermittlung des Handys ist ausgeschaltet.', style: J.mono(11, color: J.amber)),
+                    Wrap(spacing: J.s4, children: [
+                      LightAction('Ortungsrechte', onTap: () => ref.read(nativeProvider).openSettings('app')),
+                      if (l['enabled'] == true) LightAction('Jetzt senden', onTap: _sendLocation),
+                    ]),
                   ];
                 },
               ),
