@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 ACTIVE = ("ringing", "connecting", "active")
+ORPHAN_GRACE = timedelta(seconds=60)  # a fresh row may briefly exist before its voice agent is registered
 
 
 class CallService:
@@ -82,6 +83,9 @@ class CallService:
         elif not await self.state.push.targets():
             ring_problems.append("kein gekoppeltes Smartphone mit Push-Registrierung")
         busy = await self.active_call()
+        if busy is not None:
+            problems.append("es läuft bereits ein Anruf")
+            ring_problems.append("es läuft bereits ein Anruf")
         return {
             "can_call_jarvis": not problems and busy is None,
             "can_ring_owner": not ring_problems and busy is None,
@@ -92,10 +96,24 @@ class CallService:
         }
 
     async def active_call(self) -> CallSession | None:
+        """The call occupying the line. A ringing/active row without a live voice agent in this process is a
+        leftover (agent crashed, cleanup failed) – it is closed instead of blocking every later call."""
+        now = datetime.now(UTC)
+        live: CallSession | None = None
         async with session_scope() as s:
-            return (
-                await s.execute(select(CallSession).where(CallSession.status.in_(ACTIVE)).limit(1))
-            ).scalar_one_or_none()
+            rows = (await s.execute(select(CallSession).where(CallSession.status.in_(ACTIVE)))).scalars().all()
+            for c in rows:
+                if c.id in self.agents or now - c.created_at < ORPHAN_GRACE:
+                    live = live or c
+                    continue
+                logger.warning("Closing orphaned call %s (status %s, no voice agent)", c.id, c.status)
+                c.status = "missed" if c.status == "ringing" else "failed"
+                c.end_reason = "orphaned"
+                c.ended_at = now
+                timer = self._ring_timers.pop(c.id, None)
+                if timer:
+                    timer.cancel()
+        return live
 
     async def call_blocker(self, event_key: str | None) -> str | None:
         """Why Jarvis must NOT ring right now (None = may ring)."""
