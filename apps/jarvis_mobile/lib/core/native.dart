@@ -60,6 +60,9 @@ class NativeBridge {
   /// Sends the current position if sharing is on; false otherwise.
   Future<bool> reportLocation() async => await _ch.invokeMethod<bool>('reportLocation') ?? false;
 
+  /// Is "Handy-Steuerung durch Jarvis" (the accessibility service) switched on in Android's settings?
+  Future<bool> phoneControlEnabled() async => await _ch.invokeMethod<bool>('phoneControlStatus') ?? false;
+
   /// "Hey Jarvis": wake word state, permissions and default-assistant status.
   Future<Map<String, dynamic>> wakeStatus() async =>
       jsonDecode(await _ch.invokeMethod<String>('wakeStatus') ?? '{}') as Map<String, dynamic>;

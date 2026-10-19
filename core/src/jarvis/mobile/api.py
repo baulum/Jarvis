@@ -275,6 +275,30 @@ async def location_delete(st: AppState = StateDep, p: Principal = Mobile) -> dic
     return {"ok": True}
 
 
+# ------------------------------------------------------------------ phone control (answers to phone_* commands)
+class PhoneResultBody(BaseModel):
+    cmd_id: str = Field(min_length=8, max_length=64)
+    ok: bool
+    error: str | None = Field(default=None, max_length=64)
+    message: str | None = Field(default=None, max_length=500)
+    data: dict[str, Any] | None = None
+
+
+@router.post("/phone/result")
+async def phone_result(
+    body: PhoneResultBody, request: Request, st: AppState = StateDep, p: Principal = Mobile
+) -> dict[str, bool]:
+    """The app's AccessibilityService reports the outcome of a pushed ``phone_command``. Deliberately no
+    audit/log entry for the content: it may be Sir's screen."""
+    assert p.device_id is not None
+    if int(request.headers.get("content-length") or 0) > 4_000_000:
+        raise HTTPException(413, "result too large")
+    if not rate_limiter.check(f"phone-result:{p.device_id}", 600, 3600):
+        raise HTTPException(429, "too many phone results")
+    accepted = st.phone.complete(p.device_id, body.cmd_id, body.model_dump())
+    return {"ok": True, "accepted": accepted}
+
+
 @router.get("/devices")
 async def devices(p: Principal = OwnerOrMobile) -> list[dict[str, Any]]:
     async with session_scope() as s:

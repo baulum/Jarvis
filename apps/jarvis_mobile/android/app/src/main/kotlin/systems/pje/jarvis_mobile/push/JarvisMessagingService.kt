@@ -15,6 +15,7 @@ import systems.pje.jarvis_mobile.call.CallManager
 import systems.pje.jarvis_mobile.location.LocationShare
 import systems.pje.jarvis_mobile.net.Gateway
 import systems.pje.jarvis_mobile.notify.AlertNotifier
+import systems.pje.jarvis_mobile.phone.PhoneControl
 import systems.pje.jarvis_mobile.secure.PushKey
 
 private const val TAG = "JarvisPush"
@@ -74,6 +75,8 @@ class JarvisMessagingService : FirebaseMessagingService() {
             }
             // Jarvis needs a current position; ignored unless Sir enabled location sharing in the app
             "location_request" -> scope.launch { LocationShare.report(this@JarvisMessagingService) }
+            // Jarvis operates the phone (phone_* tools); executed by the accessibility service, answer goes over HTTP
+            "phone_command" -> scope.launch { PhoneControl.handle(this@JarvisMessagingService, msg) }
             else -> Log.i(TAG, "Unknown push type ${msg.optString("type")}")
         }
     }
