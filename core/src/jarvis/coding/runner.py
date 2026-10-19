@@ -245,6 +245,49 @@ class CodingRunner:
         await bus.publish("coding.updated", job_id=str(job_id), status="cancelled")
         return True
 
+    async def delete(self, job_id: uuid.UUID, actor: str, delete_worktree: bool = False) -> dict[str, Any]:
+        """Removes a failed/cancelled job from the job list. The branch is always kept; the
+        worktree only when ``delete_worktree`` is set explicitly."""
+        async with session_scope() as s:
+            job = await s.get(CodingJob, job_id)
+            if job is None:
+                raise CodingError("Job nicht gefunden")
+            if job.status not in ("failed", "cancelled"):
+                raise CodingError(
+                    f"Job hat Status '{job.status}' – entfernt werden können nur fehlgeschlagene "
+                    "oder abgebrochene Jobs (failed/cancelled)."
+                )
+            task = self._tasks.get(job_id)
+            if task and not task.done():
+                raise CodingError("Job läuft noch und kann nicht entfernt werden")
+            repo, worktree, branch = job.repo_path, job.worktree_path, job.branch
+        worktree_removed = False
+        if delete_worktree and worktree:
+            wt = Path(worktree).resolve()
+            if not wt.is_relative_to(self.workspaces.resolve()):
+                raise CodingError("Worktree liegt außerhalb des Jarvis-Workspace und wird nicht entfernt")
+            if wt.exists():
+                await self._git(Path(repo), "worktree", "remove", "--force", str(wt))
+                worktree_removed = True
+        async with session_scope() as s:
+            job = await s.get(CodingJob, job_id)
+            if job is not None:
+                await s.delete(job)
+        self._tasks.pop(job_id, None)
+        await audit(
+            actor,
+            "coding.delete",
+            target=str(job_id),
+            details={"worktree": worktree, "worktree_removed": worktree_removed, "branch": branch},
+        )
+        await bus.publish("coding.deleted", job_id=str(job_id))
+        return {
+            "deleted": True,
+            "worktree": worktree,
+            "worktree_removed": worktree_removed,
+            "branch": branch,
+        }
+
     async def cancel_all(self) -> None:
         for jid in list(self._procs):
             await self.cancel(jid, "killswitch")
