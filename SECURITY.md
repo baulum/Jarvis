@@ -71,8 +71,11 @@ Overrides in `permissions.yaml` können Risiken nur **erhöhen**.
 - Twilio-Webhooks werden per `X-Twilio-Signature` (HMAC-SHA1) geprüft; ohne gültige Signatur → 403.
 - Media-Stream nur mit Einmal-Token (120 s gültig, an den Anruf gebunden).
 - **Die Rufnummer authentifiziert nie.** PIN-Pflicht (DTMF oder gesprochen, Konstantzeit-Vergleich), 3 Fehlversuche → Auflegen.
-- Rate-Limits pro Nummer und global; vollständige Anrufprotokolle mit Transkript.
-- Ausgehende Anrufe sagen nur den Benachrichtigungstitel an; alles Weitere erst nach PIN.
+- Rate-Limits pro Nummer; Fremde teilen sich ein eigenes Stundenbudget und können Sir nicht aussperren;
+  `telephony.reject_unknown_callers: true` nimmt nur Nummern aus `owner_numbers` an.
+- Anrufprotokolle mit Transkript – **erst nach erfolgreicher PIN**: eine gesprochene PIN wird weder gespeichert noch
+  über den Event-Bus verteilt.
+- Ausgehende Anrufe melden sich nur mit „Hier ist Jarvis“; der Anrufgrund wird erst nach der PIN gesprochen.
 
 ## Smartphone (J.A.R.V.I.S.-App)
 - **Kopplung:** Einmalcode (144 Bit, 10 min) nur vom Owner-Gerät (`jarvisctl mobile-pair`); das Telefon beweist mit
@@ -80,14 +83,19 @@ Overrides in `permissions.yaml` können Risiken nur **erhöhen**.
   nicht exportierbar). Rate-Limit 10 Versuche/Stunde/IP.
 - **Tokens:** Zugriffstoken `jat_…` (HMAC-SHA256, 10 min, Gerät/Rolle/Familie; Schlüssel `mobile-token-key` im
   Schlüsselbund). Refresh-Token `jrt_…` nur als SHA-256 gespeichert, Einmalverwendung mit Rotation; ein bereits
-  benutztes Token widerruft die gesamte Familie (Diebstahlerkennung). Jede Erneuerung ist mit dem Geräteschlüssel
+  benutztes Token widerruft die gesamte Familie (Diebstahlerkennung; ein Wiederholungs-Request innerhalb von 30 s
+  nach einem verlorenen Response wird toleriert). Jede Erneuerung ist mit dem Geräteschlüssel
   signiert (`refresh|gerät|ts|nonce|sha256(body)`, ±120 s, Nonce-Cache gegen Replay).
 - **Freigaben vom Telefon:** nur über `POST /api/mobile/approvals/<id>` mit frischer Gerätesignatur
   (`approval:<id>`); die App verlangt vorher Fingerabdruck/Geräte-PIN. Kritische Aktionen bleiben am Desktop.
 - **Transport:** eigener Listener `:8767` (TLS, selbstsigniert, Fingerabdruck im QR-Code gepinnt) liefert nur eine
   Allowlist von Mobile-Pfaden; alles andere – Audit, Connectoren, Geräte, MCP, Approval-Modus, Export – antwortet 404.
   Requests mit Cloudflare-Headern werden dort immer abgewiesen. Core `:8765` bleibt auf 127.0.0.1.
-  LiveKit-Signalisierung nur über diesen TLS-Kanal (`/rtc`-Proxy), Medien DTLS-SRTP; Raum-Token je Anruf (1 h).
+  LiveKit-Signalisierung nur über diesen TLS-Kanal (`/rtc`-Proxy, nur mit einem vom Core signierten Raum-Token,
+  Nachrichten ≤ 1 MiB, max. 8 Verbindungen), Medien DTLS-SRTP; Raum-Token je Anruf (1 h). Bei `tls: external`
+  bindet das Gateway nur an 127.0.0.1.
+- **Gedächtnis auf dem Handy:** als „sensibel“ markierte Notizen sind für Nicht-Owner-Geräte unsichtbar (Liste,
+  Suche, Graph, Cluster).
 - **Push:** FCM-Daten-Nachrichten Ende-zu-Ende AES-256-GCM-verschlüsselt (Schlüssel je Gerät, auf dem Telefon im
   Keystore, AAD = Geräte-ID), mit ID + Ablauf; das Telefon verwirft Duplikate/Abgelaufenes. FCM-Dienstkonto nur im
   Schlüsselbund (`fcm-service-account`).
@@ -107,8 +115,16 @@ Overrides in `permissions.yaml` können Risiken nur **erhöhen**.
 - Wirkung: alle nicht-lesenden Tools gesperrt, Bridge verweigert Aktionen, laufende Coding-Jobs werden beendet, Agent-Lauf
   abgebrochen, Task-Engine und Scheduler pausieren. Aufheben nur durch den Besitzer am Desktop/CLI.
 
+## Backups
+- Täglich 03:30 (und beim Start nachgeholt): `pg_dump` + Vault + Konfiguration, AES-256-GCM (blockweise, Abschneiden wird
+  erkannt), Schlüssel im Schlüsselbund (`backup-key`; `jarvisctl backup key` zum Ablegen im Passwortmanager). Zugangsdaten
+  und Token-Dateien sind nie enthalten. Aufbewahrung: 14 neueste + 1 je Woche der letzten 8 Wochen. Wiederherstellung:
+  `jarvisctl backup restore <Datei>` (entpackt nur in einen Ordner, überschreibt nichts Laufendes).
+
 ## Audit
 - Append-only-Tabelle `audit_log` mit SHA-256-Hash-Kette (`GET /api/audit/verify` erkennt Manipulationen – getestet).
+- Aktionen ab Risiko `high` schreiben **vorher** einen Eintrag (`outcome=started`); ist das Protokoll nicht beschreibbar,
+  läuft die Aktion nicht. Getippter/eingefügter Text (`mac_type_text`, Zwischenablage) wird nur als Länge protokolliert.
 - Protokolliert: Tool-Aufrufe (Argumente geschwärzt), Freigaben/Ablehnungen, Konfigurationsänderungen, Gerätekopplungen,
   Telefon-Authentifizierung, Gedächtnisänderungen, Not-Aus.
 
@@ -119,6 +135,13 @@ Overrides in `permissions.yaml` können Risiken nur **erhöhen**.
   nutzt `server.public_base_url`.
 
 ## Bekannte Grenzen
+- Die Bestätigung von Freigaben am Handy (Fingerabdruck/PIN) ist ein App-seitiges Gate; der Geräteschlüssel selbst
+  ist nicht biometrisch gebunden. Eine Härtung (separater Freigabe-Schlüssel mit `setUserAuthenticationRequired`)
+  erfordert eine neue Kopplung und ist noch offen.
+- Die Hash-Kette des Audits erkennt Änderungen einzelner Zeilen, aber nicht das komplette Neuberechnen durch jemanden
+  mit Schreibzugriff auf die Datenbank.
+- Der Coding-Runner läuft bewusst ohne Sandbox (`coding.sandbox: false`), weil Builds sonst scheitern – er arbeitet
+  dann mit den Rechten von Sir.
 - Ein 4B-Modell kann Tools falsch wählen; die Policy-Engine fängt Seiteneffekte ab (siehe PROGRESS.md, Beobachtungen).
 - Die Bridge ist ad-hoc signiert: nach einem Neubau müssen macOS-Rechte ggf. neu erteilt werden.
 - Bildschirmanalyse und Zwischenablage können fremde Inhalte enthalten → als untrusted markiert.

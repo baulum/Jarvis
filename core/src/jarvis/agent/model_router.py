@@ -13,7 +13,10 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from jarvis.agent.usage import UsageTracker
 
 Scope = Literal["turn", "session", "default"]
 
@@ -23,13 +26,29 @@ MODELS: dict[str, dict[str, str]] = {
     "opus": {"id": "claude-opus-5-5", "label": "Opus 5.5"},
 }
 
+EFFORTS: dict[str, str] = {
+    "low": "Niedrig",
+    "medium": "Mittel",
+    "high": "Hoch",
+    "xhigh": "Sehr hoch",
+    "max": "Maximal",
+}
+
 _MODEL_WORD = r"(opus|sonnet|sonett|haiku|hayku)"
+_VERB = (
+    r"(?:nimm|nehm\w*|nutz\w*|benutz\w*|verwend\w*|wechs\w*|schalt\w*|stell\w*|geh\w*|wähl\w*|switch\w*|"
+    r"use|take|ich (?:will|möchte|brauche)|soll\w*)"
+)
 _SWITCH_RE = re.compile(
-    r"(?:\b(?:nimm|nehm\w*|benutz\w*|verwend\w*|wechs\w*|schalt\w*|geh\w*|switch|use)\b[^.?!]{0,25}?\b"
-    + _MODEL_WORD
-    + r"\b|\b"
-    + _MODEL_WORD
-    + r"[- ]?modus\b)",
+    # "nimm Opus", "nutze bitte Haiku", "stell auf Sonnet um"
+    r"(?:\b" + _VERB + r"\b[^.?!]{0,30}?\b" + _MODEL_WORD + r"\b"
+    # "Haiku nutzen", "auf Opus wechseln"
+    r"|\b" + _MODEL_WORD + r"\b[^.?!]{0,20}?\b(?:nutz\w*|benutz\w*|verwend\w*|nehmen|wechseln|umschalten|"
+    r"umstellen|aktivier\w*)\b"
+    # "Claude Opus", "Modell Haiku", "auf Sonnet", "Opus-Modus"
+    r"|\b(?:nur diesmal|einmalig|nur (?:für )?(?:diese|die nächste) \w+|just this once)\W+" + _MODEL_WORD
+    + r"|\b(?:claude|modell|model|auf|mit)\s+" + _MODEL_WORD + r"\b"
+    r"|\b" + _MODEL_WORD + r"[- ]?modus\b)",
     re.IGNORECASE,
 )
 _DEFAULT_RE = re.compile(
@@ -87,7 +106,10 @@ def parse_command(text: str) -> SwitchCommand | None:
 
 def _clean(rest: str) -> str:
     rest = re.sub(
-        r"^\s*(jarvis|bitte|und|dann|für|als modell|das modell|modell)\b[\s,:]*", "", rest.strip(" ,.:;!?-"), flags=re.I
+        r"^\s*(jarvis|claude|bitte|und|dann|für|als modell|das modell|modell)\b[\s,:]*",
+        "",
+        rest.strip(" ,.:;!?-"),
+        flags=re.I,
     )
     rest = rest.strip(" ,.:;!?-")
     return rest if len(rest.split()) >= 3 else ""
@@ -111,6 +133,8 @@ class ModelRouter:
         self.auto_downgrade = auto_downgrade
         self.session_overrides: dict[str, str | None] = {}
         self.next_turn: dict[str, str] = {}
+        self.effort: str | None = None  # None = Claude Code's own default
+        self.usage: UsageTracker | None = None  # set by AppState: quota pressure steps automatic choices down
         self._load()
 
     def _load(self) -> None:
@@ -122,10 +146,13 @@ class ModelRouter:
             self.default = data["default"]
         if isinstance(data.get("auto_downgrade"), bool):
             self.auto_downgrade = data["auto_downgrade"]
+        if data.get("effort") in EFFORTS:
+            self.effort = data["effort"]
 
     def _save(self) -> None:
         self.state_file.write_text(
-            json.dumps({"default": self.default, "auto_downgrade": self.auto_downgrade}), encoding="utf-8"
+            json.dumps({"default": self.default, "auto_downgrade": self.auto_downgrade, "effort": self.effort}),
+            encoding="utf-8"
         )
 
     def set(self, model: str | None, scope: Scope, session_id: str | None = None) -> None:
@@ -145,12 +172,36 @@ class ModelRouter:
             if model is None:
                 self.session_overrides.pop(session_id, None)
 
+    def apply(self, model: str | None, scope: Scope, session_id: str | None) -> None:
+        """Like :meth:`set`, plus the one-shot ``turn`` scope (the next answer of that conversation only)."""
+        if scope == "turn":
+            if model is None or model not in MODELS or not session_id:
+                raise ValueError("Für 'nur diese Antwort' sind Modell und Gespräch nötig")
+            self.next_turn[session_id] = model
+        else:
+            self.set(model, scope, session_id)
+
+    def set_effort(self, effort: str | None) -> None:
+        if effort is not None and effort not in EFFORTS:
+            raise ValueError(f"Unbekannter Effort: {effort}")
+        self.effort = effort
+        self._save()
+
     def set_auto_downgrade(self, enabled: bool) -> None:
         self.auto_downgrade = enabled
         self._save()
 
+    def _relieve(self, model: str, reason: str) -> tuple[str, str]:
+        """Automatic choices only: with the subscription quota nearly used up, step down one model."""
+        pressure = self.usage.pressure() if self.usage is not None else 0.0
+        if model == "opus" and pressure >= 0.9:
+            return "sonnet", f"Kontingent bei {round(pressure * 100)} % – Sonnet statt Opus"
+        if model == "sonnet" and pressure >= 0.97:
+            return "haiku", f"Kontingent bei {round(pressure * 100)} % – Haiku statt Sonnet"
+        return model, reason
+
     def choose(self, text: str, channel: str, session_id: str, turn_override: str | None = None) -> tuple[str, str]:
-        """Returns (model alias, reason)."""
+        """Returns (model alias, reason). Explicit commands are always honoured; defaults/auto react to the quota."""
         if turn_override:
             return turn_override, "Befehl (nur diese Antwort)"
         if session_id in self.next_turn:
@@ -159,10 +210,10 @@ class ModelRouter:
         if override:
             return override, "für dieses Gespräch gewählt"
         if self.default != "sonnet":
-            return self.default, "Standard"
+            return self._relieve(self.default, "Standard")
         if self.auto_downgrade and is_simple(text, channel):
             return "haiku", "automatisch: einfache Anfrage"
-        return "sonnet", "Standard"
+        return self._relieve("sonnet", "Standard")
 
     def status(self, session_id: str | None = None) -> dict[str, object]:
         return {
@@ -170,4 +221,6 @@ class ModelRouter:
             "auto_downgrade": self.auto_downgrade,
             "session_override": self.session_overrides.get(session_id) if session_id else None,
             "models": [{"alias": k, **v} for k, v in MODELS.items()],
+            "effort": self.effort,
+            "efforts": [{"id": k, "label": v} for k, v in EFFORTS.items()],
         }

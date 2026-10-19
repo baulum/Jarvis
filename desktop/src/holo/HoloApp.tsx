@@ -14,6 +14,7 @@ import { CATEGORY_LABEL, type Category } from "./graph/types";
 import { ChatDock } from "./ChatDock";
 import { CommandBar } from "./CommandBar";
 import { LabelLayer } from "./LabelLayer";
+import { ModelDock } from "./ModelDock";
 import { NodeDetail } from "./NodeDetail";
 import { StatusMark } from "./StatusMark";
 import { SystemPanel } from "./SystemPanel";
@@ -203,6 +204,7 @@ export function HoloApp() {
           <StatusMark />
           <div className="ml-auto flex flex-col items-end gap-3">
             <div className="pointer-events-auto flex items-center gap-2">
+              <ModelDock />
               <Controls />
               <KillSwitch />
             </div>

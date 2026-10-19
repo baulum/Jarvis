@@ -193,6 +193,19 @@ wheels = [
 ]
 
 [[package]]
+name = "antibrow"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "playwright" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/af/6a/fde42c13d2a71534d29be6dee0e1be5154d7373cbbba72ae01539c99f2ec/antibrow-1.0.0.tar.gz", hash = "sha256:69817e5823fa2a32a263a2b5e74427a9830b16e68ac1414f83587d5a9ab5113e", size = 332495, upload-time = "2026-10-15T02:13:40.748Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3e/f7/1ee027399cf8700f125078842f6093b05f9673a0871b6559db42bdaebc9c/antibrow-1.0.0-py3-none-any.whl", hash = "sha256:31ad70af99779d05178f4e3a56d578f01bb4aa5ac0de0dd1bb0acf2cc8d8b3e9", size = 188436, upload-time = "2026-10-15T02:13:38.963Z" },
+]
+
+[[package]]
 name = "anyio"
 version = "4.15.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1105,6 +1118,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+antibrow = [
+    { name = "antibrow" },
+]
 voice = [
     { name = "onnxruntime" },
     { name = "sounddevice" },
@@ -1122,6 +1138,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.14" },
+    { name = "antibrow", marker = "extra == 'antibrow'", specifier = ">=1.0" },
     { name = "asyncpg", specifier = ">=0.30" },
     { name = "croniter", specifier = ">=5" },
     { name = "cryptography", specifier = ">=43" },
@@ -1150,7 +1167,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["voice"]
+provides-extras = ["antibrow", "voice"]
 
 [package.metadata.requires-dev]
 dev = [

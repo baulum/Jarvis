@@ -129,7 +129,7 @@ class CallService : Service() {
         // Telecom requires the call notification within 5 s of adding the call: promote immediately.
         promote(foregroundTypes(withMic = !incoming))
         val attributes = CallAttributesCompat(
-            displayName = "J.A.R.V.I.S.",
+            displayName = "Jarvis",
             address = Uri.parse("jarvis:core"),
             direction = if (incoming) CallAttributesCompat.DIRECTION_INCOMING else CallAttributesCompat.DIRECTION_OUTGOING,
             callType = CallAttributesCompat.CALL_TYPE_AUDIO_CALL,

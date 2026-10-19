@@ -128,8 +128,8 @@ class SecureStore(context: Context) {
     @Synchronized
     fun get(name: String): String? {
         val raw = prefs.getString(name, null) ?: return null
-        val (iv, ct) = raw.split(":").let { it[0] to it[1] }
         return runCatching {
+            val (iv, ct) = raw.split(":").let { it[0] to it[1] } // a corrupted entry reads as "absent", never crashes
             Cipher.getInstance("AES/GCM/NoPadding").run {
                 init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP)))
                 String(doFinal(Base64.decode(ct, Base64.NO_WRAP)))

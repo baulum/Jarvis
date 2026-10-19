@@ -21,7 +21,7 @@ class CallNotifications(private val context: Context) {
     }
 
     private val jarvis = Person.Builder()
-        .setName("J.A.R.V.I.S.")
+        .setName("Jarvis")
         .setIcon(IconCompat.createWithResource(context, R.drawable.ic_jarvis_person))
         .setImportant(true)
         .build()
@@ -56,7 +56,7 @@ class CallNotifications(private val context: Context) {
         return NotificationCompat.Builder(context, if (ringing) Channels.CALL_INCOMING else Channels.CALL_ONGOING)
             .setSmallIcon(R.drawable.ic_stat_jarvis)
             .setColor(Color.parseColor("#5CE1FF"))
-            .setContentTitle("J.A.R.V.I.S.")
+            .setContentTitle("Jarvis")
             .setContentText(text)
             .setStyle(style)
             .setCategory(NotificationCompat.CATEGORY_CALL)

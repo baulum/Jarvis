@@ -45,6 +45,7 @@ from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
 from jarvis.security.guards import rate_limiter
 from jarvis.voice.audio import EnergyVAD, resample, rms, ulaw_decode, ulaw_encode
+from jarvis.voice.commands import is_end_conversation
 from jarvis.voice.speech import speakable
 
 if TYPE_CHECKING:
@@ -176,7 +177,7 @@ def stream_twiml(base_url: str, call_id: uuid.UUID, stream_token: str) -> str:
 
 
 def reject_twiml(message: str) -> str:
-    return f'<Response><Say language="de-DE">{escape(message)}</Say><Hangup/></Response>'
+    return f'<Response><Say language="de-DE">{escape(speakable(message))}</Say><Hangup/></Response>'
 
 
 @dataclass
@@ -243,8 +244,13 @@ class TelephonyService:
             await audit(f"phone:{params.get('From', '?')}", "telephony.bad_signature", outcome="denied")
             raise PermissionError("invalid signature")
         caller = params.get("From", "")
-        if not rate_limiter.check(f"call:{caller}", 3, 600) or not rate_limiter.check(
-            "calls:global", self.cfg.max_calls_per_hour, 3600
+        known = caller in self.cfg.owner_numbers
+        if self.cfg.reject_unknown_callers and not known:
+            await audit(f"phone:{caller}", "telephony.unknown_caller", outcome="denied")
+            return reject_twiml("Dieser Anschluss nimmt keine Anrufe von unbekannten Nummern entgegen.")
+        # strangers share one hourly budget of their own, so they can never lock Sir out of his own line
+        if not rate_limiter.check(f"call:{caller}", 3, 600) or (
+            not known and not rate_limiter.check("calls:global", self.cfg.max_calls_per_hour, 3600)
         ):
             await audit(f"phone:{caller}", "telephony.rate_limited", outcome="denied")
             return reject_twiml("Zu viele Anrufe. Bitte später erneut versuchen.")
@@ -407,11 +413,11 @@ class TelephonyService:
         pin = secret_store.get(self.cfg.pin_secret)
         if st.local_test:
             await self._say(ws, st, "Lokaler Testmodus. Dies ist kein echtes Telefonat.")
-        if st.direction == "outbound" and st.purpose:
-            await self._say(ws, st, f"Guten Tag, Sir, hier ist Jarvis. {st.purpose}")
-        else:
-            await self._say(ws, st, "Hier ist Jarvis.")
         if not pin:
+            if st.direction == "outbound" and st.purpose:  # nothing to verify against: just deliver the message
+                await self._say(ws, st, f"Guten Tag, Sir, hier ist Jarvis. {st.purpose}")
+            else:
+                await self._say(ws, st, "Hier ist Jarvis.")
             await self._say(
                 ws,
                 st,
@@ -419,6 +425,8 @@ class TelephonyService:
             )
             await self._hangup(ws, st)
             return
+        # Whoever picks up hears no details before the PIN was verified.
+        await self._say(ws, st, "Hier ist Jarvis.")
         await self._say(
             ws, st, "Bitte nennen Sie Ihre PIN oder geben Sie sie über die Tastatur ein, gefolgt von Raute."
         )
@@ -427,7 +435,7 @@ class TelephonyService:
             text = ""
             if utt.size:
                 text = await self.state.stt.transcribe_pcm(resample(utt, RATE, 16000), 16000)
-                if text:
+                if text and st.authenticated:  # a spoken PIN must never reach the log, the database or the event bus
                     st.transcript.append({"role": "caller", "text": text, "ts": datetime.now(UTC).isoformat()})
                     await bus.publish("telephony.transcript", call_id=str(st.call_id), role="caller", text=text)
             if not st.authenticated:
@@ -440,6 +448,8 @@ class TelephonyService:
                 if secrets.compare_digest(entered, pin):
                     st.authenticated = True
                     await audit(f"phone:{st.from_number}", "telephony.authenticated", target=str(st.call_id))
+                    if st.direction == "outbound" and st.purpose:
+                        await self._say(ws, st, st.purpose)
                     await self._say(ws, st, "Danke, Sir. Was kann ich für Sie tun?")
                 else:
                     st.pin_attempts += 1
@@ -458,12 +468,17 @@ class TelephonyService:
                 continue
             if not text:
                 continue
-            if re.search(r"\b(auflegen|tschüss|auf wiederhören|ende|bye)\b", text.lower()):
+            if is_end_conversation(text):
                 await self._say(ws, st, "Sehr wohl, Sir. Auf Wiederhören.")
                 await self._hangup(ws, st)
                 return
             principal = Principal(id=st.from_number or "phone", role="phone_owner", channel="phone")
-            result = await self.state.orchestrator.handle(principal, "phone", text, session_id=st.session_id)
+            try:
+                result = await self.state.orchestrator.handle(principal, "phone", text, session_id=st.session_id)
+            except Exception:
+                logger.exception("Phone turn failed")
+                await self._say(ws, st, "Das hat leider nicht funktioniert, Sir.")
+                continue
             st.session_id = result.session_id
             st.transcript.append({"role": "jarvis", "text": result.text, "ts": datetime.now(UTC).isoformat()})
             await bus.publish("telephony.transcript", call_id=str(st.call_id), role="jarvis", text=result.text)

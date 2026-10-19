@@ -10,6 +10,7 @@ import '../../state/providers.dart';
 import '../widgets/composer.dart';
 import '../widgets/core_orb.dart';
 import '../widgets/hud.dart';
+import '../widgets/model_picker.dart';
 
 /// The core, alone in the dark. Everything else is one gesture away: memory ←, activity →, conversation ↑.
 class HomeScreen extends ConsumerStatefulWidget {
@@ -76,6 +77,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       Text('J.A.R.V.I.S.', style: J.wordmark),
                       const SizedBox(height: 6),
                       _LinkLine(link: link),
+                      const ModelChip(),
                     ]),
                   ),
                   RingButton(

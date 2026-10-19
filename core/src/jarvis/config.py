@@ -74,6 +74,7 @@ class AgentCfg(_Strict):
     utility_model: Literal["sonnet", "opus", "haiku"] = "haiku"
     auto_downgrade: bool = True
     idle_timeout_minutes: int = 15
+    turn_timeout_s: int = Field(default=900, ge=30)  # a hung Claude turn would block every channel (global run lock)
 
 
 class HermesCfg(_Strict):
@@ -104,11 +105,29 @@ class FishAudioCfg(_Strict):
     chunk_length: int = Field(default=100, ge=100, le=300)  # smaller = earlier first audio
 
 
+class LocalTtsCfg(_Strict):
+    """Jarvis voice on this Mac (scripts/local-tts/server.py, Qwen3-TTS cloning the reference clip)."""
+
+    server_url: str = "http://127.0.0.1:8179"
+
+
 class TtsCfg(_Strict):
-    provider: Literal["macos", "fish_audio"] = "macos"
+    provider: Literal["macos", "fish_audio", "local"] = "macos"
     macos_voice: str = "Anna"
     rate: int = 185
     fish_audio: FishAudioCfg = Field(default_factory=FishAudioCfg)
+    local: LocalTtsCfg = Field(default_factory=LocalTtsCfg)
+    cache_max_chars: int = Field(default=80, ge=0)  # short pieces ("Sehr wohl, Sir.") are synthesised once; 0 = off
+
+
+class WakeupCfg(_Strict):
+    """"Jarvis, wach auf": a staged start-up show – sound, optional line and apps brought to the front."""
+
+    sound: str = ""  # path to a custom sound (wav/mp3/aiff/m4a); empty = built-in power-up sound
+    volume: float = Field(default=1.0, ge=0.0, le=1.0)
+    say: str = "Zu Ihren Diensten, Sir. Alle Systeme sind online."  # spoken after the sound ("" = silent)
+    apps: list[str] = Field(default_factory=list)  # app names / bundle ids / https URLs, opened in this order
+    app_delay_s: float = Field(default=0.8, ge=0.0, le=10.0)
 
 
 class VoiceCfg(_Strict):
@@ -118,19 +137,21 @@ class VoiceCfg(_Strict):
     wake_threshold: float = 0.5
     stt: SttCfg = Field(default_factory=SttCfg)
     tts: TtsCfg = Field(default_factory=TtsCfg)
-    end_of_turn_silence_ms: int = 1600  # longest pause before a turn ends (sentence clearly unfinished)
-    min_end_of_turn_silence_ms: int = 650  # pause that ends a turn when the transcript is complete
+    end_of_turn_silence_ms: int = 1100  # longest pause before a turn ends (sentence clearly unfinished)
+    min_end_of_turn_silence_ms: int = 400  # pause that ends a turn when the transcript is complete
     speculative_stt_ms: int = 280  # start transcribing after this much silence (overlaps STT with endpointing)
     vad_min_rms: float = 180
     max_utterance_s: int = 30
     followup_window_s: int = 6
     barge_in: Literal["auto", "voice", "wake_word"] = "auto"  # auto: by voice when echo cancellation is active
+    barge_in_echo_ratio: float = 1.8  # without echo cancellation: how far above Jarvis' own echo peaks Sir must be
     barge_in_ms: int = 320  # speech needed to interrupt Jarvis (voice barge-in)
     native_audio: bool = True  # Swift helper: streaming playback without gaps (falls back to sounddevice/afplay)
     # macOS voice processing (AEC) also suppressed Sir's voice in the room in a measurement on his Mac
     # (room voice 30 vs. silence 20 RMS) → off by default; barge-in then works with "Hey Jarvis".
     echo_cancellation: bool = False
-    conversation_window_s: int = 30  # after a reply Jarvis keeps listening this long – no wake word needed
+    conversation_window_s: int = 15  # after a reply Jarvis keeps listening this long – no wake word needed
+    wakeup: WakeupCfg = Field(default_factory=WakeupCfg)
 
 
 class TwilioCfg(_Strict):
@@ -144,6 +165,7 @@ class TelephonyCfg(_Strict):
     provider: Literal["twilio", "local_test"] = "twilio"
     owner_numbers: list[str] = Field(default_factory=list)
     pin_secret: str = "phone-pin"
+    reject_unknown_callers: bool = False  # True: only numbers in owner_numbers are answered at all
     max_calls_per_hour: int = 10
     twilio: TwilioCfg = Field(default_factory=TwilioCfg)
 
@@ -182,9 +204,13 @@ class BrowserCfg(_Strict):
     # "edge": Sir's installed Microsoft Edge, visible, with its own persistent Jarvis profile (cookies and
     # consents persist like for a normal user → far fewer CAPTCHAs than a fresh headless browser).
     # "chromium": Playwright's bundled browser, isolated context per call (previous behaviour).
-    engine: Literal["edge", "chromium"] = "edge"
+    # "antibrow": antibrow anti-detect browser (free key: `jarvisctl secret set antibrow-api-key`, then
+    # `uv sync --extra antibrow`); falls back to Edge when key/package are missing.
+    engine: Literal["antibrow", "edge", "chromium"] = "antibrow"
+    antibrow_profile: str = "jarvis"
     headless: bool = False  # only used for "chromium"; Edge always runs as a normal window
-    search_engines: list[str] = Field(default_factory=lambda: ["bing", "duckduckgo", "google"])
+    search_engines: list[str] = Field(default_factory=lambda: ["google", "bing", "duckduckgo"])
+    chrome_timeout_s: int = 300
     default_timeout_ms: int = 20000
     max_content_chars: int = 12000
 
@@ -248,6 +274,17 @@ class MobileCfg(_Strict):
     calls: CallPolicyCfg = Field(default_factory=CallPolicyCfg)
 
 
+class BackupCfg(_Strict):
+    enabled: bool = True
+    directory: str = "~/Backups/Jarvis"
+    at: str = "03:30"  # local time (Europe/Berlin); a missed run is caught up as soon as the core is running
+    keep_recent: int = Field(default=14, ge=1)  # newest backups that are always kept
+    keep_weekly: int = Field(default=8, ge=0)  # plus the newest backup of each of the last N weeks
+    encrypt: bool = True  # AES-256-GCM, key in the Keychain (`jarvisctl backup key`)
+    key_secret: str = "backup-key"
+    pg_dump: str = "pg_dump"
+
+
 class Settings(_Strict):
     server: ServerCfg = Field(default_factory=ServerCfg)
     paths: PathsCfg
@@ -263,6 +300,7 @@ class Settings(_Strict):
     browser: BrowserCfg = Field(default_factory=BrowserCfg)
     scheduler: SchedulerCfg = Field(default_factory=SchedulerCfg)
     mobile: MobileCfg = Field(default_factory=MobileCfg)
+    backup: BackupCfg = Field(default_factory=BackupCfg)
 
 
 class Personality(_Strict):

@@ -63,9 +63,24 @@ export function rand01(s: string, salt: number): number {
   return (hash32(`${salt}:${s}`) % 100000) / 100000;
 }
 
+const SYSTEM_ANCHOR: Record<string, [number, number, number]> = {
+  "system:agent": [0, 0, 0],
+  "system:connector": [150, 20, 40],
+  "system:tool": [-40, -110, -120],
+};
+
+/** Layout group of a node: system nodes are split by kind. */
+export function layoutGroup(n: { group: string; kind: string }): string {
+  if (n.group !== "system") return n.group;
+  return n.kind === "tool" ? "system:tool" : n.kind === "connector" ? "system:connector" : "system:agent";
+}
+
 /** Cluster anchors on a Fibonacci sphere; the system cluster (agents, tools) sits at the centre. */
 export function groupAnchor(group: string, radius = 260): [number, number, number] {
   if (group === "system") return [0, 0, 0];
+  // the system region is split by kind so tools, connectors and agents form separate, readable clusters
+  const sys = SYSTEM_ANCHOR[group];
+  if (sys) return sys;
   const known = GROUP_ORDER.indexOf(group as (typeof GROUP_ORDER)[number]);
   const i = known >= 0 ? known : GROUP_ORDER.length + (hash32(group) % 7);
   const n = GROUP_ORDER.length + 6;
@@ -77,7 +92,7 @@ export function groupAnchor(group: string, radius = 260): [number, number, numbe
 
 export function seedPosition(id: string, group: string): [number, number, number] {
   const [ax, ay, az] = groupAnchor(group);
-  const spread = group === "system" ? 90 : 70;
+  const spread = group.startsWith("system") ? 110 : 70;
   return [
     ax + (rand01(id, 1) - 0.5) * spread,
     ay + (rand01(id, 2) - 0.5) * spread,
@@ -145,7 +160,7 @@ export function buildModel(dto: GraphDTO, prev?: GraphModel | null, now = 0): Gr
         positions[n.index * 3 + k] = (positions[anchor * 3 + k] ?? 0) + (rand01(n.id, 10 + k) - 0.5) * 18;
       }
     } else {
-      positions.set(seedPosition(n.id, n.group), n.index * 3);
+      positions.set(seedPosition(n.id, layoutGroup(n)), n.index * 3);
     }
     placed[n.index] = 1;
   }

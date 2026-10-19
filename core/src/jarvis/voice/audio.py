@@ -289,8 +289,17 @@ class BargeInDetector:
     """
 
     def __init__(
-        self, rate: int = 16000, frame_ms: int = 20, need_ms: int = 320, min_rms: float = 450, ratio: float = 3.0
+        self,
+        rate: int = 16000,
+        frame_ms: int = 20,
+        need_ms: int = 320,
+        min_rms: float = 450,
+        ratio: float = 3.0,
+        peak_hold: bool = False,
     ) -> None:
+        # peak_hold: raw microphone without echo cancellation – the floor follows the peaks of Jarvis' own
+        # voice coming out of the speakers, so only something clearly louder (Sir) counts as an interruption.
+        self.peak_hold = peak_hold
         self.frame = int(rate * frame_ms / 1000)
         self.frame_ms = frame_ms
         self.need = max(1, need_ms // frame_ms)
@@ -321,7 +330,7 @@ class BargeInDetector:
                 continue
             speech = level > max(self.min_rms, self.floor * self.ratio)
             if not speech:
-                self.floor = 0.97 * self.floor + 0.03 * level
+                self.floor = max(level, self.floor * 0.995) if self.peak_hold else 0.97 * self.floor + 0.03 * level
             self.hits = [*self.hits[-(self.window - 1) :], speech]
             if sum(self.hits) >= self.need:
                 fired = True

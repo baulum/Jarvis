@@ -212,7 +212,7 @@ export function handleBusEvent(ev: BusEvent): void {
     if (sid) useApp.setState((s) => ({ turnModels: { ...s.turnModels, [sid]: { model: String(d.model), reason: String(d.reason ?? "") } } }));
     return;
   }
-  if (type === "agent.model") {
+  if (type === "agent.model" || type === "agent.usage" || type === "backup.finished") {
     bump("system");
     return;
   }

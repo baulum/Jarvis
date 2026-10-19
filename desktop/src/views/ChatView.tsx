@@ -6,7 +6,7 @@ import { Button, EmptyState, ErrorState, Skeleton } from "../components/ui";
 import { useQuery } from "../hooks/useQuery";
 import { formatMs, formatRelative } from "../lib/format";
 import { emptyThread, threadFromHistory, type ToolChip, type UiMessage } from "../lib/reducers";
-import { ModelSwitcher } from "../components/ModelSwitcher";
+import { ModelPicker } from "../components/ModelPicker";
 import { api, useApp } from "../store/app";
 
 export function ChatView() {
@@ -193,7 +193,7 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
         </div>
       </div>
       <div className="border-t border-seam bg-hull/60 px-8 py-4">
-        <div className="mx-auto mb-2 w-full max-w-[52rem] px-8"><ModelSwitcher sessionId={sessionId} /></div>
+        <div className="mx-auto mb-2 flex w-full max-w-[52rem]"><ModelPicker placement="up" /></div>
         <form
           className="mx-auto flex w-full max-w-[52rem] items-end gap-2"
           onSubmit={(e) => {

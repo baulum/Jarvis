@@ -54,13 +54,13 @@ from jarvis.memory.entities import (
 )
 from jarvis.memory.vault import ENTITY_KINDS, KIND_FOLDERS, LAYERS, Note, Vault
 from jarvis.security.audit import audit
+from jarvis.security.auth import OWNER_ROLES
 
 logger = logging.getLogger(__name__)
 
 DUPLICATE_THRESHOLD = 0.93  # cosine similarity: treat as the same fact
 RELATED_THRESHOLD = 0.82  # same title + this similarity: update the existing note
 RRF_K = 60
-OWNER_ROLES = ("owner", "voice_owner", "telegram_owner", "phone_owner")
 KIND_GROUPS: dict[str, tuple[str, ...]] = {
     "customer": ("customer", "company", "person"),
     "company": ("customer", "company", "person"),
@@ -714,17 +714,20 @@ class MemoryService:
         limit: int = 100,
         offset: int = 0,
         q: str | None = None,
+        include_sensitive: bool = True,
     ) -> dict[str, Any]:
         stmt = select(MemoryItem)
         count = select(func.count()).select_from(MemoryItem)
         conds = []
+        if not include_sensitive:  # non-owner devices: sensitive notes do not exist (titles, previews, search hits)
+            conds.append(MemoryItem.sensitivity != "sensitive")
         if kind:
             conds.append(MemoryItem.kind == kind)
         if status:
             conds.append(MemoryItem.status == status)
         if q:
-            like = f"%{q}%"
-            conds.append(or_(MemoryItem.title.ilike(like), MemoryItem.content.ilike(like)))
+            like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            conds.append(or_(MemoryItem.title.ilike(like, escape="\\"), MemoryItem.content.ilike(like, escape="\\")))
         for c in conds:
             stmt = stmt.where(c)
             count = count.where(c)
@@ -753,20 +756,14 @@ class MemoryService:
             ],
         }
 
-    async def graph_rows(self, limit: int = 2000) -> tuple[list[MemoryItem], list[MemoryLink]]:
+    async def graph_rows(
+        self, limit: int = 2000, include_sensitive: bool = True
+    ) -> tuple[list[MemoryItem], list[MemoryLink]]:
         async with session_scope() as s:
-            items = (
-                (
-                    await s.execute(
-                        select(MemoryItem)
-                        .where(MemoryItem.status == "active")
-                        .order_by(MemoryItem.updated_at.desc())
-                        .limit(limit)
-                    )
-                )
-                .scalars()
-                .all()
-            )
+            q = select(MemoryItem).where(MemoryItem.status == "active")
+            if not include_sensitive:
+                q = q.where(MemoryItem.sensitivity != "sensitive")
+            items = (await s.execute(q.order_by(MemoryItem.updated_at.desc()).limit(limit))).scalars().all()
             links = (await s.execute(select(MemoryLink))).scalars().all()
         return list(items), list(links)
 
@@ -805,9 +802,9 @@ class MemoryService:
                     out.append((a, b, float(row[j])))
         return out
 
-    async def graph(self, limit: int = 400) -> dict[str, Any]:
+    async def graph(self, limit: int = 400, include_sensitive: bool = True) -> dict[str, Any]:
         """Memory-only graph (legacy endpoint); the full live graph is built in ``jarvis.graph``."""
-        items, links = await self.graph_rows(limit)
+        items, links = await self.graph_rows(limit, include_sensitive)
         by_title = {i.title.lower(): i for i in items}
         by_path = {i.path: i for i in items}
         nodes: dict[str, dict[str, Any]] = {

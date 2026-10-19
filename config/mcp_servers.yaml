@@ -20,3 +20,23 @@ servers:
     command: uvx
     args: [mcp-server-time, --local-timezone=Europe/Berlin]
     default_risk: read
+
+  pje_sales_ai:
+    description: PJE Sales AI – Leads, Kampagnen und Freigabe-Warteschlange des Lead-Tools (lokal per pnpm).
+    enabled: true
+    command: /opt/homebrew/bin/pnpm
+    args: [--silent, --dir, "/Users/paul/Documents/PJE Systems/Lead-Tool", --filter, "@pje/mcp", start]
+    env:
+      PATH: /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+      HOME: /Users/paul
+    default_risk: medium
+    risk_overrides:
+      status: read
+      find_industry: read
+      list_campaigns: read
+      get_campaign: read
+      list_leads: read
+      get_lead: read
+      review_queue: read
+      create_campaign: medium
+      request_redraft: medium

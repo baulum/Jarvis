@@ -43,13 +43,11 @@ import websockets
 from jarvis.config import Settings, get_settings
 from jarvis.voice.audio import BargeInDetector, Endpointer, looks_complete, pcm_to_wav, rms
 from jarvis.voice.audio_io import AudioIO, open_audio
+from jarvis.voice.commands import is_end_conversation, is_wake_up
 from jarvis.voice.wakeword import RATE, WakeWordDetector
 
 logger = logging.getLogger("jarvis.voice")
 PLAY_RATE = 24000
-_END_PHRASES = re.compile(
-    r"\b(danke,? das war'?s|das wär'?s|das war alles|stopp|ende|tschüss|thanks,? that'?s all)\b", re.I
-)
 
 
 @dataclass
@@ -64,6 +62,18 @@ class Reply:
     metrics: dict[str, Any] = field(default_factory=dict)
     pieces: list[str] = field(default_factory=list)
     error: str | None = None
+
+
+def power_up(rate: int = PLAY_RATE) -> bytes:
+    """Built-in wake-up sound: a rising, shimmering sweep (used when no custom sound is configured)."""
+    dur = 1.6
+    t = np.arange(int(rate * dur)) / rate
+    freq = 110.0 * (2.0 ** (t / dur * 4.0))  # four octaves up
+    phase = 2 * np.pi * np.cumsum(freq) / rate
+    env = np.minimum(1.0, t / 0.05) * np.minimum(1.0, (dur - t) / 0.5) ** 2
+    sig = 0.5 * np.sin(phase) + 0.25 * np.sin(2 * phase) + 0.12 * np.sin(3.01 * phase)
+    pcm: bytes = (0.3 * env * sig * 32767).astype(np.int16).tobytes()
+    return pcm
 
 
 def earcon(rate: int = PLAY_RATE) -> bytes:
@@ -132,7 +142,7 @@ class VoiceDaemon:
     @property
     def voice_barge_in(self) -> bool:
         mode = self.cfg.barge_in
-        return mode == "voice" or (mode == "auto" and bool(self.audio and self.audio.aec))
+        return mode in ("voice", "auto")  # without echo cancellation the detector tracks the echo level
 
     # ------------------------------------------------------------------ status
     async def set_state(self, state: str, detail: str | None = None) -> None:
@@ -292,7 +302,14 @@ class VoiceDaemon:
         Returns "done", "barge_in" or "error".
         """
         assert self.audio is not None
-        barge = BargeInDetector(RATE, need_ms=self.cfg.barge_in_ms, min_rms=max(450.0, self.cfg.vad_min_rms * 2.5))
+        aec = bool(self.audio.aec)
+        barge = BargeInDetector(
+            RATE,
+            need_ms=self.cfg.barge_in_ms,
+            min_rms=max(450.0, self.cfg.vad_min_rms * 2.5),
+            ratio=3.0 if aec else self.cfg.barge_in_echo_ratio,
+            peak_hold=not aec,
+        )
         self.detector.reset()
         self._interrupt.clear()
         while not self.aec_q.empty():  # frames of the question itself must not count as an interruption
@@ -318,6 +335,8 @@ class VoiceDaemon:
                 frame = self.aec_q.get_nowait()
                 if listen_for_barge_in and self.voice_barge_in and (self.audio.playing or r.first_audio is None):
                     voiced = barge.feed(frame) or voiced
+            if pcm is not None and not aec and listen_for_barge_in and self.voice_barge_in and self.audio.playing:
+                voiced = barge.feed(pcm) or voiced
             if pcm is None and not voiced:
                 continue
             woke = False
@@ -452,9 +471,13 @@ class VoiceDaemon:
             logger.info("Ignored fragment: %r", text)
             return True
         logger.info("Heard: %s", text)
-        if _END_PHRASES.search(text) and len(text) < 40:
+        if is_end_conversation(text):
             await self.say_text("Sehr wohl, Sir.")
+            self.session_id = None  # the next "Hey Jarvis" starts a fresh conversation
             return False
+        if is_wake_up(text):
+            await self.wake_up()
+            return True
         r = Reply(self._next_tag())
         self._prepared = None
         self.reply = r
@@ -465,6 +488,40 @@ class VoiceDaemon:
             self.reply = None
         await self._report(r, marks, text, outcome)
         return outcome in ("done", "barge_in")
+
+    async def wake_up(self) -> None:
+        """"Jarvis, wach auf": custom sound, apps to the front (done by the core), then a line of text."""
+        cfg = self.cfg.wakeup
+        spawn_bg(self._open_wakeup_apps())
+        await self._play_wakeup_sound()
+        if cfg.say.strip():
+            await self.say_text(cfg.say)
+
+    async def _open_wakeup_apps(self) -> None:
+        if not self.cfg.wakeup.apps:
+            return
+        try:
+            await self.http.post("/api/voice/wakeup", timeout=60)
+        except httpx.HTTPError as e:
+            logger.warning("Wake-up apps could not be opened: %s", e)
+
+    async def _play_wakeup_sound(self) -> None:
+        from pathlib import Path
+
+        cfg = self.cfg.wakeup
+        path = Path(cfg.sound).expanduser() if cfg.sound else None
+        if path is not None and path.is_file():
+            proc = await asyncio.create_subprocess_exec(
+                "/usr/bin/afplay", "-v", str(cfg.volume), str(path), stdout=asyncio.subprocess.DEVNULL
+            )
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), 60)
+            return
+        if path is not None:
+            logger.warning("Wake-up sound %s not found – using the built-in sound", path)
+        if self.audio is not None:
+            await self.audio.play(power_up())
+            await self.audio.drained(5)
 
     async def _report(self, r: Reply, marks: dict[str, float], text: str, outcome: str) -> None:
         end = marks.get("speech_end", r.started)

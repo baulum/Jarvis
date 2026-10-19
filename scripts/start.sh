@@ -27,6 +27,10 @@ wait_http() {  # url, seconds
 brew services list | grep -q "postgresql@17.*started" || brew services start postgresql@17 >/dev/null
 
 start_bg whisper whisper-server -m "$DATA/models/ggml-large-v3-turbo-q5_0.bin" --host 127.0.0.1 --port 8178 -l de -t 4 -ac 768 -nf  # -ac/-nf: halbe STT-Latenz (gemessen 1,05 → 0,55 s); lange Äußerungen teilt der Core
+TTS_PY="$DATA/tts-local/.venv/bin/python"   # lokale Jarvis-Stimme (scripts/setup.sh legt sie an)
+if [ -x "$TTS_PY" ] && [ -f "$DATA/voices/jarvis_ref_short.wav" ]; then
+  start_bg tts "$TTS_PY" -I "$ROOT/scripts/local-tts/server.py" --port 8179 --ref "$DATA/voices/jarvis_ref_short"
+fi
 BRIDGE_APP=/Applications/JarvisBridge.app   # installed location (macOS privacy grants are tied to it)
 [ -d "$BRIDGE_APP" ] || BRIDGE_APP="$ROOT/bridge/build/JarvisBridge.app"
 if [ -d "$BRIDGE_APP" ] && ! curl -fsS -o /dev/null http://127.0.0.1:8766/health 2>/dev/null; then

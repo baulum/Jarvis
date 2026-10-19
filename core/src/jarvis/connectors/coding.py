@@ -130,7 +130,7 @@ class CodingConnector(Connector):
             ToolSpec(
                 "coding_start_job",
                 "Übergibt einen Entwicklungsauftrag an Claude Code (eigener Git-Worktree, "
-                "Sandbox). project_path = Pfad des Projekts. Optional test_command, z. B. 'npm run build'.",
+                "Worktree). Auch zum Reparieren eigener Werkzeuge und Anbindungen (z. B. Lead-Tool-MCP, Export, Mailversand) nutzbar. project_path = Pfad des Projekts. Optional test_command, z. B. 'npm run build'.",
                 _obj(
                     {
                         "title": {"type": "string"},

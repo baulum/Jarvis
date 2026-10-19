@@ -404,7 +404,7 @@ class AlertEngine:
             return
         if not d.get("message"):
             return
-        title = "Verpasster Anruf von J.A.R.V.I.S." if d["status"] == "missed" else "J.A.R.V.I.S. wollte Sie sprechen"
+        title = "Verpasster Anruf von Jarvis" if d["status"] == "missed" else "Jarvis wollte Sie sprechen"
         await self.dispatch(
             Alert(
                 "system" if d["status"] == "failed" else "task",

@@ -292,15 +292,18 @@ class GraphBuilder:
             "truncated": {k: v for k, v in truncated.items() if v > 0},
         }
 
-    async def cluster(self, kind: str, offset: int, limit: int = 300) -> dict[str, Any]:
+    async def cluster(
+        self, kind: str, offset: int, limit: int = 300, include_sensitive: bool = True
+    ) -> dict[str, Any]:
         """Lazy loading: further notes of one kind beyond the initial graph (newest first)."""
         async with session_scope() as s:
+            q = select(MemoryItem).where(MemoryItem.status == "active", MemoryItem.kind == kind)
+            if not include_sensitive:
+                q = q.where(MemoryItem.sensitivity != "sensitive")
             rows = (
                 (
                     await s.execute(
-                        select(MemoryItem)
-                        .where(MemoryItem.status == "active", MemoryItem.kind == kind)
-                        .order_by(MemoryItem.updated_at.desc())
+                        q.order_by(MemoryItem.updated_at.desc())
                         .offset(offset)
                         .limit(limit)
                     )

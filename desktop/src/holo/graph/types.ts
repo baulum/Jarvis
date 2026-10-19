@@ -25,7 +25,7 @@ export interface GraphDTO {
   build_ms?: number;
 }
 
-/** The 14 kinds of knowledge the brain shows with their own glyph (plus a neutral "entity"). */
+/** The 16 kinds of knowledge the brain shows with their own glyph (plus a neutral "entity"). */
 export type Category =
   | "memory"
   | "person"
@@ -38,6 +38,7 @@ export type Category =
   | "document"
   | "skill"
   | "tool"
+  | "connector"
   | "agent"
   | "conversation"
   | "decision"
@@ -61,7 +62,7 @@ export const CATEGORY_OF: Record<string, Category> = {
   document: "document",
   skill: "skill",
   tool: "tool",
-  connector: "tool",
+  connector: "connector",
   agent: "agent",
   coding: "agent",
   conversation: "conversation",
@@ -87,6 +88,7 @@ export const CATEGORY_LABEL: Record<Category, string> = {
   document: "Dokumente",
   skill: "Skills",
   tool: "Werkzeuge",
+  connector: "Anbindungen",
   agent: "Agenten",
   conversation: "Gespräche",
   decision: "Entscheidungen",
@@ -121,21 +123,22 @@ export const KIND_LABEL: Record<string, string> = {
   product: "Produkt",
 };
 
-/** Palette: ice blue for knowledge, white for the system itself, amber only for attention. */
+/** One hue per kind of knowledge so the brain can be read at a glance; white is J.A.R.V.I.S. itself. */
 export const CATEGORY_COLOR: Record<Category, [number, number, number]> = {
-  memory: [0.55, 0.82, 0.9],
-  person: [0.78, 0.9, 0.96],
-  customer: [0.42, 0.83, 0.9],
-  project: [0.6, 0.88, 0.82],
-  company: [0.5, 0.74, 0.88],
-  email: [0.66, 0.78, 0.86],
-  appointment: [0.7, 0.84, 0.92],
-  task: [0.72, 0.86, 0.8],
-  document: [0.6, 0.72, 0.8],
-  skill: [0.52, 0.64, 0.74],
-  tool: [0.62, 0.7, 0.78],
-  agent: [0.92, 0.97, 1.0],
-  conversation: [0.56, 0.7, 0.8],
-  decision: [0.8, 0.88, 0.98],
-  entity: [0.38, 0.48, 0.56],
+  memory: [0.57, 0.77, 0.87],
+  person: [0.91, 0.65, 0.78],
+  customer: [0.96, 0.68, 0.28],
+  project: [0.33, 0.83, 0.54],
+  company: [0.64, 0.57, 0.87],
+  email: [0.35, 0.80, 0.89],
+  appointment: [0.94, 0.89, 0.30],
+  task: [0.56, 0.84, 0.36],
+  document: [0.55, 0.67, 0.85],
+  skill: [0.77, 0.50, 0.90],
+  tool: [0.98, 0.45, 0.22],
+  connector: [0.12, 0.88, 0.69],
+  agent: [1.00, 1.00, 1.00],
+  conversation: [0.84, 0.52, 0.79],
+  decision: [0.98, 0.84, 0.41],
+  entity: [0.43, 0.50, 0.57],
 };

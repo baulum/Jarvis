@@ -19,7 +19,8 @@ from typing import Any
 
 _REDACT = re.compile(
     r"(?i)(bearer\s+[a-z0-9._\-]{12,}|sk-[a-z0-9]{12,}|ghp_[a-z0-9]{20,}|xox[abp]-[a-z0-9-]{10,}"
-    r"|\b\d{8,10}:[A-Za-z0-9_-]{30,}\b)"
+    r"|\b\d{8,10}:[A-Za-z0-9_-]{30,}\b"
+    r"|\bj(?:dv|at|rt)_[A-Za-z0-9._-]{20,}|AIza[0-9A-Za-z_-]{30,}|\bAC[0-9a-f]{32}\b)"
 )
 
 

@@ -66,7 +66,7 @@ export function createLayout(
       ay,
       az,
       // well-connected notes may drift towards their neighbours, loose ones stay home
-      k: n.group === "system" ? 1.4 : 1 / (1 + n.degree * 0.15),
+      k: n.group.startsWith("system") ? 1.4 : 1 / (1 + n.degree * 0.15),
     };
     if (n.pinned) {
       node.fx = node.x;
@@ -89,7 +89,7 @@ export function createLayout(
     .force(
       "charge",
       forceManyBody<N>()
-        .strength((n) => (n.id === "agent:jarvis" ? -600 : n.id.startsWith("tool:") ? -14 : -60))
+        .strength((n) => (n.id === "agent:jarvis" ? -600 : n.id.startsWith("tool:") ? -30 : -60))
         .theta(0.9)
         .distanceMax(420),
     )

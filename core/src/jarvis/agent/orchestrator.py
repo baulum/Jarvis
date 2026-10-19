@@ -28,7 +28,7 @@ from jarvis.db import session_scope
 from jarvis.db.models import ChatMessage, ChatSession
 from jarvis.events import activity, bus, spawn
 from jarvis.security.audit import audit
-from jarvis.security.auth import Principal
+from jarvis.security.auth import OWNER_ROLES, Principal
 
 if TYPE_CHECKING:
     from jarvis.app_state import AppState
@@ -210,13 +210,15 @@ class Orchestrator:
             model=result.model,
             timings=timings,
         )
-        if (
-            result.text
-            and not result.error
-            and principal.role in ("owner", "voice_owner", "telegram_owner", "phone_owner")
-        ):
+        if result.text and not result.error and principal.role in OWNER_ROLES and not await self._is_tainted(sess.id):
+            # a session that read untrusted content (web/mail) must not write "facts" into the long-term memory
             spawn(self._queue_extraction(sess.id, channel, text, result.text, user_msg_id), name="memory-extract")
         return result
+
+    async def _is_tainted(self, session_id: uuid.UUID) -> bool:
+        async with session_scope() as s:
+            row = await s.get(ChatSession, session_id)
+            return bool(row is not None and row.tainted)
 
     async def _queue_extraction(
         self, session_id: uuid.UUID, channel: str, text: str, reply: str, user_msg_id: uuid.UUID
@@ -327,11 +329,18 @@ class Orchestrator:
         if cmd is not None:
             if cmd.scope == "turn":
                 turn_model = cmd.model
-            elif principal.role in ("owner", "voice_owner", "telegram_owner", "phone_owner"):
+            elif principal.role in OWNER_ROLES:
                 router.set(cmd.model, cmd.scope, str(sess.id))
                 await audit(principal.label, "agent.model", details={"model": cmd.model, "scope": cmd.scope})
                 status: dict[str, Any] = router.status(str(sess.id))
                 await bus.publish("agent.model", **status)
+            else:  # never confirm a switch that did not happen
+                return (
+                    "sonnet",
+                    "Befehl abgelehnt",
+                    "Das Modell darf ich auf diesem Kanal nicht umschalten, Sir.",
+                    text,
+                )
             if not cmd.remainder:
                 label = MODELS[cmd.model]["label"] if cmd.model else "automatische Modellwahl"
                 where = {
@@ -360,6 +369,10 @@ class Orchestrator:
         tools: list[dict[str, Any]] = []
         chunks: list[str] = []
         final_text = ""
+        if self._run_lock.locked() and sess.channel in ("voice", "phone"):
+            # another channel's turn is running: say so instead of leaving Sir in silence
+            busy = "Einen Moment, Sir, ich bin noch mit einer anderen Aufgabe beschäftigt. "
+            await emit(AgentEvent("delta", text=busy))
         async with self._run_lock:
             if sess.id in self._cancel_pending:  # interrupted while waiting for its turn
                 self._cancel_pending.discard(sess.id)

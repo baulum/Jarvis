@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{
     image::Image,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
     AppHandle, Emitter, Manager, RunEvent, WindowEvent,
 };
@@ -51,10 +51,18 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let ptt = MenuItem::with_id(app, "ptt", "Push-to-Talk starten", true, None::<&str>)?;
     let kill = MenuItem::with_id(app, "killswitch", "Not-Aus", true, None::<&str>)?;
     let restart = MenuItem::with_id(app, "restart", "Dienste neu starten", true, None::<&str>)?;
+    let stop_on_quit = CheckMenuItem::with_id(
+        app,
+        "stop_on_quit",
+        "Dienste beim Beenden stoppen",
+        true,
+        launcher::stop_on_quit(),
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Beenden", true, Some("CmdOrCtrl+Q"))?;
     let sep_a = PredefinedMenuItem::separator(app)?;
     let sep_b = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&open, &ptt, &sep_a, &kill, &restart, &sep_b, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &ptt, &sep_a, &kill, &restart, &stop_on_quit, &sep_b, &quit])?;
 
     let ptt_item = ptt.clone();
     TrayIconBuilder::with_id("jarvis-tray")
@@ -97,6 +105,11 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                     launcher::stop_services();
                     launcher::start_services(&handle);
                 });
+            }
+            "stop_on_quit" => {
+                // the check mark already toggled; persist what it now shows
+                let stop = stop_on_quit.is_checked().unwrap_or(true);
+                launcher::set_stop_on_quit(stop);
             }
             "quit" => app.exit(0),
             _ => {}
@@ -166,7 +179,9 @@ pub fn run() {
     app.run(|handle, event| {
         // Quitting J.A.R.V.I.S. stops its services too (PostgreSQL keeps running).
         if let RunEvent::Exit = event {
-            launcher::stop_services();
+            if launcher::stop_on_quit() {
+                launcher::stop_services();
+            }
         }
         #[cfg(target_os = "macos")]
         if let RunEvent::Reopen { .. } = event {

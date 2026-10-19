@@ -40,6 +40,9 @@ MOBILE_ROUTES: list[tuple[frozenset[str], re.Pattern[str]]] = [
     (frozenset({"GET"}), re.compile(r"^/api/tasks(/[0-9a-f-]{36})?$")),
     (frozenset({"POST"}), re.compile(r"^/api/tasks/[0-9a-f-]{36}/(input|cancel|retry)$")),
     (frozenset({"GET"}), re.compile(r"^/api/approvals(/mode)?$")),  # deciding goes through /api/mobile (signed)
+    (frozenset({"GET", "POST"}), re.compile(r"^/api/agent/model$")),  # model picker in the app
+    (frozenset({"GET"}), re.compile(r"^/api/agent/usage$")),  # Claude quota display
+    (frozenset({"POST"}), re.compile(r"^/api/agent/usage/refresh$")),
     (frozenset({"GET"}), re.compile(r"^/api/notifications$")),
     (frozenset({"POST"}), re.compile(r"^/api/notifications/read$")),
     (frozenset({"GET"}), re.compile(r"^/api/graph(/cluster/[a-z_]+)?$")),
@@ -107,7 +110,7 @@ def advertised_urls(settings: Settings) -> list[str]:
     g = settings.mobile.gateway
     if g.advertise_urls:
         return list(g.advertise_urls)
-    scheme = "http" if g.tls == "none" else "https"
+    scheme = "https"
     hosts = local_addresses()
     with contextlib.suppress(OSError):
         name = socket.gethostname()
@@ -184,9 +187,11 @@ class GatewayServer:
         if g.tls == "self_signed":
             self.cert.ensure()
             kw = {"ssl_certfile": str(self.cert.cert_path), "ssl_keyfile": str(self.cert.key_path)}
+        # tls "external": a reverse proxy / Tailscale serve terminates TLS → plain HTTP must stay on loopback
+        host = g.host if g.tls == "self_signed" else "127.0.0.1"
         config = uvicorn.Config(
             app,
-            host=g.host,
+            host=host,
             port=g.port,
             log_level="warning",
             access_log=False,

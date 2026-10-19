@@ -21,11 +21,12 @@ async def current_principal(request: Request) -> Principal:
     auth = request.headers.get("authorization", "")
     token = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else None
     client = request.client.host if request.client else "?"
-    if not rate_limiter.check(f"api:{client}", 600, 60):
+    rl = get_state(request).permissions.rate_limits
+    if not rate_limiter.check(f"api:{client}", rl.api_requests_per_minute, 60):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "rate limit")
     principal = await authenticate_token(token)
     if principal is None:
-        if not rate_limiter.check(f"authfail:{client}", 30, 3600):
+        if not rate_limiter.check(f"authfail:{client}", max(rl.login_attempts_per_hour * 3, 10), 3600):
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many failed logins")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "unauthorized", headers={"WWW-Authenticate": "Bearer"})
     state = get_state(request)

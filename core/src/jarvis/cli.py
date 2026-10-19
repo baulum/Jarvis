@@ -276,6 +276,38 @@ def cmd_doctor(_: argparse.Namespace) -> None:
         check(f"wake model {f}", (s.paths.data_dir / "models" / f).exists())
     emb_cache = s.paths.data_dir / "models" / "fastembed"
     check("embedding model (memory)", any(emb_cache.glob("**/*.onnx")), "lädt beim ersten Start des Core (~1,1 GB)")
+    # --- security hygiene
+    for name in ("desktop.token", "voice.token", "bridge.token", "agent-mcp.json"):
+        tf = s.paths.data_dir / name
+        if tf.exists():
+            mode = tf.stat().st_mode & 0o777
+            check(f"permissions {name}", mode & 0o077 == 0, f"chmod 600 '{tf}' (aktuell {mode:o})")
+    check("data dir private", s.paths.data_dir.stat().st_mode & 0o077 == 0, f"chmod 700 '{s.paths.data_dir}'")
+    root = Path(__file__).resolve().parents[4]
+    tracked = subprocess.run(
+        ["git", "-C", str(root), "ls-files", ".env", ".env.local", "*.pem", "*.key", "*.token"],
+        capture_output=True, text=True, check=False,
+    ).stdout.split()  # fmt: skip
+    check("keine Secrets im Git", not tracked, f"getrackt: {', '.join(tracked)} → git rm --cached")
+    # --- backups & quota
+    from jarvis.backup.service import BackupService
+
+    bk = BackupService(s)
+    if s.backup.enabled:
+        st = bk.status()
+        check(
+            "Sicherung vorhanden und aktuell (<36 h)", st["recent_enough"], f"jarvisctl backup run  ({st['directory']})"
+        )
+        if s.backup.encrypt:
+            check(
+                "Backup-Schlüssel im Schlüsselbund",
+                secret_store.exists(s.backup.key_secret),
+                "wird beim 1. Backup angelegt",
+            )
+    from jarvis.agent.usage import UsageTracker
+
+    pressure = UsageTracker(s.paths.data_dir / "agent-usage.json").pressure()
+    check("Claude-Kontingent unter 90 %", pressure < 0.9, f"aktuell {round(pressure * 100)} %")
     for name, ok, detail in checks:
         print(f"{'✓' if ok else '✗'} {name}{'' if ok else f'  → {detail}'}")
     sys.exit(0 if all(ok for _, ok, _ in checks) else 1)
@@ -285,6 +317,37 @@ def cmd_voice(_: argparse.Namespace) -> None:
     from jarvis.voice.daemon import main as voice_main
 
     voice_main()
+
+
+def cmd_backup(a: argparse.Namespace) -> None:
+    import asyncio
+    from pathlib import Path
+
+    from jarvis.backup.service import BackupService, restore_archive
+    from jarvis.config import get_settings
+    from jarvis.secrets import secret_store
+
+    settings = get_settings()
+    if a.action == "key":
+        print(secret_store.ensure_random(settings.backup.key_secret, 32))
+        print("\nDiesen Schlüssel in einem Passwortmanager ablegen – ohne ihn sind verschlüsselte Sicherungen wertlos.")
+        return
+    if a.action == "restore":
+        if not a.file:
+            sys.exit("Sicherungsdatei angeben: jarvisctl backup restore <Datei> [--to Ordner]")
+        import hashlib
+
+        key = hashlib.sha256((a.key or secret_store.require(settings.backup.key_secret)).encode()).digest()
+        target = restore_archive(Path(a.file).expanduser(), Path(a.to).expanduser(), key)
+        print(f"Entpackt nach {target}")
+        print(f"Datenbank zurückspielen:\n  pg_restore --clean --if-exists -d jarvis {target}/database.dump")
+        return
+    svc = BackupService(settings)
+    if a.action == "list":
+        for f in svc.list():
+            print(f"{f['modified']}  {f['size'] / 1e6:8.1f} MB  {f['file']}")
+        return
+    print(asyncio.run(svc.run("cli")))
 
 
 def cmd_serve(_: argparse.Namespace) -> None:
@@ -319,6 +382,12 @@ def main() -> None:
     mp.add_argument("--svg", help="QR-Code zusätzlich als SVG-Datei speichern")
     mp.set_defaults(fn=cmd_mobile_pair)
     sub.add_parser("mobile-status", help="Mobile-Status").set_defaults(fn=cmd_mobile_status)
+    bk = sub.add_parser("backup", help="Sicherungen: run | list | key | restore")
+    bk.add_argument("action", choices=["run", "list", "key", "restore"])
+    bk.add_argument("file", nargs="?")
+    bk.add_argument("--to", default="~/jarvis-restore")
+    bk.add_argument("--key", help="Schlüssel (sonst aus dem Schlüsselbund)")
+    bk.set_defaults(fn=cmd_backup)
     sub.add_parser("status", help="Systemstatus").set_defaults(fn=cmd_status)
     sub.add_parser("doctor", help="Installation prüfen").set_defaults(fn=cmd_doctor)
     k = sub.add_parser("killswitch", help="Not-Aus")

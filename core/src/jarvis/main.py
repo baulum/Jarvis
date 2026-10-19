@@ -51,8 +51,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async with mcp_manager.run():
             try:
                 await upgrade_to_head()
-            except Exception:
+            except Exception as e:
                 logger.exception("Database migration failed")
+                state.degraded = f"Datenbank-Migration fehlgeschlagen: {type(e).__name__}"
             await state.start()
             if settings.mobile.enabled and settings.mobile.gateway.enabled:
                 await state.gateway.start(app)

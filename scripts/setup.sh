@@ -51,6 +51,11 @@ for f in melspectrogram.onnx embedding_model.onnx hey_jarvis_v0.1.onnx; do
   [ -f "$MODELS/$f" ] || curl -fL -o "$MODELS/$f" "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/$f"
 done
 
+step "Lokale Jarvis-Stimme (MLX, ~2 GB Modell beim ersten Start)"
+[ -x "$DATA/tts-local/.venv/bin/python" ] || uv venv --python 3.12 "$DATA/tts-local/.venv"
+uv pip install --python "$DATA/tts-local/.venv/bin/python" -q -r "$ROOT/scripts/local-tts/requirements.txt"
+[ -f "$DATA/voices/jarvis_ref_short.wav" ] || echo "ℹ Referenz-Clip fehlt: $DATA/voices/jarvis_ref_short.wav + .txt (6 s Jarvis-Stimme + Transkript)"
+
 step "Claude Code (Agent-Gehirn)"
 env -u ANTHROPIC_API_KEY claude auth status | grep -q '"loggedIn": true' || echo "⚠ Claude Code nicht angemeldet: im Terminal 'claude' starten und /login ausführen"
 

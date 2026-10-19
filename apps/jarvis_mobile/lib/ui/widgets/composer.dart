@@ -13,14 +13,16 @@ import '../../core/api.dart';
 import '../../core/theme.dart';
 import '../../state/providers.dart';
 import 'hud.dart';
+import 'model_picker.dart';
 
 /// Floating input: text, hold-to-dictate (Whisper on the Mac), and the call button – always one tap away.
 class Composer extends ConsumerStatefulWidget {
-  const Composer({super.key, required this.onSend, this.busy = false, this.onStop, this.autofocus = false});
+  const Composer({super.key, required this.onSend, this.busy = false, this.onStop, this.autofocus = false, this.sessionId});
   final ValueChanged<String> onSend;
   final bool busy;
   final VoidCallback? onStop;
   final bool autofocus;
+  final String? sessionId;
   @override
   ConsumerState<Composer> createState() => _ComposerState();
 }
@@ -120,20 +122,21 @@ class _ComposerState extends ConsumerState<Composer> {
           child: AnimatedContainer(
             duration: J.base,
             constraints: const BoxConstraints(minHeight: 52),
-            padding: const EdgeInsets.only(left: J.s4, right: J.s1),
+            padding: const EdgeInsets.fromLTRB(J.s4, J.s3, J.s2, J.s2),
             decoration: BoxDecoration(
               color: J.panel.withValues(alpha: 0.92),
               borderRadius: BorderRadius.circular(26),
               border: Border.all(color: _recording ? J.cyan : J.lineBright),
               boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.6), blurRadius: 30, offset: const Offset(0, 10))],
             ),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-              Expanded(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Padding(
+                padding: const EdgeInsets.only(right: J.s2),
                 child: TextField(
                   controller: _text,
                   autofocus: widget.autofocus,
                   minLines: 1,
-                  maxLines: 5,
+                  maxLines: 6,
                   enabled: !offline,
                   style: J.body,
                   textInputAction: TextInputAction.send,
@@ -153,25 +156,30 @@ class _ComposerState extends ConsumerState<Composer> {
                   ),
                 ),
               ),
-              if (widget.busy && widget.onStop != null)
-                _IconTap(icon: Icons.stop_rounded, label: 'Antwort abbrechen', onTap: widget.onStop)
-              else if (_text.text.trim().isNotEmpty)
-                _IconTap(icon: Icons.arrow_upward_rounded, label: 'Senden', onTap: _send, color: J.cyan)
-              else
-                GestureDetector(
-                  onLongPressStart: offline ? null : (_) => _startDictation(),
-                  onLongPressEnd: (_) => _stopDictation(),
-                  onTap: offline ? null : () => setState(() => _hint = 'Zum Diktieren gedrückt halten'),
-                  child: Semantics(
-                    button: true,
-                    label: 'Diktieren (gedrückt halten)',
-                    child: SizedBox.square(
-                      dimension: J.hit,
-                      child: Icon(_recording ? Icons.graphic_eq_rounded : Icons.mic_none_rounded,
-                          color: _recording ? J.cyan : J.text2, size: 22),
+              const SizedBox(height: J.s2),
+              Row(children: [
+                ModelEffortPill(sessionId: widget.sessionId),
+                const Spacer(),
+                if (widget.busy && widget.onStop != null)
+                  _IconTap(icon: Icons.stop_rounded, label: 'Antwort abbrechen', onTap: widget.onStop)
+                else if (_text.text.trim().isNotEmpty)
+                  _IconTap(icon: Icons.arrow_upward_rounded, label: 'Senden', onTap: _send, color: J.cyan)
+                else
+                  GestureDetector(
+                    onLongPressStart: offline ? null : (_) => _startDictation(),
+                    onLongPressEnd: (_) => _stopDictation(),
+                    onTap: offline ? null : () => setState(() => _hint = 'Zum Diktieren gedrückt halten'),
+                    child: Semantics(
+                      button: true,
+                      label: 'Diktieren (gedrückt halten)',
+                      child: SizedBox.square(
+                        dimension: J.hit,
+                        child: Icon(_recording ? Icons.graphic_eq_rounded : Icons.mic_none_rounded,
+                            color: _recording ? J.cyan : J.text2, size: 22),
+                      ),
                     ),
                   ),
-                ),
+              ]),
             ]),
           ),
         ),

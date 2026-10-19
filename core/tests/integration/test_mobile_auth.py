@@ -61,6 +61,23 @@ async def _pair(svc: PairingService, code: str, key: ec.EllipticCurvePrivateKey,
     )
 
 
+async def _age_refresh_use(token: str) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import update
+
+    from jarvis.db import session_scope
+    from jarvis.db.models import MobileRefreshToken
+    from jarvis.mobile.tokens import sha256_hex
+
+    async with session_scope() as s:
+        await s.execute(
+            update(MobileRefreshToken)
+            .where(MobileRefreshToken.token_hash == sha256_hex(token))
+            .values(used_at=datetime.now(UTC) - timedelta(minutes=5))
+        )
+
+
 async def test_pair_refresh_rotation_and_reuse_detection(fake_secrets: MemorySecrets) -> None:
     svc = PairingService()
     code, _ = svc.create("device:desktop")
@@ -76,7 +93,11 @@ async def test_pair_refresh_rotation_and_reuse_detection(fake_secrets: MemorySec
 
     _, second, _ = await rotate_refresh(res["refresh_token"], dev, 30)
     _, third, _ = await rotate_refresh(second, dev, 30)
-    with pytest.raises(RefreshError, match="reuse"):  # stolen old token used again
+    # a retry right after (lost response on a flaky mobile network) is tolerated, not treated as theft
+    _, retry, _ = await rotate_refresh(second, dev, 30)
+    assert retry != third
+    await _age_refresh_use(second)
+    with pytest.raises(RefreshError, match="reuse"):  # old token used again after the grace window = theft
         await rotate_refresh(second, dev, 30)
     with pytest.raises(RefreshError):  # … which revoked the whole family, including the newest token
         await rotate_refresh(third, dev, 30)

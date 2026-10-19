@@ -37,6 +37,7 @@ TOKEN_KEY_SECRET = "mobile-token-key"  # noqa: S105 - Keychain account name
 ACCESS_PREFIX = "jat_"
 REFRESH_PREFIX = "jrt_"
 SIGNATURE_MAX_SKEW_S = 120
+REFRESH_GRACE_S = 30  # a retry of a refresh whose response got lost (mobile network) must not kill the session
 
 
 def _b64(data: bytes) -> str:
@@ -189,7 +190,7 @@ async def rotate_refresh(token: str, device_id: uuid.UUID, ttl_days: int) -> tup
         ).scalar_one_or_none()
         if row is None or row.device_id != device_id:
             raise RefreshError("invalid refresh token")
-        if row.used_at is not None or row.revoked:
+        if row.revoked or (row.used_at is not None and (now - row.used_at).total_seconds() > REFRESH_GRACE_S):
             reused_family = row.family
         else:
             reused_family = None
@@ -205,14 +206,14 @@ async def rotate_refresh(token: str, device_id: uuid.UUID, ttl_days: int) -> tup
                 select(MobileRefreshToken).where(MobileRefreshToken.token_hash == sha256_hex(token)).with_for_update()
             )
         ).scalar_one()
-        if row.used_at is not None or row.revoked:  # lost a race against a parallel refresh
-            raise RefreshError("refresh token already used")
+        if row.revoked:
+            raise RefreshError("refresh token revoked")
         if row.expires_at < now:
             raise RefreshError("refresh token expired")
         device = await s.get(Device, device_id)
         if device is None or device.revoked:
             raise RefreshError("device revoked")
-        row.used_at = now
+        row.used_at = row.used_at or now
         family = row.family
         new = REFRESH_PREFIX + secrets.token_urlsafe(32)
         s.add(

@@ -5,15 +5,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from jarvis.db import session_scope
-from jarvis.db.models import Schedule
+from jarvis.db.models import Approval, Schedule
 from jarvis.events import bus, spawn
 from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
@@ -30,6 +30,17 @@ def next_run(cron: str, tz: str, after: datetime | None = None) -> datetime:
     base = (after or datetime.now(UTC)).astimezone(ZoneInfo(tz))
     nxt: datetime = croniter(cron, base).get_next(datetime)
     return nxt.astimezone(UTC)
+
+
+MIN_INTERVAL_S = 300  # a prompt every minute would burn the quota (and is what a prompt injection would try)
+
+
+def check_min_interval(cron: str, tz: str = "Europe/Berlin") -> None:
+    base = datetime.now(ZoneInfo(tz))
+    it = croniter(cron, base)
+    first, second, third = (it.get_next(datetime) for _ in range(3))
+    if min((second - first).total_seconds(), (third - second).total_seconds()) < MIN_INTERVAL_S:
+        raise ValueError(f"Zeitpläne dürfen höchstens alle {MIN_INTERVAL_S // 60} Minuten laufen")
 
 
 class Scheduler:
@@ -50,6 +61,7 @@ class Scheduler:
     ) -> Schedule:
         if not croniter.is_valid(cron):
             raise ValueError("Ungültiger Cron-Ausdruck")
+        check_min_interval(cron, tz)
         if action.get("type") not in ("prompt", "tool", "playbook"):
             raise ValueError("action.type muss prompt, tool oder playbook sein")
         async with session_scope() as s:
@@ -96,10 +108,24 @@ class Scheduler:
             action, name = dict(sched.action), sched.name
         await self._execute(sid, name, action)
 
+    async def _sweep_approvals(self) -> None:
+        """Expire pending approvals past their TTL and fail ones that were approved but never finished (crash)."""
+        now = datetime.now(UTC)
+        async with session_scope() as s:
+            await s.execute(
+                update(Approval).where(Approval.status == "pending", Approval.expires_at < now).values(status="expired")
+            )
+            await s.execute(
+                update(Approval)
+                .where(Approval.status == "approved", Approval.decided_at < now - timedelta(minutes=10))
+                .values(status="failed", result={"status": "error", "message": "Ausführung unterbrochen"})
+            )
+
     async def _loop(self) -> None:
         tick = self.state.settings.scheduler.tick_seconds
         while True:
             try:
+                await self._sweep_approvals()
                 if not self.state.kill_switch.engaged:
                     now = datetime.now(UTC)
                     async with session_scope() as s:

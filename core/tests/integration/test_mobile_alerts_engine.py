@@ -80,7 +80,7 @@ async def test_missed_call_follow_up_never_rings(tmp_path: Path) -> None:
     eng.policy.update({"categories": {"task": {"mode": "call"}}})
     await eng._on_call_ended(Event("call.ended", {"call_id": "c1", "status": "missed", "direction": "to_owner", "message": "Die Website ist fertig."}))
     assert not calls.rang
-    assert push.sent and push.sent[0][1]["title"] == "Verpasster Anruf von J.A.R.V.I.S."
+    assert push.sent and push.sent[0][1]["title"] == "Verpasster Anruf von Jarvis"
 
 
 async def test_snooze_brings_it_back(tmp_path: Path) -> None:

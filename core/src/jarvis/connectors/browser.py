@@ -66,20 +66,34 @@ def check_public_url(url: str) -> str:
     except socket.gaierror as e:
         raise ToolUserError(f"Host nicht auflösbar: {parsed.hostname}") from e
     for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+        if _ip_blocked(ipaddress.ip_address(info[4][0])):
             raise ToolUserError("Zugriff auf interne Netzwerkadressen ist gesperrt")
     return url
 
 
+def _ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Everything that is not a public internet address: private, loopback, link-local, CGNAT/Tailscale (100.64/10)…"""
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return not ip.is_global or ip.is_multicast
+
+
 class BrowserService:
     def __init__(
-        self, headless: bool, timeout_ms: int, *, engine: str = "chromium", profile_dir: Path | None = None
+        self,
+        headless: bool,
+        timeout_ms: int,
+        *,
+        engine: str = "chromium",
+        profile_dir: Path | None = None,
+        antibrow_profile: str = "jarvis",
     ) -> None:
         self.headless = headless
         self.timeout_ms = timeout_ms
         self.engine = engine
         self.profile_dir = profile_dir
+        self.antibrow_profile = antibrow_profile
+        self._antibrow: Any = None
         self.active_engine = engine
         self._pw: Playwright | None = None
         self._browser: Browser | None = None
@@ -91,7 +105,7 @@ class BrowserService:
     async def _guard_context(self, context: BrowserContext) -> None:
         async def guard(route: Any) -> None:  # block requests to private networks from inside pages
             host = urllib.parse.urlparse(route.request.url).hostname or ""
-            if host in ("localhost",) or host.endswith(".local") or _is_private_literal(host):
+            if await host_blocked(host):
                 await route.abort()
             else:
                 await route.continue_()
@@ -134,8 +148,41 @@ class BrowserService:
             args=["--no-first-run", "--no-default-browser-check", "--window-size=1280,860"],
         )
 
+    async def _antibrow_ctx(self) -> BrowserContext:
+        """antibrow anti-detect browser (persistent local profile, Playwright context over CDP)."""
+        if self._antibrow is not None:
+            try:
+                ctx: BrowserContext = self._antibrow.context
+                _ = ctx.pages
+                return ctx
+            except Exception:
+                self._antibrow = None
+        from jarvis.secrets import secret_store
+
+        try:
+            from antibrow import launch_async
+        except ImportError as e:
+            raise RuntimeError("Paket 'antibrow' fehlt (uv sync --extra antibrow)") from e
+        key = secret_store.get("antibrow-api-key")
+        if not key:
+            raise RuntimeError("Secret 'antibrow-api-key' fehlt (jarvisctl secret set antibrow-api-key)")
+        handle = await launch_async(profile=self.antibrow_profile, api_key=key)
+        handle.context.set_default_timeout(self.timeout_ms)
+        new_ctx: BrowserContext = handle.context
+        await self._guard_context(new_ctx)
+        self._antibrow = handle
+        return new_ctx
+
     async def _ensure(self) -> Browser | BrowserContext:
         async with self._lock:
+            if self.engine == "antibrow":
+                try:
+                    ctx = await self._antibrow_ctx()
+                    self.active_engine = "antibrow"
+                    return ctx
+                except Exception as e:
+                    logger.warning("antibrow not usable (%s); falling back to Edge", e)
+                    self.engine = "edge"
             if self.engine == "edge":
                 try:
                     ctx = await self._edge()
@@ -150,6 +197,10 @@ class BrowserService:
             return self._browser
 
     async def close(self) -> None:
+        if self._antibrow is not None:
+            with contextlib.suppress(Exception):
+                await self._antibrow.close()
+            self._antibrow = None
         for closer in (self._ctx, self._browser):
             if closer is not None:
                 with contextlib.suppress(Exception):
@@ -210,7 +261,30 @@ def _is_private_literal(host: str) -> bool:
         ip = ipaddress.ip_address(host.strip("[]"))
     except ValueError:
         return False
-    return ip.is_private or ip.is_loopback or ip.is_link_local
+    return _ip_blocked(ip)
+
+
+_HOST_CACHE: dict[str, tuple[float, bool]] = {}
+
+
+async def host_blocked(host: str) -> bool:
+    """Page sub-requests: literal private IPs, local names – and names that *resolve* to a non-public address
+    (``127.0.0.1.nip.io``, DNS rebinding). Results are cached for a minute."""
+    if host in ("localhost", "") or host.endswith((".local", ".localhost", ".internal")) or _is_private_literal(host):
+        return True
+    now = time.monotonic()
+    hit = _HOST_CACHE.get(host)
+    if hit and now - hit[0] < 60:
+        return hit[1]
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(host, None)
+        blocked = any(_ip_blocked(ipaddress.ip_address(i[4][0])) for i in infos)
+    except (OSError, ValueError):
+        blocked = False  # unresolvable: the browser will fail on its own
+    if len(_HOST_CACHE) > 2000:
+        _HOST_CACHE.clear()
+    _HOST_CACHE[host] = (now, blocked)
+    return blocked
 
 
 class BrowserConnector(Connector):
@@ -233,6 +307,12 @@ class BrowserConnector(Connector):
         return self.state.browser
 
     async def health(self) -> Health:
+        if self.svc.engine == "antibrow":
+            from jarvis.secrets import secret_store
+
+            if secret_store.get("antibrow-api-key"):
+                return Health("ok", "antibrow bereit")
+            return Health("error", "antibrow-api-key fehlt – Fallback Edge aktiv")
         if self.svc.engine == "edge" and Path("/Applications/Microsoft Edge.app").exists():
             # do not open a window just for a health check
             return Health("ok", "Microsoft Edge (eigenes Jarvis-Profil) bereit")
@@ -369,6 +449,10 @@ class BrowserConnector(Connector):
                 path.write_text(buf.getvalue(), encoding="utf-8")
             return {"path": str(path), "rows": len(rows)}
 
+        async def chrome_task(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            out = await self.state.oneshot.chrome(a["task"], timeout_s=cfg.chrome_timeout_s)
+            return wrap_untrusted(out or "(keine Ausgabe)", "claude-in-chrome", cfg.max_content_chars)
+
         S = "browser"
         return [
             ToolSpec(
@@ -387,6 +471,20 @@ class BrowserConnector(Connector):
                 S,
                 untrusted_output=True,
                 timeout_s=60,
+            ),
+            ToolSpec(
+                "chrome_task",
+                "Delegiert eine Browser-Aufgabe an Claude in Chrome (Sirs echter Chrome mit seinen Logins): "
+                "klicken, Formulare, eingeloggte Seiten, Dinge, die der normale Browser nicht kann. "
+                "Aufgabe als vollständigen Satz beschreiben; Ergebnis kommt als Text zurück.",
+                _obj({"task": {"type": "string", "minLength": 5}}, ["task"]),
+                chrome_task,
+                "high",
+                S,
+                writes=True,
+                untrusted_output=True,
+                timeout_s=cfg.chrome_timeout_s + 30,
+                summarize=lambda a: f"Claude in Chrome beauftragen: {a['task'][:120]}",
             ),
             ToolSpec(
                 "browser_open",

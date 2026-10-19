@@ -53,7 +53,7 @@ class JarvisCarScreen(ctx: CarContext) : Screen(ctx) {
         val list = ItemList.Builder()
         if (!CallManager.busy) {
             list.addItem(
-                Row.Builder().setTitle("J.A.R.V.I.S. anrufen").addText("Sprechen Sie mit Ihrem Assistenten")
+                Row.Builder().setTitle("Jarvis anrufen").addText("Sprechen Sie mit Ihrem Assistenten")
                     .setImage(icon).setOnClickListener { CallManager.startOutgoing(carContext) }.build(),
             )
         } else {
@@ -61,7 +61,7 @@ class JarvisCarScreen(ctx: CarContext) : Screen(ctx) {
             list.addItem(Row.Builder().setTitle("Auflegen").setOnClickListener { CallManager.hangup(carContext) }.build())
         }
         s.error?.let { list.addItem(Row.Builder().setTitle("Hinweis").addText(it.take(80)).build()) }
-        return ListTemplate.Builder().setTitle("J.A.R.V.I.S.").setHeaderAction(Action.APP_ICON).setSingleList(list.build()).build()
+        return ListTemplate.Builder().setTitle("Jarvis").setHeaderAction(Action.APP_ICON).setSingleList(list.build()).build()
     }
 
     private fun statusText(s: String) = when (s) {

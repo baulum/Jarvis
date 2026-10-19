@@ -49,6 +49,7 @@ agent:
   # Switch by command ("nimm Opus", "ab jetzt Haiku", "nur diesmal Opus …", "automatische Modellwahl"),
   # in the desktop app or via POST /api/agent/model. Opus is only used when asked for.
   idle_timeout_minutes: 15 # idle conversation processes are stopped and resumed later
+  turn_timeout_s: 900      # a Claude turn that hangs longer is killed (it would block every channel)
 
 hermes:
   enabled: false
@@ -72,9 +73,12 @@ voice:
     server_url: http://127.0.0.1:8178
     model: ggml-large-v3-turbo-q5_0.bin
   tts:
-    provider: macos            # macos | fish_audio
+    provider: local            # macos | fish_audio | local – local: Jarvis-Stimme auf diesem Mac, ohne API-Kosten
     macos_voice: Anna          # `say -v '?'` lists installed voices
     rate: 185
+    cache_max_chars: 80        # kurze, wiederkehrende Sätze nur einmal erzeugen (0 = aus)
+    local:                     # scripts/local-tts/server.py (Qwen3-TTS klont voices/jarvis_ref_short.wav)
+      server_url: http://127.0.0.1:8179   # läuft der Server nicht, übernimmt Fish Audio (falls aktiv), dann macOS
     fish_audio:
       api_key_secret: fish-audio-api-key
       reference_id: ""         # Fish Audio voice model id
@@ -84,17 +88,25 @@ voice:
       chunk_length: 100        # 100–300; kleiner = früherer erster Ton
   # Endpointing: endet die Äußerung grammatisch vollständig, reichen min_end_of_turn_silence_ms Stille;
   # klingt sie unfertig („… und“, „ähm“), wartet Jarvis bis end_of_turn_silence_ms.
-  end_of_turn_silence_ms: 1600   # längste Denkpause
-  min_end_of_turn_silence_ms: 650
+  end_of_turn_silence_ms: 1100   # längste Denkpause
+  min_end_of_turn_silence_ms: 400
   speculative_stt_ms: 280        # Whisper startet schon in der Pause (überlappt mit dem Endpointing)
   vad_min_rms: 180               # Mindestpegel für Sprache (niedriger = leise Silben zählen als Sprache)
-  barge_in: auto                 # auto | voice | wake_word – auto: per Stimme nur mit Echo-Unterdrückung, sonst „Hey Jarvis“
+  barge_in: auto                 # auto | voice | wake_word – auto: per Stimme (ohne Echo-Unterdrückung relativ zum Eigenecho), „Hey Jarvis“ geht immer
+  barge_in_echo_ratio: 1.8       # höher = weniger Fehlauslösungen durch Jarvis' eigene Stimme, aber lauter sprechen nötig
   barge_in_ms: 320               # so lange muss Sir sprechen, um Jarvis zu unterbrechen (Barge-in per Stimme)
   native_audio: true             # Swift-Audiohelfer: lückenlose Streaming-Wiedergabe (sonst sounddevice/afplay)
   echo_cancellation: false       # macOS-Echo-Unterdrückung – experimentell: dämpfte im Test auch Sirs Stimme im Raum
-  conversation_window_s: 30      # nach einer Antwort hört Jarvis so lange weiter zu – ohne „Hey Jarvis“
+  conversation_window_s: 15      # nach einer Antwort hört Jarvis so lange weiter zu – ohne „Hey Jarvis“
   max_utterance_s: 30
   followup_window_s: 6         # keep listening after a reply without wake word
+  # "Jarvis, wach auf" – staged start-up show. "Jarvis, beende das Gespräch" ends the conversation (back to wake word).
+  wakeup:
+    sound: ""                  # path to your own sound (wav/mp3/aiff/m4a); empty = built-in power-up sound
+    volume: 1.0
+    say: "Zu Ihren Diensten, Sir. Alle Systeme sind online."   # "" = only the sound
+    apps: []                   # opened/brought to the front in this order, e.g. ["Visual Studio Code", "Safari", "https://github.com"]
+    app_delay_s: 0.8
 
 telephony:
   enabled: true
@@ -119,6 +131,10 @@ notifications:
       channels: [desktop, telegram, mobile]
     - event: coding.finished
       channels: [desktop, telegram, mobile]
+    - event: agent.usage
+      channels: [desktop, mobile]
+    - event: backup.failed
+      channels: [desktop, mobile]
     - event: system.critical
       channels: [desktop, telegram, phone, mobile]
       bypass_quiet_hours: true
@@ -154,6 +170,16 @@ mobile:
     max_calls_per_hour: 4
     min_minutes_between_calls: 3
     max_duration_minutes: 30
+
+backup:
+  # Nightly PostgreSQL dump + vault + config, AES-256-GCM encrypted, with retention. Secrets are never included.
+  # `jarvisctl backup key` prints the key – store it in a password manager (it lives in the Keychain only).
+  enabled: true
+  directory: ~/Backups/Jarvis
+  at: "03:30"
+  keep_recent: 14
+  keep_weekly: 8
+  encrypt: true
 
 coding:
   claude_binary: claude

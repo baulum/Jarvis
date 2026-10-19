@@ -10,6 +10,9 @@ from croniter import croniter
 
 from jarvis.agent.persona import TZ
 from jarvis.connectors.base import Connector, Health, Manifest
+from jarvis.events import bus
+from jarvis.security.audit import audit
+from jarvis.security.auth import OWNER_ROLES
 from jarvis.tools.executor import ToolUserError
 from jarvis.tools.registry import ToolContext, ToolSpec
 
@@ -110,9 +113,12 @@ class SystemConnector(Connector):
         async def schedule_create(ctx: ToolContext, a: dict[str, Any]) -> Any:
             if not croniter.is_valid(a["cron"]):
                 raise ToolUserError("Ungültiger Cron-Ausdruck (Format: Minute Stunde Tag Monat Wochentag)")
-            sched = await st.scheduler.create(
-                a["name"], a["cron"], {"type": "prompt", "prompt": a["prompt"]}, ctx.principal.label
-            )
+            try:
+                sched = await st.scheduler.create(
+                    a["name"], a["cron"], {"type": "prompt", "prompt": a["prompt"]}, ctx.principal.label
+                )
+            except ValueError as e:
+                raise ToolUserError(str(e)) from e
             return {"id": str(sched.id), "next_run": sched.next_run_at.isoformat() if sched.next_run_at else None}
 
         async def schedule_list(ctx: ToolContext, a: dict[str, Any]) -> Any:
@@ -133,7 +139,75 @@ class SystemConnector(Connector):
             )
             return {"delivered": delivered}
 
+        async def get_model(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            return {
+                **st.model_router.status(str(ctx.session_id) if ctx.session_id else None),
+                "quota": st.usage.status(),
+            }
+
+        async def set_model(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            if ctx.principal.role not in OWNER_ROLES:
+                raise ToolUserError("Das Modell darf nur Sir selbst umschalten.")
+            choice = a["model"]
+            model = None if choice == "auto" else choice
+            scope = a.get("scope", "session")
+            try:
+                st.model_router.apply(model, scope, str(ctx.session_id) if ctx.session_id else None)
+            except ValueError as e:
+                raise ToolUserError(str(e)) from e
+            await audit(ctx.principal.label, "agent.model", details={"model": model, "scope": scope, "via": "tool"})
+            status: dict[str, Any] = st.model_router.status(str(ctx.session_id) if ctx.session_id else None)
+            await bus.publish("agent.model", **status)
+            where = {
+                "turn": "für die nächste Antwort",
+                "session": "für dieses Gespräch",
+                "default": "ab sofort als Standard",
+            }
+            return {
+                "ok": True,
+                "model": model or "automatisch",
+                "gilt": where[scope],
+                "hinweis": "Wirkt ab der nächsten Antwort.",
+            }
+
+        async def usage(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            return st.usage.status()
+
         return [
+            ToolSpec(
+                "agent_get_model",
+                "Welches Claude-Modell (Haiku/Sonnet/Opus) gerade benutzt wird, inkl. Kontingent-Stand.",
+                _obj({}, []),
+                get_model,
+                "read",
+                "system",
+            ),
+            ToolSpec(
+                "agent_set_model",
+                "Schaltet das Claude-Modell um, wenn Sir es verlangt (z. B. „nimm Opus“, „nutze Haiku“, "
+                "„wieder automatisch“). "
+                "model: haiku (schnell/günstig), sonnet (Standard), opus (stärkste Denkleistung) oder auto. "
+                "scope: turn = nur nächste Antwort, session = dieses Gespräch (Standard), default = dauerhaft.",
+                _obj(
+                    {
+                        "model": {"type": "string", "enum": ["haiku", "sonnet", "opus", "auto"]},
+                        "scope": {"type": "string", "enum": ["turn", "session", "default"]},
+                    },
+                    ["model"],
+                ),
+                set_model,
+                "low",
+                "system",
+                summarize=lambda a: f"Modell wechseln: {a['model']} ({a.get('scope', 'session')})",
+            ),
+            ToolSpec(
+                "agent_usage",
+                "Auslastung des Claude-Kontingents (5-Stunden- und 7-Tage-Fenster) und Nutzung heute.",
+                _obj({}, []),
+                usage,
+                "read",
+                "system",
+            ),
             ToolSpec(
                 "system_time", "Aktuelles Datum und Uhrzeit (Europe/Berlin).", _obj({}, []), now, "read", "system"
             ),
@@ -205,7 +279,7 @@ class SystemConnector(Connector):
                     ["name", "cron", "prompt"],
                 ),
                 schedule_create,
-                "low",
+                "medium",  # a persistent, self-running prompt: more than a one-off action
                 "system",
                 summarize=lambda a: f"Zeitplan '{a['name']}' ({a['cron']}) anlegen",
             ),

@@ -3,6 +3,8 @@ import type { GraphDTO } from "../holo/graph/types";
 import type {
   ApprovalMode,
   AgentModelStatus,
+  AgentUsage,
+  BackupStatus,
   Approval,
   ChatAccepted,
   ChatMessageRow,
@@ -242,8 +244,12 @@ export function createApi(opts: ApiOptions) {
     codingJobs: () => get<CodingJob[]>("/coding/jobs"),
     codingLog: (jid: string, lines = 400) => get<CodingLogLine[]>(`/coding/jobs/${id(jid)}/log`, { lines }),
     agentModel: (sessionId?: string | null) => get<AgentModelStatus>("/agent/model", { session_id: sessionId ?? undefined }),
-    setAgentModel: (body: { model: string | null; scope: "default" | "session"; session_id?: string | null; auto_downgrade?: boolean }) =>
+    setAgentModel: (body: { model: string | null; scope: "default" | "session"; session_id?: string | null; auto_downgrade?: boolean; effort?: string }) =>
       post<AgentModelStatus>("/agent/model", body),
+    agentUsage: () => get<AgentUsage>("/agent/usage"),
+    refreshAgentUsage: () => post<AgentUsage>("/agent/usage/refresh"),
+    backupStatus: () => get<BackupStatus>("/backup"),
+    runBackup: () => post<BackupStatus["last"]>("/backup/run"),
     codingCancel: (jid: string) => post<{ cancelled: boolean }>(`/coding/jobs/${id(jid)}/cancel`),
   };
 }

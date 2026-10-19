@@ -1,5 +1,6 @@
 import { Cpu, HardDrive, MemoryStick, Timer } from "lucide-react";
 import type { ReactNode } from "react";
+import { BackupCard } from "../components/BackupCard";
 import { Dot, EmptyState, ErrorState, KeyValue, Section, Skeleton, Tag } from "../components/ui";
 import {
   componentLabel,
@@ -60,6 +61,8 @@ export function SystemView() {
             <div className="col-span-3 text-sm text-ink-dim">Ressourcendaten nicht verfügbar.</div>
           )}
         </div>
+
+        <BackupCard />
 
         <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
           <Section title="Komponenten" meta={`${comps.filter(([, v]) => v === "ok").length}/${comps.length} in Ordnung`}>

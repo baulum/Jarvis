@@ -29,7 +29,7 @@ from jarvis.config import RISK_ORDER, Permissions
 from jarvis.db import session_scope
 from jarvis.db.models import Approval, ChatSession, ToolExecution
 from jarvis.events import activity, bus, current_activity
-from jarvis.security.audit import audit
+from jarvis.security.audit import AuditUnavailable, audit
 from jarvis.security.auth import Principal
 from jarvis.security.guards import KillSwitch, rate_limiter
 from jarvis.tools.approval_mode import ApprovalPolicy
@@ -65,6 +65,18 @@ def canonical_args(args: dict[str, Any]) -> str:
 
 def args_hash(tool: str, args: dict[str, Any]) -> str:
     return hashlib.sha256(f"{tool}:{canonical_args(args)}".encode()).hexdigest()
+
+
+# Tools whose arguments are content Sir typed/pasted (could be passwords): the audit log keeps only the length.
+_CONTENT_KEYS = {"text", "value", "content", "string"}
+_CONTENT_ARG_TOOLS = {"mac_type_text", "mac_clipboard_set", "mac_ui_set_value"}
+LEDGER_STALE_AFTER = timedelta(minutes=15)
+
+
+def audit_args(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+    if tool in _CONTENT_ARG_TOOLS:
+        return {k: f"[{len(v)} Zeichen]" if k in _CONTENT_KEYS and isinstance(v, str) else v for k, v in args.items()}
+    return {k: (v[:1500] + "…" if isinstance(v, str) and len(v) > 1500 else v) for k, v in args.items()}
 
 
 class ToolExecutor:
@@ -305,6 +317,22 @@ class ToolExecutor:
             if dup is not None:
                 return dup
 
+        if RISK_ORDER[risk] >= RISK_ORDER["high"]:
+            # intent is recorded BEFORE the action; without a working audit log such an action does not run
+            try:
+                await audit(
+                    ctx.principal.label,
+                    f"tool.{spec.name}",
+                    outcome="started",
+                    details={"risk": risk, "args": audit_args(spec.name, args)},
+                    strict=True,
+                )
+            except AuditUnavailable:
+                if ledger_key:
+                    await self._finish_ledger(ledger_key, "error", None, "audit unavailable", 0)
+                return ToolResult(
+                    "error", spec.name, message="Audit-Protokoll nicht verfügbar – Aktion nicht ausgeführt."
+                )
         call_id = uuid.uuid4().hex[:12]
         task_id = ctx.extra.get("task_id") or current_activity().task_id
         await bus.publish(
@@ -348,7 +376,7 @@ class ToolExecutor:
             outcome=status,
             details={
                 "risk": risk,
-                "args": args,
+                "args": audit_args(spec.name, args),
                 "duration_ms": duration_ms,
                 "approval_id": str(ctx.approval_id) if ctx.approval_id else None,
                 "error": message if status != "ok" else None,
@@ -387,6 +415,16 @@ class ToolExecutor:
                     message="Diese Aktion wurde bereits ausgeführt; Ergebnis aus dem Ledger.",
                 )
             if row.status == "running":
+                if datetime.now(UTC) - row.created_at > LEDGER_STALE_AFTER:
+                    # the process died mid-action: outcome unknown → release the key, but do not silently re-run it
+                    row.status = "failed"
+                    row.result = {"message": "unterbrochen"}
+                    return ToolResult(
+                        "error",
+                        tool,
+                        message="Die frühere Ausführung wurde unterbrochen (Ergebnis unklar). Bitte zuerst prüfen, "
+                        "ob sie durchgekommen ist; ein neuer Versuch ist danach möglich.",
+                    )
                 return ToolResult("in_progress", tool, message="Diese Aktion läuft bereits.")
             # failed -> allow retry by re-claiming
             row.status = "running"

@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUp, CircleStop, Loader2, Mic, MicOff } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalCard } from "../components/ApprovalCard";
+import { ModelPicker } from "../components/ModelPicker";
 import { emptyThread, threadFromHistory, type UiMessage } from "../lib/reducers";
 import { api, useApp } from "../store/app";
 import { useBrain } from "./store";
@@ -198,64 +199,67 @@ export function ChatDock() {
         )}
       </AnimatePresence>
       <form
-        className="flex items-end gap-2 px-3 py-2.5"
+        className="flex flex-col gap-1 px-3 pb-2.5 pt-2"
         onSubmit={(e) => {
           e.preventDefault();
           void send();
         }}
       >
-        <button
-          type="button"
-          disabled={!voiceOk}
-          onPointerDown={() => void pushToTalk(true)}
-          onPointerUp={() => ptt && void pushToTalk(false)}
-          onPointerLeave={() => ptt && void pushToTalk(false)}
-          aria-label={voiceOk ? "Gedrückt halten zum Sprechen" : "Sprachsteuerung nicht verfügbar"}
-          title={voiceOk ? "Gedrückt halten zum Sprechen – oder einfach „Hey Jarvis“" : voice.muted ? "Mikrofon stumm" : "Sprachdienst nicht verbunden"}
-          className={`flex size-9 shrink-0 items-center justify-center rounded-full border transition-colors ${
-            listening ? "border-arc bg-arc-deep text-arc" : "border-seam-hi text-ink-dim hover:text-ink disabled:opacity-40"
-          }`}
-        >
-          {voiceOk ? <Mic className="size-4" strokeWidth={1.7} /> : <MicOff className="size-4" strokeWidth={1.7} />}
-        </button>
-        <div className="relative min-w-0 flex-1">
-          <textarea
-            ref={input}
-            rows={1}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-              if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur();
-            }}
-            placeholder={listening ? "Ich höre zu …" : speaking ? "J.A.R.V.I.S. spricht …" : "Frag J.A.R.V.I.S. – oder sag „Hey Jarvis“"}
-            aria-label="Nachricht an J.A.R.V.I.S."
-            className="max-h-32 min-h-9 w-full resize-none bg-transparent py-2 text-[0.875rem] text-ink placeholder:text-ink-faint focus:outline-none"
-          />
+        <textarea
+          ref={input}
+          rows={1}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              void send();
+            }
+            if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur();
+          }}
+          placeholder={listening ? "Ich höre zu …" : speaking ? "J.A.R.V.I.S. spricht …" : "Frag J.A.R.V.I.S. – oder sag „Hey Jarvis“"}
+          aria-label="Nachricht an J.A.R.V.I.S."
+          className="max-h-40 min-h-9 w-full resize-none bg-transparent px-2 py-2 text-[0.9rem] text-ink placeholder:text-ink-faint focus:outline-none"
+        />
+        <div className="flex items-center gap-2">
+          <ModelPicker placement="up" />
+          <div className="ml-auto flex items-center gap-2">
+            {(listening || speaking) && <Waveform active source={speaking ? "output" : "input"} />}
+            <button
+              type="button"
+              disabled={!voiceOk}
+              onPointerDown={() => void pushToTalk(true)}
+              onPointerUp={() => ptt && void pushToTalk(false)}
+              onPointerLeave={() => ptt && void pushToTalk(false)}
+              aria-label={voiceOk ? "Gedrückt halten zum Sprechen" : "Sprachsteuerung nicht verfügbar"}
+              title={voiceOk ? "Gedrückt halten zum Sprechen – oder einfach „Hey Jarvis“" : voice.muted ? "Mikrofon stumm" : "Sprachdienst nicht verbunden"}
+              className={`flex size-9 shrink-0 items-center justify-center rounded-full border transition-colors ${
+                listening ? "border-arc bg-arc-deep text-arc" : "border-seam text-ink-dim hover:border-seam-hi hover:text-ink disabled:opacity-40"
+              }`}
+            >
+              {voiceOk ? <Mic className="size-4" strokeWidth={1.7} /> : <MicOff className="size-4" strokeWidth={1.7} />}
+            </button>
+            {running ? (
+              <button
+                type="button"
+                onClick={() => void api.interruptChat().catch(() => undefined)}
+                aria-label="Antwort abbrechen"
+                className="flex size-9 shrink-0 items-center justify-center rounded-full border border-seam-hi text-ink-dim hover:text-ink"
+              >
+                <CircleStop className="size-4" strokeWidth={1.7} />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!draft.trim() || sending}
+                aria-label="Senden"
+                className="flex size-9 shrink-0 items-center justify-center rounded-full bg-arc text-void transition-opacity disabled:opacity-25"
+              >
+                {sending ? <Loader2 className="spin-slow size-4" /> : <ArrowUp className="size-4" strokeWidth={2} />}
+              </button>
+            )}
+          </div>
         </div>
-        {(listening || speaking) && <Waveform active source={speaking ? "output" : "input"} />}
-        {running ? (
-          <button
-            type="button"
-            onClick={() => void api.interruptChat().catch(() => undefined)}
-            aria-label="Antwort abbrechen"
-            className="flex size-9 shrink-0 items-center justify-center rounded-full border border-seam-hi text-ink-dim hover:text-ink"
-          >
-            <CircleStop className="size-4" strokeWidth={1.7} />
-          </button>
-        ) : (
-          <button
-            type="submit"
-            disabled={!draft.trim() || sending}
-            aria-label="Senden"
-            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-arc text-void transition-opacity disabled:opacity-25"
-          >
-            {sending ? <Loader2 className="spin-slow size-4" /> : <ArrowUp className="size-4" strokeWidth={2} />}
-          </button>
-        )}
       </form>
     </motion.section>
   );

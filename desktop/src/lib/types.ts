@@ -472,6 +472,8 @@ export interface AgentModelStatus {
   auto_downgrade: boolean;
   session_override: string | null;
   models: { alias: string; id: string; label: string }[];
+  effort: string | null;
+  efforts: { id: string; label: string }[];
 }
 
 export type ApprovalModeName = "yolo" | "block_dangerous" | "block_everything" | "custom";
@@ -482,4 +484,37 @@ export interface ApprovalMode {
   tool_overrides: Record<string, "auto" | "ask" | "deny">;
   taint_strict: boolean;
   effective_levels: Record<RiskLevel, "auto" | "ask">;
+}
+
+export interface QuotaWindow {
+  utilization: number; // 0..1, exactly as reported by Claude Code
+  resets_at: string | null;
+  resets_in_s: number | null;
+  stale: boolean;
+}
+export interface UsageRow {
+  turns: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+}
+export interface AgentUsage {
+  known: boolean;
+  status: string | null;
+  windows: { five_hour: QuotaWindow | null; seven_day: QuotaWindow | null };
+  updated_at: string | null;
+  pressure: number;
+  today: Record<string, UsageRow>;
+  week: Record<string, UsageRow>;
+}
+export interface BackupStatus {
+  enabled: boolean;
+  directory: string;
+  at: string;
+  encrypted: boolean;
+  count: number;
+  recent_enough: boolean;
+  last: { ok?: boolean; ok_at?: string; file?: string; size?: number; duration_s?: number; error?: string; failed_at?: string };
+  files: { file: string; size: number; modified: string }[];
 }

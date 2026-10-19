@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import html
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -21,6 +23,7 @@ from jarvis.events import bus, spawn
 from jarvis.logging_setup import ring
 from jarvis.security.audit import audit, verify_chain
 from jarvis.security.auth import Principal, create_device, list_devices, revoke_device
+from jarvis.security.guards import rate_limiter
 from jarvis.voice.speech import speakable
 
 router = APIRouter(prefix="/api")
@@ -39,8 +42,8 @@ def _uuid(v: str) -> uuid.UUID:
 
 # ------------------------------------------------------------------ health / system
 @router.get("/health")
-async def health() -> dict[str, Any]:
-    return {"status": "ok", "version": VERSION}
+async def health(st: AppState = StateDep) -> dict[str, Any]:
+    return {"status": "degraded" if st.degraded else "ok", "version": VERSION, "detail": st.degraded}
 
 
 @router.get("/system/status")
@@ -84,7 +87,10 @@ class ChatBody(BaseModel):
 async def chat(body: ChatBody, st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
     channel = body.channel if body.channel in ("desktop", "voice", "api", "mobile") else "desktop"
     sid = _uuid(body.session_id) if body.session_id else None
-    sess = await st.orchestrator.get_or_create_session(p, channel, sid)
+    try:
+        sess = await st.orchestrator.get_or_create_session(p, channel, sid)
+    except PermissionError as e:
+        raise HTTPException(403, str(e)) from e
     if body.wait:
         res = await st.orchestrator.handle(p, channel, body.message, session_id=sess.id, images=body.images)
         return {"session_id": str(res.session_id), "text": res.text, "error": res.error, "tools": res.tools}
@@ -97,6 +103,7 @@ class ModelBody(BaseModel):
     scope: str = "default"  # default | session
     session_id: str | None = None
     auto_downgrade: bool | None = None
+    effort: str | None = None  # low | medium | high | xhigh | max | "auto" (= Claude Code default)
 
 
 @router.get("/agent/model")
@@ -111,7 +118,9 @@ async def agent_model_set(body: ModelBody, st: AppState = StateDep, p: Principal
     try:
         if body.auto_downgrade is not None:
             st.model_router.set_auto_downgrade(body.auto_downgrade)
-        if body.model is not None or body.auto_downgrade is None:
+        if body.effort is not None:
+            st.model_router.set_effort(None if body.effort == "auto" else body.effort)
+        if body.model is not None or (body.auto_downgrade is None and body.effort is None):
             st.model_router.set(body.model, body.scope, body.session_id)  # type: ignore[arg-type]
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
@@ -119,6 +128,25 @@ async def agent_model_set(body: ModelBody, st: AppState = StateDep, p: Principal
     status: dict[str, Any] = st.model_router.status(body.session_id)
     await bus.publish("agent.model", **status)
     return status
+
+
+@router.get("/agent/usage")
+async def agent_usage(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    """Claude subscription quota (5 h / 7 d windows as reported by Claude Code) and local token counters."""
+    return st.usage.status()
+
+
+@router.post("/agent/usage/refresh")
+async def agent_usage_refresh(st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
+    from jarvis.agent.claude_agent import ClaudeUnavailable
+
+    if not rate_limiter.check("usage-refresh", 6, 600):
+        raise HTTPException(429, "Kontingent wurde gerade erst abgefragt")
+    try:
+        await st.oneshot.probe_limits()
+    except ClaudeUnavailable as e:
+        raise HTTPException(503, str(e)) from e
+    return st.usage.status()
 
 
 @router.post("/chat/interrupt")
@@ -148,7 +176,13 @@ async def sessions(st: AppState = StateDep, p: Principal = Reader, limit: int = 
 
 @router.get("/sessions/{sid}/messages")
 async def session_messages(sid: str, st: AppState = StateDep, p: Principal = Reader) -> list[dict[str, Any]]:
-    return await st.orchestrator.history(_uuid(sid), limit=200)
+    session_id = _uuid(sid)
+    if p.role not in ("owner", "mobile_owner"):
+        async with session_scope() as s:
+            sess = await s.get(ChatSession, session_id)
+        if sess is None or sess.actor_id != p.id:
+            raise HTTPException(404, "not found")
+    return await st.orchestrator.history(session_id, limit=200)
 
 
 # ------------------------------------------------------------------ approvals
@@ -455,12 +489,12 @@ async def google_oauth_callback(
 ) -> str:
     # Unauthenticated by necessity (browser redirect); protected by the one-time PKCE state.
     if error or not code:
-        return f"<h3>Google-Verbindung abgebrochen: {error or 'kein Code'}</h3>"
+        return f"<h3>Google-Verbindung abgebrochen: {html.escape(error or 'kein Code')}</h3>"
     g = st.connectors.connectors["google"]
     try:
         await g.finish_oauth(state, code)  # type: ignore[attr-defined]
     except Exception as e:
-        return f"<h3>Fehler: {str(e)[:200]}</h3>"
+        return f"<h3>Fehler: {html.escape(str(e)[:200])}</h3>"
     await st.connectors.configure("google", actor="oauth", enabled=True)
     return "<h3>Google ist verbunden. Du kannst dieses Fenster schließen.</h3>"
 
@@ -481,7 +515,7 @@ async def memory_items(
     st: AppState = StateDep,
     p: Principal = Reader,
 ) -> dict[str, Any]:
-    return await st.memory.list_items(kind, status, min(limit, 500), offset, q)
+    return await st.memory.list_items(kind, status, min(limit, 500), offset, q, include_sensitive=p.role == "owner")
 
 
 @router.get("/memory/items/{mid}")
@@ -571,7 +605,7 @@ async def memory_pending(mid: str, body: DecisionBody, st: AppState = StateDep, 
 
 @router.get("/memory/graph")
 async def memory_graph(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
-    return await st.memory.graph()
+    return await st.memory.graph(include_sensitive=p.role == "owner")
 
 
 @router.get("/memory/duplicates")
@@ -604,7 +638,7 @@ async def graph(limit: int = 1500, st: AppState = StateDep, p: Principal = Reade
 async def graph_cluster(
     kind: str, offset: int = 0, limit: int = 300, st: AppState = StateDep, p: Principal = Reader
 ) -> dict[str, Any]:
-    return await st.graph.cluster(kind, max(0, offset), min(limit, 1000))
+    return await st.graph.cluster(kind, max(0, offset), min(limit, 1000), include_sensitive=p.role == "owner")
 
 
 @router.get("/memory/export")
@@ -620,6 +654,21 @@ async def memory_export(st: AppState = StateDep, p: Principal = Owner) -> Respon
 @router.post("/memory/reindex")
 async def memory_reindex(st: AppState = StateDep, p: Principal = Owner) -> dict[str, int]:
     return await st.memory.reindex_all()
+
+
+# ------------------------------------------------------------------ backups
+@router.get("/backup")
+async def backup_status(st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    return st.backup.status()
+
+
+@router.post("/backup/run")
+async def backup_run(st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    await audit(p.label, "backup.run")
+    try:
+        return await st.backup.run("manual")
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
 
 
 # ------------------------------------------------------------------ scheduler
@@ -851,9 +900,16 @@ async def voice_tts(body: SpeakBody, st: AppState = StateDep, p: Principal = Rea
 
 @router.post("/voice/stt")
 async def voice_stt(request: Request, st: AppState = StateDep, p: Principal = Reader) -> dict[str, str]:
-    wav = await request.body()
-    if len(wav) > 20_000_000:
+    limit = 20_000_000
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
         raise HTTPException(413, "too large")
+    buf = bytearray()
+    async for chunk in request.stream():  # enforce the limit while reading, not after buffering everything
+        buf += chunk
+        if len(buf) > limit:
+            raise HTTPException(413, "too large")
+    wav = bytes(buf)
     return {"text": await st.stt.transcribe_wav(wav)}
 
 
@@ -870,6 +926,30 @@ async def voice_command(body: VoiceCommand, p: Principal = Actor) -> dict[str, b
     if body.action == "say" and body.text:
         await bus.publish("voice.say", text=body.text)
     return {"ok": True}
+
+
+@router.post("/voice/wakeup")
+async def voice_wakeup(st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
+    """ "Jarvis, wach auf": bring the configured apps to the front one after the other (show effect).
+
+    Every app goes through the normal tool executor (kill switch, role ceiling, audit)."""
+    from jarvis.tools.registry import ToolContext
+
+    cfg = st.settings.voice.wakeup
+    opened: list[str] = []
+    failed: list[str] = []
+    for entry in cfg.apps:
+        if entry.startswith(("http://", "https://")):
+            tool, args = "mac_open_url", {"url": entry}
+        else:
+            args = {"bundleId": entry} if entry.count(".") >= 2 and " " not in entry else {"name": entry}
+            tool = "mac_open_app"
+        res = await st.executor.execute(tool, args, ToolContext(principal=p))
+        (opened if res.status == "ok" else failed).append(entry)
+        if cfg.app_delay_s:
+            await asyncio.sleep(cfg.app_delay_s)
+    await audit(p.label, "voice.wakeup", details={"opened": opened, "failed": failed})
+    return {"opened": opened, "failed": failed}
 
 
 class VoiceStatus(BaseModel):
@@ -967,7 +1047,7 @@ async def telephony_call_me(st: AppState = StateDep, p: Principal = Owner) -> di
         raise HTTPException(400, "Telefonie ist deaktiviert")
     try:
         result = await st.telephony.call_owner(
-            "Guten Tag, Sir. Dies ist ein Testanruf von J.A.R.V.I.S. Die Telefonie funktioniert.", reason="test"
+            "Guten Tag, Sir. Dies ist ein Testanruf von Jarvis. Die Telefonie funktioniert.", reason="test"
         )
     except RuntimeError as e:
         raise HTTPException(400, str(e)) from e

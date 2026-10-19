@@ -298,6 +298,101 @@ class FishAudioTTS(TTSProvider):
         return b"".join([chunk async for chunk in self.stream(text, sample_rate)])
 
 
+class LocalTTS(TTSProvider):
+    """The Jarvis voice synthesised on this Mac by scripts/local-tts/server.py – no API costs."""
+
+    name = "local"
+
+    def __init__(self, server_url: str) -> None:
+        self.server_url = server_url.rstrip("/")
+        self._http = httpx.AsyncClient(base_url=self.server_url, timeout=httpx.Timeout(60, connect=2))
+        self._checked = (0.0, False)
+        self.voice = "local"  # model + reference clip as reported by the server (phrase-cache key)
+
+    async def available(self) -> bool:
+        """Health is cached for a few seconds – this is asked once per spoken piece."""
+        at, ok = self._checked
+        if time.monotonic() - at < 5:
+            return ok
+        try:
+            r = await self._http.get("/health", timeout=2)
+            ok = r.status_code == 200
+            if ok:
+                self.voice = f"local:{r.json().get('voice', '')}"
+        except (httpx.HTTPError, ValueError):
+            ok = False
+        self._checked = (time.monotonic(), ok)
+        return ok
+
+    async def stream(self, text: str, sample_rate: int) -> AsyncIterator[bytes]:
+        async with self._http.stream("POST", "/tts", json={"text": text}) as r:
+            if r.status_code >= 400:
+                detail = (await r.aread()).decode(errors="replace")[:200]
+                raise RuntimeError(f"Lokale TTS {r.status_code}: {detail}")
+            rate = int(r.headers.get("X-Sample-Rate") or sample_rate)
+            carry = b""
+            async for chunk in r.aiter_bytes():
+                data = carry + chunk
+                cut = len(data) - (len(data) % 2)  # keep 16-bit alignment
+                carry = data[cut:]
+                if cut:
+                    out = data[:cut]
+                    if rate != sample_rate:
+                        from jarvis.voice.audio import resample
+
+                        out = resample(np.frombuffer(out, dtype=np.int16), rate, sample_rate).tobytes()
+                    yield out
+
+    async def synthesize(self, text: str, sample_rate: int) -> bytes:
+        return b"".join([chunk async for chunk in self.stream(text, sample_rate)])
+
+
+class PhraseCache:
+    """Short, recurring pieces ("Sehr wohl, Sir.", "Einen Moment, Sir.", the wake-up line) are synthesised
+    once per voice and sample rate and kept on disk – every repeat is free and instant."""
+
+    def __init__(self, directory: Path | None, max_chars: int, max_entries: int = 500) -> None:
+        self.dir = directory
+        self.max_chars = max_chars
+        self.max_entries = max_entries
+        self._mem: dict[str, bytes] = {}
+
+    def key(self, voice: str, text: str, sample_rate: int) -> str | None:
+        if not 0 < len(text) <= self.max_chars:
+            return None
+        import hashlib
+
+        return hashlib.sha256(f"{voice}\0{sample_rate}\0{text}".encode()).hexdigest()[:32]
+
+    def get(self, key: str) -> bytes | None:
+        if key in self._mem:
+            return self._mem[key]
+        if self.dir is not None:
+            path = self.dir / f"{key}.pcm"
+            if path.is_file():
+                data = path.read_bytes()
+                path.touch()  # pruning drops the least recently used phrases
+                self._mem[key] = data
+                return data
+        return None
+
+    def put(self, key: str, pcm: bytes) -> None:
+        if not pcm:
+            return
+        if len(self._mem) >= self.max_entries:
+            self._mem.pop(next(iter(self._mem)))
+        self._mem[key] = pcm
+        if self.dir is not None:
+            try:
+                self.dir.mkdir(parents=True, exist_ok=True)
+                (self.dir / f"{key}.pcm").write_bytes(pcm)
+                files = sorted(self.dir.glob("*.pcm"), key=lambda p: p.stat().st_mtime)
+                for old in files[: max(0, len(files) - self.max_entries)]:  # ≤ ~120 MB at 24 kHz
+                    old.unlink(missing_ok=True)
+            except OSError:
+                logger.debug("TTS cache write failed", exc_info=True)
+
+
 def _fish_error(text: str) -> str:
     if "402" in text:
         return "Kein Fish-Audio-API-Guthaben (API-Guthaben ist getrennt vom Plattform-Guthaben: https://fish.audio/app/developers)"
@@ -307,11 +402,17 @@ def _fish_error(text: str) -> str:
 
 
 class TTSService:
-    """Selects the configured provider and falls back to macOS ``say`` when it is unavailable."""
+    """Selects the configured provider and falls back to macOS ``say`` when it is unavailable.
 
-    def __init__(self, cfg: TtsCfg) -> None:
+    ``provider: local`` wins over the Fish Audio connector; while the local server is down, Fish Audio
+    (if the connector is active) and then ``say`` take over.
+    """
+
+    def __init__(self, cfg: TtsCfg, cache_dir: Path | None = None) -> None:
         self.cfg = cfg
+        self.cache = PhraseCache(cache_dir, cfg.cache_max_chars)
         self.macos = MacSayTTS(cfg.macos_voice, cfg.rate)
+        self.local = LocalTTS(cfg.local.server_url)
         self.fish = FishAudioTTS(
             cfg.fish_audio.api_key_secret,
             cfg.fish_audio.reference_id,
@@ -331,18 +432,28 @@ class TTSService:
 
     @property
     def wanted(self) -> str:
+        if self.cfg.provider == "local":
+            return "local"
         return "fish_audio" if self.fish_connector_active or self.cfg.provider == "fish_audio" else "macos"
 
     async def provider(self) -> TTSProvider:
-        if self.wanted == "fish_audio" and await self.fish.available():
+        if self.wanted == "local" and await self.local.available():
+            return self.local
+        if (self.wanted == "fish_audio" or self.fish_connector_active) and await self.fish.available():
             return self.fish
         return self.macos
+
+    def _voice_id(self, p: TTSProvider) -> str:
+        if p is self.fish:
+            return f"fish:{self.fish.reference_id}:{self.fish.model}"
+        return self.local.voice if p is self.local else p.name
 
     async def status(self) -> dict[str, object]:
         p = await self.provider()
         return {
             "configured": self.wanted,
             "active": p.name,
+            "local_ready": await self.local.available(),
             "fish_audio_ready": await self.fish.available(),
             "fallback": p.name != self.wanted or (self.wanted == "fish_audio" and self.fish_last_error is not None),
             "fish_audio_error": self.fish_last_error,
@@ -350,9 +461,18 @@ class TTSService:
 
     async def stream(self, text: str, sample_rate: int) -> AsyncIterator[bytes]:
         p = await self.provider()
+        key = self.cache.key(self._voice_id(p), text, sample_rate) if p is not self.macos else None
+        if key and (hit := self.cache.get(key)) is not None:
+            yield hit
+            return
+        parts: list[bytes] = []
         try:
             async for chunk in p.stream(text, sample_rate):
+                if key:
+                    parts.append(chunk)
                 yield chunk
+            if key:
+                self.cache.put(key, b"".join(parts))
             if p is self.fish:
                 self.fish_last_error = None
         except Exception as e:
@@ -400,8 +520,18 @@ def split_sentences(buffer: str) -> tuple[list[str], str]:
     return complete, parts[-1]
 
 
+# "J.A.R.V.I.S." is spelled out letter by letter (or read as "Jay Ay Ar…") by every TTS engine
+_NAME_ACRONYM = re.compile(r"\bJ\s?\.\s?A\s?\.\s?R\s?\.\s?V\s?\.\s?I\s?\.\s?S\b\.?", re.I)
+
+
+def pronounceable(text: str) -> str:
+    """Spoken form of the assistant's name: always "Jarvis", never the dotted acronym."""
+    return _NAME_ACRONYM.sub("Jarvis", text)
+
+
 def speakable(text: str) -> str:
     """Strip markdown and symbols that TTS would read out literally."""
+    text = pronounceable(text)
     text = re.sub(r"```.*?```", " (Code ausgelassen) ", text, flags=re.S)
     text = re.sub(r"`([^`]*)`", r"\1", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)

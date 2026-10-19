@@ -2,7 +2,7 @@
 # Stop the J.A.R.V.I.S. stack (PostgreSQL keeps running; it is a shared service).
 set -uo pipefail
 RUN="$HOME/Library/Application Support/Jarvis/run"
-for name in voice core whisper; do
+for name in voice core tts whisper; do
   if [ -f "$RUN/$name.pid" ]; then
     pid="$(cat "$RUN/$name.pid")"
     if kill -0 "$pid" 2>/dev/null; then

@@ -34,6 +34,9 @@ class Principal:
         return f"{self.channel}:{self.id}"
 
 
+# Roles that are Sir himself on some channel (memory extraction, model commands, owner-level episodes).
+OWNER_ROLES = ("owner", "voice_owner", "telegram_owner", "phone_owner", "mobile_owner")
+
 SYSTEM = Principal(id="system", role="system", channel="system")
 
 

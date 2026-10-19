@@ -34,14 +34,13 @@ from jarvis.voice.pipeline import SpeechTurn
 if TYPE_CHECKING:
     from jarvis.app_state import AppState
 
+from jarvis.voice.commands import is_end_conversation
+
 logger = logging.getLogger(__name__)
 IN_RATE = 16000
 OUT_RATE = 24000
 OUT_FRAME = OUT_RATE // 50  # 20 ms
 TOPIC = "jarvis"
-_END_PHRASES = re.compile(
-    r"\b(auflegen|leg auf|tschüss|tschüs|auf wiederhören|ciao|bye|das war'?s|danke,? das wär'?s)\b", re.I
-)
 
 _TOOL_LABELS: list[tuple[str, str]] = [
     ("calendar_", "Prüfe den Kalender …"),
@@ -125,7 +124,7 @@ class CallVoiceAgent:
 
         try:
             self._room = rtc.Room()
-            token = self.state.livekit.mint_token(self.room_name, "jarvis", "J.A.R.V.I.S.", ttl_s=7200, agent=True)
+            token = self.state.livekit.mint_token(self.room_name, "jarvis", "Jarvis", ttl_s=7200, agent=True)
             self._room.on("track_subscribed", self._on_track)
             self._room.on("participant_connected", self._on_participant)
             self._room.on("participant_disconnected", self._on_participant_left)
@@ -343,7 +342,7 @@ class CallVoiceAgent:
             await self.set_state("listening")
             return
         await self._transcript("user", text)
-        if _END_PHRASES.search(text) and len(text) < 50:
+        if is_end_conversation(text, 70):
             await self._speak_fixed("Sehr wohl, Sir. Auf Wiederhören.")
             self._ending = True
             self._end_reason = "owner_goodbye"

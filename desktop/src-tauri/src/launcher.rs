@@ -74,6 +74,23 @@ pub fn start_services(app: &AppHandle) {
     });
 }
 
+fn keep_flag() -> PathBuf {
+    home().join("Library/Application Support/Jarvis/keep-running")
+}
+
+/// Whether the services stop when the app quits (default). Opt-out via a flag file next to `root`.
+pub fn stop_on_quit() -> bool {
+    !keep_flag().exists()
+}
+
+pub fn set_stop_on_quit(stop: bool) {
+    if stop {
+        let _ = std::fs::remove_file(keep_flag());
+    } else {
+        let _ = std::fs::write(keep_flag(), "");
+    }
+}
+
 /// Stops the services (called when the app quits). Bounded so quitting never hangs.
 pub fn stop_services() {
     let worker = std::thread::spawn(|| run_script("stop.sh", &[]));

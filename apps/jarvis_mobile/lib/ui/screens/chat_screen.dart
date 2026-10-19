@@ -9,6 +9,7 @@ import '../../state/providers.dart';
 import '../widgets/composer.dart';
 import '../widgets/core_orb.dart';
 import '../widgets/hud.dart';
+import '../widgets/model_picker.dart';
 
 /// Conversation with the same Jarvis as on the Mac. No bubbles: Sir's words right-aligned in light,
 /// Jarvis' answers as text on the dark, tool use shown as the real tool calls of that answer.
@@ -70,6 +71,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   Text('J.A.R.V.I.S.', style: J.wordmark.copyWith(fontSize: 13, letterSpacing: 4)),
                   const SizedBox(height: 4),
                   Text(modeLabel[mode]!, style: J.mono(11.5, color: J.text2)),
+                  Align(alignment: Alignment.centerLeft, child: ModelChip(sessionId: chat.sessionId)),
                 ]),
               ),
               Pressable(
@@ -110,6 +112,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(J.s4, J.s2, J.s4, J.s3),
             child: Composer(
+              sessionId: chat.sessionId,
               onSend: (t) => ref.read(chatProvider.notifier).send(t),
               busy: chat.sending,
               onStop: () => ref.read(chatProvider.notifier).interrupt(),

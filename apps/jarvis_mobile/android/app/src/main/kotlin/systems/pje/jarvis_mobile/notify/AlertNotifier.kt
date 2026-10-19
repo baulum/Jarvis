@@ -47,7 +47,7 @@ object Channels {
         )
         val ring = NotificationChannel(CALL_INCOMING, "Eingehende Anrufe", NotificationManager.IMPORTANCE_HIGH).apply {
             group = "calls"
-            description = "J.A.R.V.I.S. ruft an"
+            description = "Jarvis ruft an"
             setSound(
                 RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
                 AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)

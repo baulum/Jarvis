@@ -47,6 +47,12 @@ android {
         }
     }
 
+    if (keyProps.getProperty("storeFile") == null &&
+        gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
+    ) {
+        logger.warn("WARNING: android/key.properties missing – this release build is signed with the DEBUG key (not for distribution).")
+    }
+
     buildTypes {
         release {
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")

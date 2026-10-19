@@ -1,0 +1,2 @@
+mlx-audio==0.5.9
+soundfile

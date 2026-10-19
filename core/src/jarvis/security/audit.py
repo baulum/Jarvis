@@ -55,9 +55,20 @@ def _digest(
     return hashlib.sha256((prev_hash + canonical).encode()).hexdigest()
 
 
+class AuditUnavailable(RuntimeError):
+    """A ``strict`` audit entry could not be written (the action must not run unrecorded)."""
+
+
 async def audit(
-    actor: str, action: str, *, target: str = "", outcome: str = "ok", details: dict[str, Any] | None = None
+    actor: str,
+    action: str,
+    *,
+    target: str = "",
+    outcome: str = "ok",
+    details: dict[str, Any] | None = None,
+    strict: bool = False,
 ) -> None:
+    """Append an entry. ``strict``: raise :class:`AuditUnavailable` instead of only logging when it fails."""
     clean = _scrub(details or {})
     ts = datetime.now(UTC)
     try:
@@ -79,6 +90,8 @@ async def audit(
     except Exception:
         # Auditing must never silently disappear: log loudly, but don't crash the caller.
         logger.exception("AUDIT WRITE FAILED action=%s actor=%s", action, actor)
+        if strict:
+            raise AuditUnavailable("Audit-Protokoll nicht beschreibbar") from None
         return
     await bus.publish("audit.entry", actor=actor, action=action, target=target, outcome=outcome)
 

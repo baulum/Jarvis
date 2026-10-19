@@ -97,16 +97,39 @@ class CallService:
                 await s.execute(select(CallSession).where(CallSession.status.in_(ACTIVE)).limit(1))
             ).scalar_one_or_none()
 
-    async def call_blocker(self, event_key: str | None) -> str | None:
-        """Why Jarvis must NOT ring right now (None = may ring)."""
+    async def end_active_calls(self, reason: str = "superseded") -> int:
+        """Hang up every ringing/connecting/active call (Sir explicitly asks for a fresh one)."""
+        async with session_scope() as s:
+            ids = (await s.execute(select(CallSession.id).where(CallSession.status.in_(ACTIVE)))).scalars().all()
+        for call_id in ids:
+            try:
+                await self.hangup(call_id, reason)
+            except Exception:
+                logger.exception("could not hang up call %s", call_id)
+            async with session_scope() as s:  # a stuck row (dead agent) must not block the new call
+                c = await s.get(CallSession, call_id)
+                still = c is not None and c.status in ACTIVE
+            if still:
+                await self._end(call_id, "ended", reason)
+        if ids:
+            await self.state.push.send_all(
+                "call_cancel", {"call_id": str(ids[0]), "status": reason}, high_priority=True, ttl_s=60
+            )
+        return len(ids)
+
+    async def call_blocker(self, event_key: str | None, *, explicit: bool = False) -> str | None:
+        """Why Jarvis must NOT ring right now (None = may ring).
+
+        ``explicit``: Sir asked for the call himself – a running call will be superseded and the spacing/duplicate
+        rules do not apply; technical problems and the hourly cap (runaway protection) still do."""
         av = await self.availability()
-        if av["busy"]:
+        if av["busy"] and not explicit:
             return "es läuft bereits ein Anruf"
-        if not av["can_ring_owner"]:
+        if av["ring_problems"]:
             return ", ".join(av["ring_problems"])
         now = datetime.now(UTC)
         async with session_scope() as s:
-            if event_key:
+            if event_key and not explicit:
                 dup = (
                     await s.execute(select(CallSession.id).where(CallSession.event_key == event_key).limit(1))
                 ).first()
@@ -132,7 +155,7 @@ class CallService:
             ).scalar_one()
         if recent >= self.cfg.max_calls_per_hour:
             return f"Anruflimit erreicht ({self.cfg.max_calls_per_hour}/Stunde)"
-        if last is not None and now - last < timedelta(minutes=self.cfg.min_minutes_between_calls):
+        if not explicit and last is not None and now - last < timedelta(minutes=self.cfg.min_minutes_between_calls):
             return f"letzter Anruf vor weniger als {self.cfg.min_minutes_between_calls} Minuten"
         return None
 
@@ -145,9 +168,10 @@ class CallService:
         event_key: str | None = None,
         alert_id: uuid.UUID | None = None,
         skip_push: bool = False,
+        explicit: bool = False,
     ) -> dict[str, Any]:
         """``skip_push`` only for the owner's local device test (the phone is triggered over adb instead of FCM)."""
-        blocker = None if skip_push else await self.call_blocker(event_key)
+        blocker = None if skip_push else await self.call_blocker(event_key, explicit=explicit)
         if blocker:
             raise RuntimeError(blocker)
         call_id = uuid.uuid4()
@@ -174,7 +198,7 @@ class CallService:
             "call",
             {
                 "call_id": str(call_id),
-                "caller": "J.A.R.V.I.S.",
+                "caller": "Jarvis",  # read aloud by car/Bluetooth head units: no dotted acronym
                 "subject": message[:140],
                 "ring_timeout_s": self.cfg.ring_timeout_s,
             },

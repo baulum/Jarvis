@@ -11,7 +11,7 @@ import { boundingSphere, fitDistance, focusPose, pickNearest, type Vec3 } from "
 import { buildIconAtlas, iconIndex } from "./icons";
 import { deriveJarvisState, type JarvisState } from "./live";
 import type { LayoutRequest, LayoutResponse } from "./layout";
-import { nodeSize, rand01, type GraphModel } from "./model";
+import { layoutGroup, nodeSize, rand01, type GraphModel } from "./model";
 import {
   coreFragment,
   coreVertex,
@@ -81,7 +81,7 @@ function useLayout(model: GraphModel | null) {
     const fresh = !brainHandle.positions.length;
     const msg: LayoutRequest = {
       type: "init",
-      nodes: model.nodes.map((n) => ({ id: n.id, group: n.group, degree: n.degree, pinned: n.id === "agent:jarvis" })),
+      nodes: model.nodes.map((n) => ({ id: n.id, group: layoutGroup(n), degree: n.degree, pinned: n.id === "agent:jarvis" })),
       links: model.edges.map((e) => ({ source: e.source, target: e.target, weight: e.weight, relation: e.relation })),
       positions: model.positions,
       alpha: fresh ? 1 : 0.35, // an update reorganises gently instead of exploding

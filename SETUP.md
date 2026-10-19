@@ -46,6 +46,13 @@ In der Desktop-App unter **Connectoren** oder per CLI (`cd core && uv run jarvis
 Twilio: Voice-Webhook der Rufnummer → `POST https://<public_base_url>/api/telephony/twilio/voice`.
 Lokaler Test ohne Twilio: `uv run jarvisctl phone-test --say "eins zwei drei vier" --say "Wie spät ist es?"` (benötigt eine PIN).
 
+**Lokale Jarvis-Stimme (ohne API-Kosten):** `voice.tts.provider: local`. `scripts/local-tts/server.py` (Port 8179, eigene venv
+unter `~/Library/Application Support/Jarvis/tts-local`, von `setup.sh` angelegt, von `start.sh` gestartet) klont mit
+Qwen3-TTS 0.6B (MLX) den Referenz-Clip `voices/jarvis_ref_short.wav` + `.txt` (6 s Fish-Audio-Stimme + Transkript).
+Gemessen auf M1 Pro: ~0,3–1 s bis zum ersten Ton, Echtzeitfaktor ~0,6–0,75. Kurz halten – ein 19-s-Clip macht es langsamer
+als Echtzeit. Läuft der Server nicht, spricht Fish Audio (falls der Connector aktiv ist), sonst macOS. Kurze, wiederkehrende
+Sätze (≤ `cache_max_chars`) landen in `tts-cache/` und werden nur einmal erzeugt – auch mit Fish Audio.
+
 ## 5. Sprachmodell (Claude 5.5)
 - Standard: **Sonnet 5.5**; einfache Anfragen automatisch **Haiku 5.5**; **Opus 5.5** nur auf Wunsch.
 - Per Sprache/Chat: „Nimm Opus“ (dieses Gespräch), „Ab jetzt Haiku“ (Standard), „Nur diesmal Opus: …“ (eine Antwort),
@@ -72,6 +79,19 @@ Lokaler Test ohne Twilio: `uv run jarvisctl phone-test --say "eins zwei drei vie
 LiveKit installiert `setup.sh` (`brew install livekit`). Dann
 `cd core && uv run jarvisctl mobile-pair` und den QR-Code mit der App scannen. Für Benachrichtigungen und eingehende
 Anrufe ein kostenloses Firebase-Projekt verbinden. Alles Weitere: [docs/MOBILE.md](docs/MOBILE.md).
+
+## 7b. Sprachbefehle, Modellwahl, Kontingent, Backups
+- **„Jarvis, beende das Gespräch“** (auch „auflegen“, „Gespräch beenden“) beendet das Gespräch; Jarvis wartet wieder auf
+  „Hey Jarvis“. Gilt am Mac, am Telefon und in App-Anrufen.
+- **„Jarvis, wach auf“** spielt einen Sound und holt Apps nach vorn (Show). In `config/jarvis.yaml` unter `voice.wakeup`:
+  `sound:` (eigene Datei, leer = eingebauter Sound), `say:` (Begrüßung), `apps:` (Namen, Bundle-IDs oder https-URLs).
+- **Modell:** „nimm Opus“, „Claude, nutze Haiku“, „nur diesmal Opus: …“, „wieder automatisch“ – oder Jarvis schaltet selbst
+  (`agent_set_model`). Auswahl auch in der App (Chip unter dem Wortmarke / Einstellungen) und in der 3D-Ansicht (oben rechts).
+- **Kontingent:** echte Auslastung des 5-Stunden- und 7-Tage-Fensters laut Claude Code (App, 3D-Ansicht, `agent_usage`).
+  Warnung bei 80 % und 95 %; ab 90 % wählt die automatische Modellwahl Sonnet statt Opus (ab 97 % Haiku statt Sonnet);
+  ausdrückliche Befehle gelten immer.
+- **Backups:** `jarvisctl backup run|list|key|restore`, Konfiguration unter `backup:`. Den Schlüssel einmal mit
+  `jarvisctl backup key` im Passwortmanager ablegen. `jarvisctl doctor` prüft Alter der Sicherung und Rechte der Token-Dateien.
 
 ## 8. Tests
 ```bash

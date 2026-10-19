@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -277,6 +279,19 @@ class _ApprovalSheetState extends ConsumerState<_ApprovalSheet> {
         Text(a['reason']?.toString() ?? '', style: J.bodyDim),
         const SizedBox(height: J.s2),
         Text('${a['tool']} · angefragt über ${a['channel']} · ${relDay(DateTime.parse(a['created_at'] as String))}', style: J.mono(11)),
+        if (_argLines(a['args']).isNotEmpty) ...[
+          const SizedBox(height: J.s3),
+          // what exactly will run – not only the one-line summary
+          Container(
+            constraints: const BoxConstraints(maxHeight: 170),
+            width: double.infinity,
+            padding: const EdgeInsets.all(J.s3),
+            decoration: BoxDecoration(color: J.panel, border: Border.all(color: J.line), borderRadius: BorderRadius.circular(J.radius)),
+            child: SingleChildScrollView(
+              child: Text(_argLines(a['args']), style: J.mono(11.5, color: J.text2)),
+            ),
+          ),
+        ],
         const SizedBox(height: J.s5),
         if (_done != null)
           Text(_done!, style: J.body.copyWith(color: J.green))
@@ -297,6 +312,15 @@ class _ApprovalSheetState extends ConsumerState<_ApprovalSheet> {
       ]),
     );
   }
+}
+
+/// `key: value` lines of an approval's arguments, long values shortened.
+String _argLines(Object? args) {
+  if (args is! Map || args.isEmpty) return '';
+  return args.entries.map((e) {
+    final v = e.value is String ? e.value as String : jsonEncode(e.value);
+    return '${e.key}: ${v.length > 400 ? '${v.substring(0, 400)}…' : v}';
+  }).join('\n');
 }
 
 // ------------------------------------------------------------------ rows

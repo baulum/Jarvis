@@ -18,6 +18,8 @@ from jarvis.agent.llm import HermesClient, OllamaClient
 from jarvis.agent.model_router import ModelRouter
 from jarvis.agent.orchestrator import Orchestrator
 from jarvis.agent.skills import SkillCatalog
+from jarvis.agent.usage import UsageTracker
+from jarvis.backup.service import BackupService
 from jarvis.coding.runner import CodingRunner
 from jarvis.config import Permissions, Personality, Settings, load_permissions, load_personality
 from jarvis.connectors.base import ConnectorManager
@@ -35,7 +37,7 @@ from jarvis.connectors.telegram import TelegramConnector
 from jarvis.connectors.telephony import TelephonyConnector
 from jarvis.db import init_engine, session_scope
 from jarvis.db.models import Approval, Task, UsageRecord
-from jarvis.events import Event, bus
+from jarvis.events import Event, bus, spawn
 from jarvis.graph import GraphBuilder
 from jarvis.jobs.engine import TaskEngine
 from jarvis.jobs.notify import Notifier
@@ -73,6 +75,7 @@ class AppState:
         self.personality = personality or load_personality()
         self.permissions = permissions or load_permissions()
         self.started_at = time.time()
+        self.degraded: str | None = None  # set when startup hit a problem the UI/health must show
         for p in (
             settings.paths.data_dir,
             settings.paths.log_dir,
@@ -100,10 +103,12 @@ class AppState:
         self.hermes: HermesClient | None = None
         self.hermes_supervisor = HermesSupervisor(self)
         self.skills = SkillCatalog(settings.paths.data_dir)
+        self.usage = UsageTracker(settings.paths.data_dir / "agent-usage.json")
         self.oneshot = ClaudeOneShot(self)
         self.model_router = ModelRouter(
             settings.agent.model, settings.agent.auto_downgrade, settings.paths.data_dir / "agent-model.json"
         )
+        self.model_router.usage = self.usage
         self.agent: ClaudeCodeAgent | None = ClaudeCodeAgent(self) if settings.agent.provider == "claude_code" else None
         self.memory = MemoryService(Vault(settings.paths.vault_dir), self.embedder, self.structured_llm)
         self.bridge = BridgeClient(settings.paths.data_dir)
@@ -112,13 +117,17 @@ class AppState:
             settings.browser.default_timeout_ms,
             engine=settings.browser.engine,
             profile_dir=settings.paths.data_dir / "edge-profile",
+            antibrow_profile=settings.browser.antibrow_profile,
         )
         self.stt = STTService(settings.voice.stt.server_url, settings.voice.language)
-        self.tts = TTSService(settings.voice.tts)
+        self.tts = TTSService(settings.voice.tts, settings.paths.data_dir / "tts-cache")
         self.orchestrator = Orchestrator(self)
         self.tasks = TaskEngine(self)
         self.scheduler = Scheduler(self)
         self.notifier = Notifier(self)
+        self.usage.notify = lambda level, title, body: self.notifier.notify("agent.usage", title, body, level=level)
+        self.usage.on_change = lambda status: spawn(bus.publish("agent.usage", **status), name="usage-event")
+        self.backup = BackupService(settings, self.notifier)
         self.coding = CodingRunner(self)
         self.telephony: TelephonyService | None = TelephonyService(self) if settings.telephony.enabled else None
         self.connectors = ConnectorManager(self)
@@ -211,6 +220,7 @@ class AppState:
         await self.coding.resume_interrupted()
         await self.tasks.start()
         await self.scheduler.start()
+        await self.backup.start()
         self.notifier.start()
         if self.settings.mobile.enabled:
             await self.livekit.start()
@@ -273,6 +283,7 @@ class AppState:
         await self.hermes_supervisor.stop()
         await self.tasks.stop()
         await self.scheduler.stop()
+        await self.backup.stop()
         await self.memory.stop()
         await self.alerts.stop()
         await self.livekit.stop()
@@ -346,6 +357,7 @@ class AppState:
             "uptime_s": int(time.time() - self.started_at),
             "kill_switch": {"engaged": self.kill_switch.engaged, "reason": self.kill_switch.reason()},
             "components": comps,
+            "degraded": self.degraded,
             "pending_approvals": pending,
             "open_tasks": running,
         }
