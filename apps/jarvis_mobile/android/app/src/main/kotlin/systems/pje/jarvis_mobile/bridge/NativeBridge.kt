@@ -1,6 +1,7 @@
 package systems.pje.jarvis_mobile.bridge
 
 import android.app.NotificationManager
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -18,6 +19,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import systems.pje.jarvis_mobile.JarvisApp
+import systems.pje.jarvis_mobile.assist.Assist
+import systems.pje.jarvis_mobile.assist.WakeWord
 import systems.pje.jarvis_mobile.call.CallManager
 import systems.pje.jarvis_mobile.net.Gateway
 import systems.pje.jarvis_mobile.net.randomNonce
@@ -91,6 +94,12 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
             "setMuted" -> { CallManager.setMuted(context, call.argument<Boolean>("muted") == true); result.success(true) }
             "setEndpoint" -> { CallManager.setEndpoint(context, call.argument<String>("id")!!); result.success(true) }
             "openSettings" -> { openSettings(call.argument<String>("kind") ?: "app"); result.success(true) }
+            "wakeStatus" -> result.success(WakeWord.status(context))
+            "wakeConfigure" -> {
+                WakeWord.configure(context, call.argument<Boolean>("enabled"), call.argument<Boolean>("screenOnly"), call.argument<String>("accessKey"))
+                result.success(WakeWord.status(context))
+            }
+            "openAssist" -> { Assist.launch(context, "app"); result.success(true) }
             else -> result.notImplemented()
         }
     }
@@ -118,8 +127,16 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
             "notifications" -> Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
             "fullscreen" -> if (Build.VERSION.SDK_INT >= 34) Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, pkg) else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
             "battery" -> Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+            "overlay" -> Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkg)
+            // "Digital assistant app" page on Pixel/Samsung; elsewhere the list of default apps
+            "assistant" -> Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)
             else -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
         }
-        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        try {
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: ActivityNotFoundException) {
+            val fallback = if (kind == "assistant") Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS) else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
+            context.startActivity(fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
     }
 }

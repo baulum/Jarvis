@@ -47,6 +47,21 @@ class NativeBridge {
   Future<void> setMuted(bool muted) => _ch.invokeMethod('setMuted', {'muted': muted});
   Future<void> setEndpoint(String id) => _ch.invokeMethod('setEndpoint', {'id': id});
   Future<void> openSettings(String kind) => _ch.invokeMethod('openSettings', {'kind': kind});
+
+  /// "Hey Jarvis": wake word state, permissions and default-assistant status.
+  Future<Map<String, dynamic>> wakeStatus() async =>
+      jsonDecode(await _ch.invokeMethod<String>('wakeStatus') ?? '{}') as Map<String, dynamic>;
+
+  /// Only the given values change; an empty [accessKey] removes the stored key.
+  Future<Map<String, dynamic>> wakeConfigure({bool? enabled, bool? screenOnly, String? accessKey}) async =>
+      jsonDecode(await _ch.invokeMethod<String>(
+                'wakeConfigure',
+                {'enabled': enabled, 'screenOnly': screenOnly, 'accessKey': accessKey},
+              ) ??
+              '{}') as Map<String, dynamic>;
+
+  /// Opens the voice overlay (same as saying "Hey Jarvis").
+  Future<void> openAssist() => _ch.invokeMethod('openAssist');
 }
 
 class NativeEvent {

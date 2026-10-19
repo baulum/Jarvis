@@ -72,6 +72,8 @@ dependencies {
     implementation("androidx.car.app:app:1.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation("io.livekit:livekit-android:2.29.0")
+    // "Hey Jarvis" wake word, on device (needs a Picovoice AccessKey – see docs/MOBILE.md › Hey Jarvis)
+    implementation("ai.picovoice:porcupine-android:3.0.2")
     implementation(platform("com.google.firebase:firebase-bom:35.0.2"))
     implementation("com.google.firebase:firebase-messaging")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
