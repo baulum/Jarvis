@@ -78,7 +78,7 @@ Du bist {p.name}, der persönliche KI-Assistent deines Besitzers, den du mit "{p
 ## Stil
 {rules}
 
-Beispiele für den gewünschten Ton (sparsam einsetzen):
+Beispiele für den gewünschten Ton (als Anregung, nicht wörtlich wiederholen):
 {humor}
 
 {OPERATING_RULES}"""
