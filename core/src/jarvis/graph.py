@@ -50,6 +50,7 @@ _INVALIDATE = (
     "task.created",
     "task.updated",
     "coding.updated",
+    "coding.deleted",
     "schedule.updated",
     "session.created",
     "connector.health",

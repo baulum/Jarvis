@@ -100,6 +100,14 @@ class CodingConnector(Connector):
         async def cancel(ctx: ToolContext, a: dict[str, Any]) -> Any:
             return {"cancelled": await runner().cancel(_uuid(a["job_id"]), ctx.principal.label)}
 
+        async def delete(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            try:
+                return await runner().delete(
+                    _uuid(a["job_id"]), ctx.principal.label, delete_worktree=bool(a.get("delete_worktree", False))
+                )
+            except CodingError as e:
+                raise ToolUserError(str(e)) from e
+
         async def prepare_pr(ctx: ToolContext, a: dict[str, Any]) -> Any:
             try:
                 return await runner().prepare_pr(_uuid(a["job_id"]), a["repo"], a.get("base", "main"))
@@ -162,6 +170,25 @@ class CodingConnector(Connector):
                 cancel,
                 "low",
                 S,
+            ),
+            ToolSpec(
+                "coding_delete_job",
+                "Entfernt einen fehlgeschlagenen oder abgebrochenen Coding-Job (Status failed/cancelled) aus der "
+                "Jobliste. Laufende und abgeschlossene Jobs werden abgelehnt. Git-Branch und Arbeitsordner bleiben "
+                "erhalten; nur mit delete_worktree=true wird der Worktree entfernt (nicht committete Änderungen "
+                "gehen dabei verloren).",
+                _obj(
+                    {"job_id": {"type": "string"}, "delete_worktree": {"type": "boolean", "default": False}},
+                    ["job_id"],
+                ),
+                delete,
+                "low",
+                S,
+                writes=True,
+                summarize=lambda a: (
+                    f"Coding-Job {a['job_id'][:8]} aus der Jobliste entfernen"
+                    + (" (inkl. Worktree)" if a.get("delete_worktree") else "")
+                ),
             ),
             ToolSpec(
                 "coding_prepare_pr",
