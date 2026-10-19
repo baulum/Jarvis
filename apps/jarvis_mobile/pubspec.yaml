@@ -36,7 +36,7 @@ dependencies:
   http: ^1.6.0
   mobile_scanner: ^7.4.2
   local_auth: ^3.0.2
-  record: ^6.2.1
+  record: ^7.1.2
   path_provider: ^2.1.6
   crypto: ^3.0.7
   permission_handler: ^13.0.2
