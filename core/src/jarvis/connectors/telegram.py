@@ -19,6 +19,7 @@ from typing import Any
 import httpx
 
 from jarvis.connectors.base import Connector, Health, Manifest, SecretField
+from jarvis.connectors.kie_creative import generated_dir, resolve_image_path
 from jarvis.events import Event, bus, spawn
 from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
@@ -28,6 +29,7 @@ from jarvis.tools.registry import ToolContext, ToolSpec
 
 logger = logging.getLogger(__name__)
 API = "https://api.telegram.org"
+MAX_PHOTO_BYTES = 10 * 1024 * 1024  # Limit der Bot API für sendPhoto
 
 
 class TelegramConnector(Connector):
@@ -87,6 +89,31 @@ class TelegramConnector(Connector):
         if buttons:
             params["reply_markup"] = {"inline_keyboard": buttons}
         return await self._call("sendMessage", **params)
+
+    async def send_photo(self, path: Path, caption: str | None = None) -> Any:
+        """Sendet eine Bilddatei als Foto an den gekoppelten Besitzer-Chat (multipart-Upload)."""
+        token = self.secret("telegram-bot-token")
+        if not token:
+            raise ToolUserError("Telegram ist nicht eingerichtet (Bot-Token fehlt).")
+        chat = self.settings.get("owner_chat_id")
+        if not chat:
+            raise ToolUserError("Telegram ist noch nicht mit Sir gekoppelt.")
+        if path.stat().st_size > MAX_PHOTO_BYTES:
+            raise ToolUserError("Das Bild ist größer als 10 MB und kann nicht als Foto gesendet werden.")
+        data: dict[str, Any] = {"chat_id": str(chat)}
+        if caption:
+            data["caption"] = caption[:1000]
+        async with httpx.AsyncClient(timeout=60) as c:
+            r = await c.post(
+                f"{API}/bot{token}/sendPhoto", data=data, files={"photo": (path.name, path.read_bytes())}
+            )
+        try:
+            res = r.json()
+        except ValueError:
+            res = {}
+        if not res.get("ok"):
+            raise ToolUserError(f"Telegram: {res.get('description', r.status_code)}")
+        return res["result"]
 
     async def health(self) -> Health:
         try:
@@ -294,6 +321,12 @@ class TelegramConnector(Connector):
             res = await self.send(a["text"])
             return {"message_id": res.get("message_id")}
 
+        async def send_photo(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            # Nur von Jarvis erzeugte Bilder dürfen versendet werden – keine beliebigen Dateien (Datenabfluss).
+            path = resolve_image_path(self.state, a["image_path"], roots=[generated_dir(self.state).resolve()])
+            res = await self.send_photo(path, a.get("caption"))
+            return {"message_id": res.get("message_id"), "file": path.name}
+
         return [
             ToolSpec(
                 "telegram_send_message",
@@ -307,5 +340,23 @@ class TelegramConnector(Connector):
                 send,
                 "low",
                 "telegram",
-            )
+            ),
+            ToolSpec(
+                "telegram_send_photo",
+                "Sendet Sir ein von image_generate erzeugtes Bild als Foto per Telegram. Erfordert Freigabe.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "image_path": {"type": "string", "minLength": 1, "description": "Pfad aus image_generate"},
+                        "caption": {"type": "string", "maxLength": 1000},
+                    },
+                    "required": ["image_path"],
+                    "additionalProperties": False,
+                },
+                send_photo,
+                "high",  # Außenwirkung (Versand an externen Dienst) → Freigabesystem, wie E-Mail-Versand
+                "telegram",
+                writes=True,
+                summarize=lambda a: f"Bild per Telegram an Sir senden: {Path(str(a.get('image_path', ''))).name}",
+            ),
         ]
