@@ -1,4 +1,5 @@
-"""Agent tools for the phone: notify Sir, call him now, or call him once something is finished.
+"""Agent tools for the phone: notify Sir, call him now, call him once something is finished, or read the
+phone's last location (only while Sir shares it in the app; see ``jarvis.mobile.location``).
 
 Risk ``low``: they only reach Sir himself (no third party). Calls are still bounded by the alert engine
 (explicit instruction only, one call per event, rate limits, quiet hours, honest availability checks), and
@@ -66,6 +67,9 @@ def mobile_tools(state: AppState) -> list[ToolSpec]:
         )
         return {"watch": watch, "note": note.strip()}
 
+    async def get_location(ctx: ToolContext, a: dict[str, Any]) -> Any:
+        return await state.location.current()
+
     trigger_schema = {
         "type": "object",
         "properties": {
@@ -132,5 +136,20 @@ def mobile_tools(state: AppState) -> list[ToolSpec]:
             "low",
             "system",
             summarize=lambda a: f"Rückruf vormerken ({a['trigger'].get('type')}): {a['message'][:80]}",
+        ),
+        ToolSpec(
+            "mobile_get_location",
+            "Liefert Sirs zuletzt vom Handy (J.A.R.V.I.S.-App) gemeldeten Standort: Breiten-/Längengrad, Genauigkeit "
+            "in Metern, Messzeitpunkt und Alter in Minuten; fragt das Handy bei Bedarf nach einem frischen Standort. "
+            "Für Fragen wie „wie lange brauche ich zu X?“ oder „mach mir eine Route dahin“ – nur abrufen, wenn der "
+            "Standort für Sirs Anfrage nötig ist. Ist er älter als 10 Minuten oder fehlt er, steht das in 'note': "
+            "Sir darauf hinweisen. Koordinaten vertraulich behandeln: nicht im Gedächtnis/in Notizen speichern, "
+            "nicht an andere Werkzeuge, Websites oder Personen weitergeben und Sir nicht ungefragt vorlesen.",
+            {"type": "object", "properties": {}, "additionalProperties": False},
+            get_location,
+            "read",
+            "system",
+            timeout_s=30,
+            summarize=lambda a: "Standort des Handys abrufen",
         ),
     ]

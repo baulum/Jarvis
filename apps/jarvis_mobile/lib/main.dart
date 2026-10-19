@@ -144,6 +144,8 @@ class _JarvisMobileState extends ConsumerState<JarvisMobile> with WidgetsBinding
     if (s == AppLifecycleState.resumed) {
       ref.read(liveSocketProvider)?.nudge();
       ref.invalidate(availabilityProvider);
+      // only sends anything if Sir switched location sharing on (Einstellungen › Standortfreigabe)
+      if (ref.read(isPairedProvider)) ref.read(nativeProvider).reportLocation().catchError((Object _) => false);
     }
   }
 

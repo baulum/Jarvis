@@ -47,6 +47,18 @@ class NativeBridge {
   Future<void> setMuted(bool muted) => _ch.invokeMethod('setMuted', {'muted': muted});
   Future<void> setEndpoint(String id) => _ch.invokeMethod('setEndpoint', {'id': id});
   Future<void> openSettings(String kind) => _ch.invokeMethod('openSettings', {'kind': kind});
+
+  /// Location sharing with Jarvis: `{enabled, permission: none|while_in_use|always, precise, location_on}`.
+  Future<Map<String, dynamic>> locationStatus() async =>
+      jsonDecode(await _ch.invokeMethod<String>('locationStatus') ?? '{}') as Map<String, dynamic>;
+
+  /// Switches sharing on (sends a fix right away; `sent` in the result) or off (deletes it on the server).
+  Future<Map<String, dynamic>> setLocationSharing(bool enabled) async =>
+      jsonDecode(await _ch.invokeMethod<String>('setLocationSharing', {'enabled': enabled}) ?? '{}')
+          as Map<String, dynamic>;
+
+  /// Sends the current position if sharing is on; false otherwise.
+  Future<bool> reportLocation() async => await _ch.invokeMethod<bool>('reportLocation') ?? false;
 }
 
 class NativeEvent {
