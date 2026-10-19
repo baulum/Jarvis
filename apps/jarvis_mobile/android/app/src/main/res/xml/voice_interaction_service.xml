@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Makes J.A.R.V.I.S. selectable as the default digital assistant (assist gesture, long-press power/home) -->
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:recognitionService="systems.pje.jarvis_mobile.assist.JarvisRecognitionService"
+    android:sessionService="systems.pje.jarvis_mobile.assist.JarvisVoiceSessionService"
+    android:settingsActivity="systems.pje.jarvis_mobile.MainActivity"
+    android:supportsAssist="true"
+    android:supportsLaunchVoiceAssistFromKeyguard="false"
+    android:supportsLocalInteraction="false" />

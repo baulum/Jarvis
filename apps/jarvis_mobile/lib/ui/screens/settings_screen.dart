@@ -10,6 +10,7 @@ import '../../core/theme.dart';
 import '../../state/providers.dart';
 import '../widgets/hud.dart';
 import '../widgets/model_picker.dart';
+import '../widgets/wake_settings.dart';
 
 const _categories = [
   ('task', 'Aufgaben', 'Website fertig, Auftrag erledigt'),
@@ -246,6 +247,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ];
                 },
               ),
+              const SizedBox(height: J.s6),
+              const WakeSettings(),
               const SizedBox(height: J.s6),
               const Caps('Berechtigungen'),
               Wrap(spacing: J.s4, children: [

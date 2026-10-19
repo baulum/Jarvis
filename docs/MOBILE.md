@@ -127,6 +127,8 @@ eine stille Meldung „J.A.R.V.I.S. ist wieder online“.
 | `BLUETOOTH_CONNECT` | Namen von Headset/Auto in der Audioauswahl | |
 | `CAMERA` | nur QR-Scan bei der Kopplung | |
 | Akku-Optimierung | optional | bei Herstellern mit aggressivem Energiesparen (Xiaomi, Huawei …) |
+| `SYSTEM_ALERT_WINDOW` | Sprachfenster nach „Hey Jarvis“ über anderen Apps öffnen | nur in den Einstellungen erteilbar; unnötig, wenn Jarvis Standard-Assistent ist (§14) |
+| `RECEIVE_BOOT_COMPLETED` | Hinweis „Hey Jarvis wieder aktivieren“ nach Neustart | automatisch |
 
 ## 6. Anrufe
 
@@ -269,6 +271,8 @@ nicht möglich
 | Offline-Anzeige | ✅ | Reducer-Test; auf Gerät nicht provoziert |
 | Android Auto Anzeige/Lenkrad | ⬜ 🚗 | siehe §9 |
 | Play-Production mit Calling-Kategorie | ⛔ | Google erlaubt derzeit nur interne/geschlossene Tests |
+| „Hey Jarvis“ (Porcupine), Sprachfenster, Standard-Assistent | ⬜ | implementiert (§14); weder gebaut noch auf Gerät getestet – siehe §14 › Stand |
+| Sprachaufbereitung fürs Vorlesen (Markdown/Links) | ✅ | `AssistSpeechTest` (JVM) |
 
 Testsummen (2026-10-17): Core 108 Unit + 46 Integration + E2E (Sprache, Mobile-Anruf), Flutter 10, Kotlin 5.
 
@@ -320,3 +324,79 @@ LiveKit/WebRTC und die Car App Library. Wechsel des Signierschlüssels = Neuinst
 - Erste Graph-Anordnung auf sehr langsamen Geräten dauert einige Sekunden (läuft im Hintergrund-Isolate).
 - Mehrere Telefone: ein Anruf klingelt auf allen, das erste nimmt an, die anderen hören auf (implementiert, nicht
   mit zwei Geräten getestet).
+- „Hey Jarvis“: siehe §14 › Grenzen.
+
+## 14. „Hey Jarvis“ – Sprachassistent wie Google Assistant
+
+Sir sagt **„Hey Jarvis“** → über dem aktuellen Bildschirm öffnet sich unten ein Sprachfenster („Ja, Sir?“, kurzer Ton)
+→ Frage sprechen → Jarvis zeigt die Antwort und liest sie vor. Fragt Jarvis zurück, hört das Fenster direkt weiter.
+Dasselbe Fenster öffnet die Assistent-Geste, wenn J.A.R.V.I.S. Standard-Assistent ist.
+
+```
+ Porcupine (on-device, Foreground-Service „microphone“)
+   └─ Wake-Word ─► Standard-Assistent? ─ ja ─► VoiceInteractionSession (Systemfenster, ohne Zusatzrecht)
+                                       └ nein ► AssistOverlayActivity (braucht „Über anderen Apps einblenden“,
+                                                 sonst Heads-up-/Vollbild-Benachrichtigung „Ja, Sir?“ zum Antippen)
+ Sprachfenster: Mikrofon (16 kHz, Pausenerkennung) → /api/voice/stt (Whisper im Core)
+               → /api/chat {channel: mobile, wait: true} (derselbe Agent, dieselbe Sitzung 10 min lang)
+               → Text anzeigen + Android-TTS (Deutsch, auf dem Gerät) · „In der App“ öffnet die Unterhaltung
+```
+
+Beide Core-Pfade stehen schon auf der Gateway-Allowlist – am Core ändert sich nichts.
+
+### Zugangsschlüssel (Picovoice AccessKey) – nötig
+
+Die Wake-Word-Erkennung nutzt **Picovoice Porcupine** (läuft komplett auf dem Telefon, sehr sparsam). Porcupine
+verlangt einen **AccessKey**:
+1. Konto auf <https://console.picovoice.ai> anlegen (kostenlos für private Nutzung; Ihre Entscheidung).
+2. AccessKey kopieren → App › Einstellungen › **Hey Jarvis** › einfügen › **Speichern**.
+   Der Schlüssel liegt AES-verschlüsselt (Android Keystore) nur auf dem Telefon und bleibt beim Abmelden erhalten.
+3. Porcupine braucht beim ersten Start Internet zur Aktivierung des Schlüssels; danach erkennt es offline.
+
+Fehler wie „AccessKey ungültig“ oder „Gerätelimit erreicht“ erscheinen im Status und in der Dienst-Benachrichtigung.
+
+**Schlüsselwort:** Standard ist das eingebaute **„Jarvis“** – es löst auch bei „Hey Jarvis“ aus. Für exakt
+„Hey Jarvis“: in der Picovoice Console ein Schlüsselwort „Hey Jarvis“ für **Android** trainieren und die `.ppn`-Datei
+nach `apps/jarvis_mobile/android/app/src/main/assets/wakeword/` legen (für ein deutsches Modell zusätzlich
+`porcupine_params_de.pv` in denselben Ordner), dann neu bauen. Die App nimmt automatisch die erste `.ppn`.
+Die Datei muss zur Porcupine-Version 3.x passen.
+
+### Einrichtung auf dem Telefon (einmalig)
+
+1. App › Einstellungen › **Hey Jarvis**: AccessKey speichern, Schalter **„Hey Jarvis“ erkennen** an. Die App erklärt
+   vorher, was passiert, und fragt nach **Mikrofon** und **Benachrichtigungen**.
+2. **Entweder** „Über anderen Apps“ › **Erlauben** (Systemseite → J.A.R.V.I.S. einschalten)
+   **oder** „Standard-Assistent“ › **Festlegen** → „Digitaler Assistent“ / „Standard-Assistent-App“ → **J.A.R.V.I.S.**
+   Mit Standard-Assistent funktionieren zusätzlich die Assistent-Geste (Ecke wischen, Ein-Taste/Home lang drücken).
+   Hinweis: Damit ersetzt Jarvis Google Assistant/Gemini für diese Geste.
+3. **Sprachfenster testen** prüft Mikrofon, Whisper und Antwort ohne Wake-Word.
+4. Empfohlen: Akku-Optimierung für J.A.R.V.I.S. ausschalten (Einstellungen › Berechtigungen › Akku), sonst beenden
+   manche Hersteller den Dienst.
+
+### Akku und Verhalten
+
+- Porcupine braucht nur wenige Prozent eines Kerns; Audio verlässt das Telefon erst nach dem Aktivierungswort.
+- **Standard: nur bei eingeschaltetem Bildschirm** – bei ausgeschaltetem Bildschirm ist das Mikrofon ganz aus.
+  Abschaltbar in den Einstellungen (dann auch mit Bildschirm aus, kostet mehr Akku).
+- Pausiert automatisch während Jarvis-Anrufen und solange das Sprachfenster offen ist (gibt das Mikrofon frei).
+  Anrufe selbst sind unverändert.
+- Benachrichtigung „„Hey Jarvis“ ist aktiv“ (still): Antippen öffnet das Sprachfenster, Aktionen **Pausieren** /
+  **Ausschalten**.
+- Musik/Podcasts pausieren, solange Jarvis zuhört und spricht.
+- **Gesperrtes Telefon:** Das Fenster bittet zuerst ums Entsperren; vorher wird nichts aufgenommen und nichts gezeigt.
+- **Nach Neustart / App-Update:** Android erlaubt keinen Mikrofondienst aus dem Hintergrund. Es erscheint der Hinweis
+  „„Hey Jarvis“ wieder aktivieren“ – einmal antippen (oder die App öffnen), dann läuft die Erkennung wieder.
+
+### Grenzen / Stand
+
+- **Nicht gebaut, nicht auf einem Gerät getestet:** In der Arbeitsumgebung dieser Änderung war kein Flutter-SDK
+  verfügbar. Vor der Nutzung `cd apps/jarvis_mobile && flutter build apk --debug` ausführen (Gradle `assembleDebug`);
+  die Abhängigkeit `ai.picovoice:porcupine-android:3.0.2` wird dabei aus Maven Central geladen.
+- Echtes „Always-on“ bei ausgeschaltetem Bildschirm über den Hotword-DSP (wie Google) ist Drittanbietern verwehrt
+  (`AlwaysOnHotwordDetector` braucht Systemrechte) – deshalb Porcupine im Vordergrunddienst.
+- Die Antwort wird mit der Android-Stimme (TTS auf dem Gerät) vorgelesen, nicht mit Jarvis' Fish-Audio-Stimme:
+  `/api/voice/tts` steht bewusst nicht auf der Mobile-Allowlist. Für Jarvis' Stimme lieber anrufen.
+- Lange Aufträge: Das Fenster wartet bis zu 3 Minuten; danach „Jarvis antwortet nicht rechtzeitig“ – der Auftrag
+  läuft im Core weiter, das Ergebnis steht in der App (Chat).
+- `ACTION_ASSIST`-Aktivität und Spracherkennungsdienst sind exportiert (Android verlangt das); jede Aufnahme ist
+  sichtbar und erst nach dem Entsperren möglich.
