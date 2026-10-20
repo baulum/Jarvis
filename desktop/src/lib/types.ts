@@ -430,6 +430,8 @@ export interface CodingJob {
   worktree_path: string | null;
   result: Record<string, unknown> | null;
   test_command: string | null;
+  model?: string | null;
+  effort?: string | null;
   created_at: string;
   finished_at: string | null;
 }

@@ -182,14 +182,32 @@ backup:
   encrypt: true
 
 coding:
-  claude_binary: claude
+  # Alle Coding-Jobs laufen über diesen Befehl (Programmname im PATH oder absoluter Pfad); kein Fallback auf "claude".
+  claude_command: claudeb
+  # "claudeb" ist bei Sir ein zsh-Alias (claude --dangerously-skip-permissions), kein Programm. Der Runner löst
+  # ihn über diese Tabelle auf (ein echtes Programm "claudeb" im PATH hätte Vorrang). Das Bypass-Flag ist
+  # absichtlich NICHT eingetragen: --restricted verweigert es, und es würde die Freigabelisten unten aushebeln.
+  # Gewollt? Dann: claudeb: [claude, --dangerously-skip-permissions] und restricted: false.
+  claude_aliases:
+    claudeb: [claude]
+  restricted: true
+  # claude_env:                # optionale Umgebung für den Befehl, z. B. CLAUDE_CONFIG_DIR: ~/.claude-b
+  # Modell für Coding-Jobs ohne Angabe: haiku | sonnet | opus; leer = aktuell im Chat gewähltes Modell.
+  default_model: ""
   max_parallel_jobs: 1
   job_timeout_minutes: 60
   allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm:*)", "Bash(npx:*)", "Bash(pnpm:*)",
                   "Bash(node:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git add:*)",
                   "Bash(git commit:*)", "Bash(ls:*)", "Bash(mkdir:*)", "Bash(python3:*)", "Bash(uv:*)",
                   "Bash(git rm:*)", "Bash(git mv:*)", "Bash(rm:*)", "Bash(mv:*)", "Bash(cp:*)", "Bash(cat:*)",
-                  "Bash(curl:*)", "Bash(lsof:*)", "Bash(open:*)"]
+                  "Bash(curl:*)", "Bash(lsof:*)", "Bash(open:*)",
+                  # reine Lesebefehle (auch als Teil von && / Pipes nötig: jeder Teil wird einzeln geprüft)
+                  "Bash(git log:*)", "Bash(git show:*)", "Bash(git worktree list:*)", "Bash(git branch)",
+                  "Bash(git branch -a:*)", "Bash(git branch -r:*)", "Bash(git branch -v:*)",
+                  "Bash(git branch -vv:*)", "Bash(git branch --list:*)", "Bash(git branch --show-current)",
+                  "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(which:*)"]
+  # Nur lesen (Edit/Write dort werden verweigert):
+  extra_read_dirs: [/Users/paul/Downloads]
   # false = Claude Code läuft direkt auf dem Mac (Netzwerk, lokale Ports, Google Fonts, next build funktionieren)
   sandbox: false
 

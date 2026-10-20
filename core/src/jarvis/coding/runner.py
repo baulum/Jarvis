@@ -2,7 +2,8 @@
 
 Isolation & policy (see SECURITY.md):
 * every job runs in its own git worktree under ``paths.workspaces_dir`` on a ``jarvis/*`` branch;
-* ``claude -p`` runs with ``--restricted`` (ignores project/user settings and hooks, file tools
+* the CLI is started via ``coding.claude_command`` (default ``claudeb``, a shell alias that is expanded through
+  ``coding.claude_aliases``); ``-p`` runs with ``--restricted`` (ignores project/user settings and hooks, file tools
   confined to the worktree), ``--strict-mcp-config`` (no repo MCP servers), an explicit tool
   allowlist, ``--permission-mode acceptEdits`` + ``--permission-prompts none`` and the macOS
   Seatbelt bash sandbox with a strict network allowlist (``--settings``);
@@ -28,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
+from jarvis.agent.model_router import EFFORTS, model_id, resolve_alias
 from jarvis.db import session_scope
 from jarvis.db.models import CodingJob
 from jarvis.events import bus
@@ -37,6 +39,54 @@ if TYPE_CHECKING:
     from jarvis.app_state import AppState
 
 logger = logging.getLogger(__name__)
+
+# Where the Claude command is searched besides $PATH (the core often runs with a minimal launchd PATH).
+_CLI_DIRS = ("~/.local/bin", "~/bin", "/opt/homebrew/bin", "/usr/local/bin")
+# Pauses before the 1st/2nd/3rd automatic continuation after a transient API/network error.
+RETRY_DELAYS = (30, 90, 180)
+RETRY_PROMPT = (
+    "Die Verbindung zur API war kurz unterbrochen. Mache genau dort weiter, wo du aufgehört hast, "
+    "und schließe den ursprünglichen Auftrag ab."
+)
+_TRANSIENT_RE = re.compile(
+    r"ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|can'?t reach the api server|overloaded|"
+    r"(?:API Error|status|HTTP)\D{0,12}\b5\d\d\b|internal server error|bad gateway|service unavailable|"
+    r"gateway time-?out",
+    re.IGNORECASE,
+)
+SYSTEM_PROMPT_HINT = (
+    "Führe Shell-Befehle einzeln aus: keine Verkettung mit &&, ; oder ||, möglichst keine Pipes und kein `cd x && …` "
+    "(die Rechteprüfung bewertet jeden Teil eines zusammengesetzten Befehls einzeln; ein nicht freigegebener Teil "
+    "blockiert den ganzen Befehl). Nutze zum Lesen bevorzugt Read, Glob und Grep."
+)
+
+
+def is_transient_error(text: str) -> bool:
+    return bool(_TRANSIENT_RE.search(text or ""))
+
+
+def _which(name: str, path: str | None) -> str | None:
+    if not name.strip():
+        return None
+    search = [str(Path(d).expanduser()) for d in _CLI_DIRS]
+    base = os.environ.get("PATH", "") if path is None else path
+    return shutil.which(os.path.expanduser(name), path=os.pathsep.join([*([base] if base else []), *search]))
+
+
+def resolve_command(
+    command: str, aliases: dict[str, list[str]] | None = None, path: str | None = None
+) -> list[str] | None:
+    """argv prefix that starts ``command``, or None. A real program wins; otherwise a configured shell alias
+    (``aliases[command]`` = [program, *extra args]) is expanded. Never falls back to another command."""
+    exe = _which(command, path)
+    if exe is not None:
+        return [exe]
+    expansion = (aliases or {}).get(command)
+    if expansion:
+        target = _which(expansion[0], path)
+        if target is not None:
+            return [target, *expansion[1:]]
+    return None
 
 _STRIP_ENV = (
     "ANTHROPIC_API_KEY",
@@ -75,6 +125,10 @@ class CodingError(RuntimeError):
     pass
 
 
+class TransientCodingError(CodingError):
+    """The CLI ended without a result because of a temporary API/network problem (retried automatically)."""
+
+
 class CodingRunner:
     def __init__(self, state: AppState) -> None:
         self.state = state
@@ -84,11 +138,17 @@ class CodingRunner:
         self._sem = asyncio.Semaphore(self.cfg.max_parallel_jobs)
         self._procs: dict[uuid.UUID, asyncio.subprocess.Process] = {}
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
+        self._sessions: dict[uuid.UUID, str] = {}  # latest Claude session id per job (for automatic continuation)
+        self.retry_delays: tuple[float, ...] = RETRY_DELAYS
 
     # ------------------------------------------------------------------ environment
     def _env(self) -> dict[str, str]:
         env = {k: v for k, v in os.environ.items() if k not in _STRIP_ENV and not k.startswith("JARVIS_SECRET")}
         env["PATH"] = os.environ.get("PATH", "") + ":/opt/homebrew/bin:/usr/local/bin"
+        for k, v in (getattr(self.cfg, "claude_env", None) or {}).items():
+            if k in _STRIP_ENV:
+                raise CodingError(f"coding.claude_env darf {k} nicht setzen (nur Subscription-Login erlaubt)")
+            env[k] = os.path.expanduser(str(v))
         env["GIT_TERMINAL_PROMPT"] = "0"
         # Package-manager caches live in a dedicated, sandbox-writable directory (not ~/.npm etc.).
         cache = self.workspaces / ".cache"
@@ -98,12 +158,24 @@ class CodingRunner:
         env["PNPM_HOME"] = str(cache / "pnpm")
         return env
 
+    def _claude_cmd(self) -> list[str]:
+        command = self.cfg.claude_command
+        cmd = resolve_command(command, getattr(self.cfg, "claude_aliases", None))
+        if cmd is None:
+            raise CodingError(
+                f"{command} nicht gefunden (weder als Programm im PATH bzw. ~/.local/bin, ~/bin, /opt/homebrew/bin, "
+                "/usr/local/bin noch als Alias in coding.claude_aliases aufzulösen). Es gibt bewusst keinen "
+                "Fallback auf 'claude'."
+            )
+        return cmd
+
     async def auth_status(self) -> dict[str, Any]:
-        exe = shutil.which(self.cfg.claude_binary)
-        if exe is None:
-            return {"ok": False, "error": "Claude Code CLI nicht gefunden"}
+        try:
+            cmd = self._claude_cmd()
+        except CodingError as e:
+            return {"ok": False, "error": str(e)}
         proc = await asyncio.create_subprocess_exec(
-            exe, "auth", "status", env=self._env(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            *cmd, "auth", "status", env=self._env(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         out, err = await asyncio.wait_for(proc.communicate(), timeout=30)
         try:
@@ -170,6 +242,32 @@ class CodingRunner:
         await self._git(target.parent, "clone", "--depth", "50", "--no-recurse-submodules", url, str(target))
         return target
 
+    # ------------------------------------------------------------------ model / effort
+    def resolve_model(self, requested: str | None) -> str:
+        """Full model id: explicit alias/id, else ``coding.default_model``, else the model chosen in the chat."""
+        if requested and requested.strip().lower() != "auto":
+            alias = resolve_alias(requested)
+            if alias is None:
+                raise CodingError(f"Unbekanntes Modell '{requested}' (erlaubt: haiku, sonnet, opus, auto)")
+            return model_id(alias)
+        configured = getattr(self.cfg, "default_model", "") or ""
+        alias = resolve_alias(configured)
+        if configured and configured.lower() != "auto" and alias is None:
+            raise CodingError(f"coding.default_model '{configured}' ist kein bekanntes Modell")
+        if alias is None:
+            router = getattr(self.state, "model_router", None)
+            alias = resolve_alias(getattr(router, "default", None)) or "sonnet"
+        return model_id(alias)
+
+    def resolve_effort(self, requested: str | None) -> str | None:
+        if requested is None or requested == "" or requested == "auto":
+            router = getattr(self.state, "model_router", None)
+            effort = getattr(router, "effort", None)
+            return effort if effort in EFFORTS else None
+        if requested not in EFFORTS:
+            raise CodingError(f"Unbekannter Effort '{requested}' (erlaubt: {', '.join(EFFORTS)})")
+        return requested
+
     # ------------------------------------------------------------------ jobs
     async def create_job(
         self,
@@ -180,7 +278,11 @@ class CodingRunner:
         test_command: str | None = None,
         task_id: uuid.UUID | None = None,
         actor: str = "system",
+        model: str | None = None,
+        effort: str | None = None,
     ) -> CodingJob:
+        model_full = self.resolve_model(model)
+        effort_value = self.resolve_effort(effort)
         repo = Path(os.path.expanduser(repo_path)).resolve()
         home = Path.home().resolve()
         if not repo.is_relative_to(home):
@@ -197,10 +299,17 @@ class CodingRunner:
                 status="queued",
                 test_command=test_command,
                 task_id=task_id,
+                model=model_full,
+                effort=effort_value,
             )
             s.add(job)
             await s.flush()
-        await audit(actor, "coding.create", target=str(job.id), details={"title": title, "repo": str(repo)})
+        await audit(
+            actor,
+            "coding.create",
+            target=str(job.id),
+            details={"title": title, "repo": str(repo), "model": model_full, "effort": effort_value},
+        )
         await bus.publish("coding.updated", job_id=str(job.id), status="queued", title=title)
         self._tasks[job.id] = asyncio.create_task(self._run(job.id))
         return job
@@ -319,6 +428,8 @@ class CodingRunner:
                     return
                 title, prompt, repo, test_cmd = job.title, job.prompt, Path(job.repo_path), job.test_command
                 worktree, branch, claude_sid = job.worktree_path, job.branch, job.claude_session_id
+                job_model = job.model or self.resolve_model(None)  # jobs created before model selection
+                job_effort = job.effort
             if self.state.kill_switch.engaged:
                 await self._finish(job_id, title, "failed", {"error": "Not-Aus aktiv"})
                 return
@@ -345,8 +456,14 @@ class CodingRunner:
                     "lauffähig. Wenn es Tests oder einen Build gibt, führe sie aus und behebe Fehler. "
                     "Fasse am Ende kurz zusammen, was du gemacht hast."
                 )
-                result = await self._claude(
-                    job_id, Path(worktree), full_prompt, log_path, resume_session=claude_sid if resume else None
+                result = await self._claude_retrying(
+                    job_id,
+                    Path(worktree),
+                    full_prompt,
+                    log_path,
+                    resume_session=claude_sid if resume else None,
+                    model=job_model,
+                    effort=job_effort,
                 )
                 tests: dict[str, Any] | None = None
                 if test_cmd and not result.get("is_error"):
@@ -361,8 +478,14 @@ class CodingRunner:
                             job_id=str(job_id),
                             text="Tests fehlgeschlagen – automatische Fehleranalyse",
                         )
-                        result = await self._claude(
-                            job_id, Path(worktree), fix_prompt, log_path, resume_session=result.get("session_id")
+                        result = await self._claude_retrying(
+                            job_id,
+                            Path(worktree),
+                            fix_prompt,
+                            log_path,
+                            resume_session=result.get("session_id"),
+                            model=job_model,
+                            effort=job_effort,
                         )
                         tests = await self._run_tests(Path(worktree), test_cmd)
                 commit = await self._commit(Path(worktree), title)
@@ -384,7 +507,14 @@ class CodingRunner:
                         "branch": branch,
                         "worktree": worktree,
                         "permission_denials": result.get("permission_denials", [])[:20],
-                        "error": "; ".join(result.get("errors", []))[:1000] if result.get("is_error") else None,
+                        "model": job_model,
+                        "effort": job_effort,
+                        "retries": result.get("_retries", 0),
+                        "error": (
+                            ("; ".join(result.get("errors") or []) or str(result.get("result", "")))[:1000]
+                            if result.get("is_error")
+                            else None
+                        ),
                     },
                 )
             except asyncio.CancelledError:
@@ -398,8 +528,26 @@ class CodingRunner:
                     {"error": f"{type(e).__name__}: {e}"[:1000], "worktree": worktree, "branch": branch},
                 )
 
-    def _claude_argv(self, prompt: str, resume_session: str | None) -> list[str]:
-        exe = shutil.which(self.cfg.claude_binary) or self.cfg.claude_binary
+    def _read_dirs(self) -> list[Path]:
+        dirs = [Path(os.path.expanduser(d)).resolve() for d in getattr(self.cfg, "extra_read_dirs", None) or []]
+        return [d for d in dirs if d.is_dir()]
+
+    def _claude_argv(
+        self,
+        prompt: str,
+        resume_session: str | None,
+        *,
+        model: str | None = None,
+        effort: str | None = None,
+        continue_session: bool = False,
+    ) -> list[str]:
+        cmd = self._claude_cmd()
+        restricted = getattr(self.cfg, "restricted", True)
+        if restricted and "--dangerously-skip-permissions" in cmd:
+            raise CodingError(
+                "--dangerously-skip-permissions wird von --restricted verweigert: entweder das Flag aus "
+                "coding.claude_aliases entfernen oder bewusst coding.restricted: false setzen."
+            )
         settings: dict[str, Any] = {}
         if self.cfg.sandbox:
             settings["sandbox"] = {
@@ -411,13 +559,13 @@ class CodingRunner:
                 "filesystem": {"allowWrite": [str(self.workspaces / ".cache")]},
             }
         argv = [
-            exe,
+            *cmd,
             "-p",
             prompt,
             "--output-format",
             "stream-json",
             "--verbose",
-            "--restricted",
+            *(["--restricted"] if restricted else []),
             "--tools",
             "Read",
             "Edit",
@@ -439,14 +587,98 @@ class CodingRunner:
             "--settings",
             json.dumps(settings),
         ]
+        hint = SYSTEM_PROMPT_HINT
+        read_dirs = self._read_dirs()
+        if read_dirs:
+            for d in read_dirs:
+                argv += ["--add-dir", str(d)]
+            # read-only: "//" marks an absolute path in permission rules
+            deny = [f"{tool}(/{d}/**)" for d in read_dirs for tool in ("Edit", "Write")]
+            argv += ["--disallowedTools", *deny]
+            hint += " Zusätzlich lesbar (nur lesen, nichts ändern): " + ", ".join(str(d) for d in read_dirs) + "."
+        argv += ["--append-system-prompt", hint]
+        if model:
+            argv += ["--model", model]
+        if effort:
+            argv += ["--effort", effort]
         if resume_session:
             argv += ["--resume", resume_session]
+        elif continue_session:
+            argv += ["--continue"]
         return argv
 
-    async def _claude(
-        self, job_id: uuid.UUID, cwd: Path, prompt: str, log_path: Path, resume_session: str | None = None
+    async def _claude_retrying(
+        self,
+        job_id: uuid.UUID,
+        cwd: Path,
+        prompt: str,
+        log_path: Path,
+        *,
+        resume_session: str | None = None,
+        model: str | None = None,
+        effort: str | None = None,
     ) -> dict[str, Any]:
-        argv = self._claude_argv(prompt, resume_session)
+        """Runs the CLI; on transient API/network errors continues the same session (--resume / --continue)
+        after 30 s / 90 s / 180 s, at most three times."""
+        retries = 0
+        session = resume_session
+        while True:
+            result: dict[str, Any] = {}
+            try:
+                result = await self._claude(
+                    job_id,
+                    cwd,
+                    prompt,
+                    log_path,
+                    resume_session=session,
+                    model=model,
+                    effort=effort,
+                    continue_session=retries > 0 and not session,
+                )
+                failure = (
+                    "; ".join([*(result.get("errors") or []), str(result.get("result", ""))])
+                    if result.get("is_error")
+                    else ""
+                )
+                if not is_transient_error(failure):
+                    if retries:
+                        result["_retries"] = retries
+                    return result
+            except TransientCodingError as e:
+                failure = str(e)
+            session = self._sessions.get(job_id) or result.get("session_id") or session
+            if retries >= len(self.retry_delays):
+                msg = f"API/Netzwerk weiterhin nicht erreichbar nach {retries} automatischen Wiederholungen: {failure}"
+                if result:
+                    return {**result, "errors": [msg[:900]], "_retries": retries}
+                raise CodingError(msg[:1000])
+            delay = self.retry_delays[retries]
+            retries += 1
+            note = f"Netzwerk-/API-Fehler, Fortsetzung {retries}/{len(self.retry_delays)} in {delay:g} s"
+            logger.warning("Coding job %s: %s (%s)", job_id, note, failure[:200])
+            with log_path.open("a", encoding="utf-8") as log:
+                log.write(json.dumps({"type": "retry", "text": f"{note}: {failure[:300]}"}, ensure_ascii=False) + "\n")
+            await bus.publish("coding.progress", job_id=str(job_id), type="retry", text=note)
+            await asyncio.sleep(delay)
+            if getattr(getattr(self.state, "kill_switch", None), "engaged", False):
+                raise CodingError("Not-Aus aktiv")
+            prompt = RETRY_PROMPT
+
+    async def _claude(
+        self,
+        job_id: uuid.UUID,
+        cwd: Path,
+        prompt: str,
+        log_path: Path,
+        resume_session: str | None = None,
+        *,
+        model: str | None = None,
+        effort: str | None = None,
+        continue_session: bool = False,
+    ) -> dict[str, Any]:
+        argv = self._claude_argv(
+            prompt, resume_session, model=model, effort=effort, continue_session=continue_session
+        )
         proc = await asyncio.create_subprocess_exec(
             *argv,
             cwd=cwd,
@@ -478,6 +710,8 @@ class CodingRunner:
                         log.write(json.dumps(compact, ensure_ascii=False) + "\n")
                         log.flush()
                         if ev.get("type") == "system" and ev.get("subtype") == "init":
+                            if ev.get("session_id"):
+                                self._sessions[job_id] = ev["session_id"]
                             await self._update(job_id, claude_session_id=ev.get("session_id"))
                         elif ev.get("type") == "result":
                             result = ev
@@ -491,7 +725,8 @@ class CodingRunner:
             self._procs.pop(job_id, None)
         if not result:
             err = (await proc.stderr.read()).decode()[-800:] if proc.stderr else ""
-            raise CodingError(f"Claude Code beendet ohne Ergebnis (Exit {proc.returncode}): {err}")
+            exc = TransientCodingError if is_transient_error(err) else CodingError
+            raise exc(f"Claude Code beendet ohne Ergebnis (Exit {proc.returncode}): {err}")
         return result
 
     async def _run_tests(self, cwd: Path, command: str) -> dict[str, Any]:

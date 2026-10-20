@@ -193,10 +193,24 @@ class NotificationsCfg(_Strict):
 
 
 class CodingCfg(_Strict):
-    claude_binary: str = "claude"
+    # Coding jobs always run through this command (no silent fallback to plain "claude").
+    # Program name (looked up in PATH, ~/.local/bin, ~/bin, /opt/homebrew/bin, /usr/local/bin) or absolute path.
+    claude_command: str = "claudeb"
+    # Shell aliases cannot be started by subprocess: name → argv prefix that replaces it. A real program of that name
+    # in PATH wins. `claudeb` is Sir's zsh alias for `claude --dangerously-skip-permissions`; the flag is NOT
+    # included by default because `--restricted` (below) refuses it and it would void the allowlist.
+    claude_aliases: dict[str, list[str]] = Field(default_factory=lambda: {"claudeb": ["claude"]})
+    # False drops `--restricted` (needed for --dangerously-skip-permissions). Keep True unless intended.
+    restricted: bool = True
+    # Extra environment for the CLI (e.g. CLAUDE_CONFIG_DIR); "~" is expanded. API-key variables are refused.
+    claude_env: dict[str, str] = Field(default_factory=dict)
+    # haiku | sonnet | opus (or a full model id); empty = the model currently chosen in the chat.
+    default_model: str = ""
     max_parallel_jobs: int = 1
     job_timeout_minutes: int = 60
     allowed_tools: list[str] = Field(default_factory=list)
+    # Directories the worker may read (--add-dir); Edit/Write there are denied.
+    extra_read_dirs: list[str] = Field(default_factory=list)
     sandbox: bool = True
 
 

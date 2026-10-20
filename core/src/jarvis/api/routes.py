@@ -979,6 +979,8 @@ def _job_dict(j: CodingJob) -> dict[str, Any]:
         "worktree_path": j.worktree_path,
         "result": j.result,
         "test_command": j.test_command,
+        "model": j.model,
+        "effort": j.effort,
         "created_at": j.created_at.isoformat(),
         "finished_at": j.finished_at.isoformat() if j.finished_at else None,
     }
