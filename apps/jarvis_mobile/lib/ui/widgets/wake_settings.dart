@@ -19,7 +19,6 @@ class WakeSettings extends ConsumerStatefulWidget {
 class _WakeSettingsState extends ConsumerState<WakeSettings> with WidgetsBindingObserver {
   Map<String, dynamic>? _s;
   String? _note;
-  final _key = TextEditingController();
   Timer? _poll;
 
   @override
@@ -40,7 +39,6 @@ class _WakeSettingsState extends ConsumerState<WakeSettings> with WidgetsBinding
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _poll?.cancel();
-    _key.dispose();
     super.dispose();
   }
 
@@ -49,9 +47,9 @@ class _WakeSettingsState extends ConsumerState<WakeSettings> with WidgetsBinding
     if (mounted) setState(() => _s = s);
   }
 
-  Future<bool> _configure({bool? enabled, bool? screenOnly, String? accessKey}) async {
+  Future<bool> _configure({bool? enabled, bool? screenOnly}) async {
     try {
-      final s = await ref.read(nativeProvider).wakeConfigure(enabled: enabled, screenOnly: screenOnly, accessKey: accessKey);
+      final s = await ref.read(nativeProvider).wakeConfigure(enabled: enabled, screenOnly: screenOnly);
       if (mounted) setState(() => _s = s);
       return true;
     } on PlatformException catch (e) {
@@ -60,21 +58,9 @@ class _WakeSettingsState extends ConsumerState<WakeSettings> with WidgetsBinding
     }
   }
 
-  Future<void> _saveKey() async {
-    final k = _key.text.trim();
-    if (k.isEmpty) return;
-    if (!await _configure(accessKey: k)) return;
-    _key.clear();
-    if (mounted) setState(() => _note = 'AccessKey gespeichert (verschlüsselt im Android Keystore).');
-  }
-
   Future<void> _toggle(bool on) async {
     if (!on) {
       await _configure(enabled: false);
-      return;
-    }
-    if (_s?['has_key'] != true) {
-      setState(() => _note = 'Bitte zuerst den Picovoice-AccessKey eintragen (siehe unten).');
       return;
     }
     if (!await _explain()) return;
@@ -171,31 +157,6 @@ class _WakeSettingsState extends ConsumerState<WakeSettings> with WidgetsBinding
             'Empfohlen: sonst beenden manche Hersteller den Dienst im Hintergrund. In der Liste J.A.R.V.I.S. auf „Nicht optimieren“.',
             () => native.openSettings('battery'),
             optional: true, action: 'Öffnen'),
-        const SizedBox(height: J.s4),
-        Text(s['has_key'] == true ? 'Picovoice-AccessKey: gespeichert' : 'Picovoice-AccessKey: fehlt',
-            style: J.mono(12, color: s['has_key'] == true ? J.green : J.amber)),
-        Row(children: [
-          Expanded(
-            child: TextField(
-              controller: _key,
-              obscureText: true,
-              autocorrect: false,
-              enableSuggestions: false,
-              style: J.mono(12, color: J.text),
-              decoration: InputDecoration(
-                hintText: s['has_key'] == true ? 'neuen Schlüssel einfügen' : 'AccessKey einfügen',
-                hintStyle: J.mono(12, color: J.text3),
-                enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: J.line)),
-                focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: J.cyan)),
-              ),
-              onSubmitted: (_) => _saveKey(),
-            ),
-          ),
-          LightAction('Speichern', onTap: _saveKey),
-        ]),
-        Text('Kostenlos für den privaten Gebrauch unter console.picovoice.ai (Konto nötig). Der Schlüssel bleibt auf diesem '
-            'Telefon; einmalig braucht Porcupine Internet zur Aktivierung.',
-            style: J.mono(11, color: J.text3)),
         const SizedBox(height: J.s2),
         LightAction('Sprachfenster testen', onTap: native.openAssist),
       ],

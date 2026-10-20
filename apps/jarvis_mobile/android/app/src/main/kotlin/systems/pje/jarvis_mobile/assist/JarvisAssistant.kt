@@ -153,6 +153,6 @@ class JarvisRecognitionService : RecognitionService() {
 class WakeBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
-        if (WakeWord.enabled(context) && WakeWord.accessKey(context) != null) WakeWord.postResumeReminder(context)
+        if (WakeWord.enabled(context)) WakeWord.postResumeReminder(context)
     }
 }

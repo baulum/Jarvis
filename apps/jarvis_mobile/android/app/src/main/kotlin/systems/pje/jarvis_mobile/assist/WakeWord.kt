@@ -24,15 +24,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import org.json.JSONObject
 import systems.pje.jarvis_mobile.MainActivity
 import systems.pje.jarvis_mobile.R
-import systems.pje.jarvis_mobile.secure.SecureStore
-import java.io.File
 
 private const val TAG = "JarvisWake"
 
-/**
- * Settings and permissions of the "Hey Jarvis" wake word. The Picovoice AccessKey lives in its own encrypted
- * store, so logging out of Jarvis does not delete it.
- */
+/** Settings and permissions of the "Hey Jarvis" wake word (detection itself: [WakeDetector], no account or key needed). */
 object WakeWord {
     const val CHANNEL_SERVICE = "jarvis_wake"
     const val CHANNEL_ASSIST = "jarvis_assist"
@@ -40,12 +35,10 @@ object WakeWord {
     private const val NID_RESUME = 4713
 
     private fun prefs(c: Context) = c.getSharedPreferences("jarvis_wake", Context.MODE_PRIVATE)
-    private fun secure(c: Context) = SecureStore(c.applicationContext, "jarvis_wake_secure")
 
     fun enabled(c: Context) = prefs(c).getBoolean("enabled", false)
     fun screenOnly(c: Context) = prefs(c).getBoolean("screen_only", true)
     fun sensitivity(c: Context) = prefs(c).getFloat("sensitivity", 0.6f)
-    fun accessKey(c: Context): String? = secure(c).get("access_key")?.takeIf { it.isNotBlank() }
 
     fun hasMic(c: Context) = ContextCompat.checkSelfPermission(c, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     fun canOverlay(c: Context) = Settings.canDrawOverlays(c)
@@ -58,16 +51,7 @@ object WakeWord {
         return VoiceInteractionService.isActiveService(c, ComponentName(c, JarvisVoiceInteractionService::class.java))
     }
 
-    /** Optional own keyword (`assets/wakeword/<name>.ppn`, e.g. "Hey Jarvis" from the Picovoice Console) + language model (`<name>.pv`). */
-    fun customFile(c: Context, suffix: String): String? = runCatching {
-        val name = c.assets.list("wakeword")?.firstOrNull { it.endsWith(suffix) } ?: return null
-        val out = File(c.noBackupFilesDir, name)
-        c.assets.open("wakeword/$name").use { input -> out.outputStream().use { input.copyTo(it) } }
-        out.absolutePath
-    }.getOrNull()
-
-    fun configure(c: Context, enabled: Boolean?, screenOnly: Boolean?, accessKey: String?) {
-        if (accessKey != null) secure(c).put("access_key", accessKey.trim().ifBlank { null })
+    fun configure(c: Context, enabled: Boolean?, screenOnly: Boolean?) {
         prefs(c).edit().apply {
             if (enabled != null) putBoolean("enabled", enabled)
             if (screenOnly != null) putBoolean("screen_only", screenOnly)
@@ -76,7 +60,7 @@ object WakeWord {
             !enabled(c) -> {
                 clearResumeReminder(c); WakeWordService.stop(c)
             }
-            WakeWordService.state.value.running -> WakeWordService.refresh(c, rebuild = accessKey != null)
+            WakeWordService.state.value.running -> WakeWordService.refresh(c)
             else -> ensureRunning(c)
         }
     }
@@ -84,7 +68,6 @@ object WakeWord {
     /** Why the enabled wake word cannot start, or null. */
     fun blocker(c: Context): String? = when {
         !hasMic(c) -> "Mikrofonberechtigung fehlt"
-        accessKey(c) == null -> "Picovoice-AccessKey fehlt"
         else -> null
     }
 
@@ -103,7 +86,6 @@ object WakeWord {
 
     fun status(c: Context): String {
         val s = WakeWordService.state.value
-        val custom = c.assets.list("wakeword")?.any { it.endsWith(".ppn") } == true
         return JSONObject()
             .put("enabled", enabled(c))
             .put("running", s.running)
@@ -113,9 +95,8 @@ object WakeWord {
             .put("blocked", if (enabled(c) && !s.running) blocker(c) else null)
             .put("last_wake", s.lastWake)
             .put("battery_unrestricted", batteryUnrestricted(c))
-            .put("has_key", accessKey(c) != null)
             .put("screen_only", screenOnly(c))
-            .put("keyword", if (custom) "eigenes Schlüsselwort (assets/wakeword)" else "„Jarvis“ (eingebaut, erkennt auch „Hey Jarvis“)")
+            .put("keyword", "„Hey Jarvis“")
             .put("mic", hasMic(c))
             .put("notifications", NotificationManagerCompat.from(c).areNotificationsEnabled())
             .put("overlay", canOverlay(c))

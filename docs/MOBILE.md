@@ -271,7 +271,7 @@ nicht möglich
 | Offline-Anzeige | ✅ | Reducer-Test; auf Gerät nicht provoziert |
 | Android Auto Anzeige/Lenkrad | ⬜ 🚗 | siehe §9 |
 | Play-Production mit Calling-Kategorie | ⛔ | Google erlaubt derzeit nur interne/geschlossene Tests |
-| „Hey Jarvis“ (Porcupine), Sprachfenster, Standard-Assistent | ⬜ | implementiert (§14); weder gebaut noch auf Gerät getestet – siehe §14 › Stand |
+| „Hey Jarvis“ (sherpa-onnx), Sprachfenster, Standard-Assistent | ⚠️ | Erkennung gebaut und am 19.10.2026 auf dem Galaxy S24 Ultra getestet (Test-Ton ausgelöst, Mikrofon frei, Wiederaufnahme); Sprachfenster/Assistent-Geste noch nicht per Gerät geprüft – siehe §14 › Stand |
 | Sprachaufbereitung fürs Vorlesen (Markdown/Links) | ✅ | `AssistSpeechTest` (JVM) |
 
 Testsummen (2026-10-17): Core 108 Unit + 46 Integration + E2E (Sprache, Mobile-Anruf), Flutter 10, Kotlin 5.
@@ -333,7 +333,7 @@ Sir sagt **„Hey Jarvis“** → über dem aktuellen Bildschirm öffnet sich un
 Dasselbe Fenster öffnet die Assistent-Geste, wenn J.A.R.V.I.S. Standard-Assistent ist.
 
 ```
- Porcupine (on-device, Foreground-Service „microphone“)
+ sherpa-onnx Keyword-Spotter (on-device, Foreground-Service „microphone“)
    └─ Wake-Word ─► Standard-Assistent? ─ ja ─► VoiceInteractionSession (Systemfenster, ohne Zusatzrecht)
                                        └ nein ► AssistOverlayActivity (braucht „Über anderen Apps einblenden“,
                                                  sonst Heads-up-/Vollbild-Benachrichtigung „Ja, Sir?“ zum Antippen)
@@ -344,41 +344,41 @@ Dasselbe Fenster öffnet die Assistent-Geste, wenn J.A.R.V.I.S. Standard-Assiste
 
 Beide Core-Pfade stehen schon auf der Gateway-Allowlist – am Core ändert sich nichts.
 
-### Zugangsschlüssel (Picovoice AccessKey) – nötig
+### Erkennung: sherpa-onnx, ohne Konto und Schlüssel
 
-Die Wake-Word-Erkennung nutzt **Picovoice Porcupine** (läuft komplett auf dem Telefon, sehr sparsam). Porcupine
-verlangt einen **AccessKey**:
-1. Konto auf <https://console.picovoice.ai> anlegen (kostenlos für private Nutzung; Ihre Entscheidung).
-2. AccessKey kopieren → App › Einstellungen › **Hey Jarvis** › einfügen › **Speichern**.
-   Der Schlüssel liegt AES-verschlüsselt (Android Keystore) nur auf dem Telefon und bleibt beim Abmelden erhalten.
-3. Porcupine braucht beim ersten Start Internet zur Aktivierung des Schlüssels; danach erkennt es offline.
+Die Wake-Word-Erkennung ist komplett offen und kostenlos: der **sherpa-onnx Keyword-Spotter** (Apache-2.0) mit einem
+kleinen Streaming-Zipformer-Modell (~6 MB, `assets/kws/`). Kein AccessKey, kein Konto, auch beim ersten Start kein
+Internet. Die Phrase „Hey Jarvis“ ist Text (BPE-Stücke in `assets/kws/keywords.txt`), es wird nichts trainiert.
+`WakeDetector.kt` liest das Mikrofon (16 kHz) und füttert den Spotter; `WakeWordService` kümmert sich um Pausen
+(Anruf, Sprachfenster, Bildschirm aus) und Fehler.
 
-Fehler wie „AccessKey ungültig“ oder „Gerätelimit erreicht“ erscheinen im Status und in der Dienst-Benachrichtigung.
-Vorübergehende Fehler (kein Internet bei der Aktivierung, Mikrofon belegt) wiederholt der Dienst selbst
-(30 s, dann länger, höchstens alle 15 min).
+- **Bibliothek:** Das AAR ist nicht auf Maven Central. `app/build.gradle.kts` lädt es beim ersten Build von GitHub
+  nach `android/app/libs/` (nicht in Git) und prüft den festen SHA-256.
+- **Empfindlichkeit:** `WakeWord.sensitivity` (Standard 0,6) wird zur Schwelle des Spotters (0,6 → 0,15). Im TTS-Test
+  erkannten drei von vier Stimmen „Hey Jarvis“; „Hello Jarvis“, „Hey Travis“, „Hey Siri“, „Jarvis“ allein und
+  normale Sprache lösten nicht aus. Ein Schalter in den Einstellungen existiert noch nicht.
+- **Andere Phrase:** mit dem `bpe.model` des Modells tokenisieren (Anleitung in `assets/kws/README.md`) und
+  `PHRASE` in `WakeDetector.kt` sowie `keywords.txt` ändern.
+- Das Modell ist englisch trainiert (GigaSpeech); „Hey Jarvis“ wird mit deutschem Akzent schlechter erkannt als mit
+  englischem. Bei Fehlauslösungen oder Aussetzern die Schwelle in `keywordLine` anpassen.
 
 **Status in Einstellungen › Hey Jarvis:** `läuft · hört zu`, `läuft · pausiert (Grund)`, `gestoppt · Grund`
-(z. B. „Mikrofonberechtigung fehlt“, „Picovoice-AccessKey fehlt“) oder `Fehler · Grund`; dazu „Zuletzt erkannt“.
+(z. B. „Mikrofonberechtigung fehlt“) oder `Fehler · Grund`; dazu „Zuletzt erkannt“. Vorübergehende Fehler
+(Mikrofon belegt) wiederholt der Dienst selbst (30 s, dann länger, höchstens alle 15 min).
 
-**Fehlersuche per adb** (der AccessKey wird nie geloggt):
+**Fehlersuche per adb:**
 
 ```
-adb logcat -s JarvisWake:V PorcupineManager:V AndroidRuntime:E
+adb logcat -s JarvisWake:V AndroidRuntime:E
 ```
 
 Erwartet beim Einschalten: `starting wake word service` → `service created` → `foreground service started (type
-microphone)` → `building Porcupine with built-in keyword JARVIS` → `state: listen` → `listening`; beim Sprechen
+microphone)` → `state: listen` → `keyword spotter loaded` → `listening`; beim Sprechen `keyword HEY_JARVIS` →
 `wake word detected`.
-
-**Schlüsselwort:** Standard ist das eingebaute **„Jarvis“** – es löst auch bei „Hey Jarvis“ aus. Für exakt
-„Hey Jarvis“: in der Picovoice Console ein Schlüsselwort „Hey Jarvis“ für **Android** trainieren und die `.ppn`-Datei
-nach `apps/jarvis_mobile/android/app/src/main/assets/wakeword/` legen (für ein deutsches Modell zusätzlich
-`porcupine_params_de.pv` in denselben Ordner), dann neu bauen. Die App nimmt automatisch die erste `.ppn`.
-Die Datei muss zur Porcupine-Version 4.x passen (die App nutzt `porcupine-android:4.0.2`).
 
 ### Einrichtung auf dem Telefon (einmalig)
 
-1. App › Einstellungen › **Hey Jarvis**: AccessKey speichern, Schalter **„Hey Jarvis“ erkennen** an. Die App erklärt
+1. App › Einstellungen › **Hey Jarvis**: Schalter **„Hey Jarvis“ erkennen** an. Die App erklärt
    vorher, was passiert, und fragt nach **Mikrofon** und **Benachrichtigungen**.
 2. **Entweder** „Über anderen Apps“ › **Erlauben** (Systemseite → J.A.R.V.I.S. einschalten)
    **oder** „Standard-Assistent“ › **Festlegen** → „Digitaler Assistent“ / „Standard-Assistent-App“ → **J.A.R.V.I.S.**
@@ -390,7 +390,7 @@ Die Datei muss zur Porcupine-Version 4.x passen (die App nutzt `porcupine-androi
 
 ### Akku und Verhalten
 
-- Porcupine braucht nur wenige Prozent eines Kerns; Audio verlässt das Telefon erst nach dem Aktivierungswort.
+- Der Spotter braucht nur wenige Prozent eines Kerns (ein Thread); Audio verlässt das Telefon erst nach dem Aktivierungswort.
 - **Standard: nur bei eingeschaltetem Bildschirm** – bei ausgeschaltetem Bildschirm ist das Mikrofon ganz aus.
   Abschaltbar in den Einstellungen (dann auch mit Bildschirm aus, kostet mehr Akku).
 - Pausiert automatisch während Jarvis-Anrufen und solange das Sprachfenster offen ist (gibt das Mikrofon frei).
@@ -404,11 +404,11 @@ Die Datei muss zur Porcupine-Version 4.x passen (die App nutzt `porcupine-androi
 
 ### Grenzen / Stand
 
-- **Noch nicht gebaut, nicht auf einem Gerät getestet:** In den Arbeitsumgebungen der bisherigen Änderungen ließen
-  sich Flutter-SDK, JDK und adb nicht nutzen. Vor der Nutzung `cd apps/jarvis_mobile && flutter build apk --debug`
-  ausführen; `ai.picovoice:porcupine-android:4.0.2` (auf Maven Central vorhanden, API wie 3.x) wird dabei geladen.
+- **Getestet (19.10.2026, Galaxy S24 Ultra, Debug-Build):** Modell lädt in <1 s, „Hey Jarvis“ über Lautsprecher löst
+  aus, Mikrofon wird frei, Dienst hört nach 5 s wieder zu. **Noch offen:** Akkuverbrauch über Stunden, Erkennung mit
+  Jarvis' Besitzer-Stimme in lauter Umgebung, Sprachfenster/Assistent-Geste auf dem Gerät.
 - Echtes „Always-on“ bei ausgeschaltetem Bildschirm über den Hotword-DSP (wie Google) ist Drittanbietern verwehrt
-  (`AlwaysOnHotwordDetector` braucht Systemrechte) – deshalb Porcupine im Vordergrunddienst.
+  (`AlwaysOnHotwordDetector` braucht Systemrechte) – deshalb der Spotter im Vordergrunddienst.
 - Die Antwort wird mit der Android-Stimme (TTS auf dem Gerät) vorgelesen, nicht mit Jarvis' Fish-Audio-Stimme:
   `/api/voice/tts` steht bewusst nicht auf der Mobile-Allowlist. Für Jarvis' Stimme lieber anrufen.
 - Lange Aufträge: Das Fenster wartet bis zu 3 Minuten; danach „Jarvis antwortet nicht rechtzeitig“ – der Auftrag

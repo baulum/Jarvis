@@ -1,14 +1,5 @@
 package systems.pje.jarvis_mobile.assist
 
-import ai.picovoice.porcupine.Porcupine
-import ai.picovoice.porcupine.PorcupineActivationException
-import ai.picovoice.porcupine.PorcupineActivationLimitException
-import ai.picovoice.porcupine.PorcupineActivationRefusedException
-import ai.picovoice.porcupine.PorcupineActivationThrottledException
-import ai.picovoice.porcupine.PorcupineException
-import ai.picovoice.porcupine.PorcupineInvalidArgumentException
-import ai.picovoice.porcupine.PorcupineKeyException
-import ai.picovoice.porcupine.PorcupineManager
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
@@ -50,7 +41,7 @@ data class WakeState(
 )
 
 /**
- * Listens for the wake word on the device (Picovoice Porcupine – a few % of one core, no audio leaves the phone).
+ * Listens for the wake word on the device (sherpa-onnx keyword spotter, no account or key – a few % of one core, no audio leaves the phone).
  * Foreground service of type microphone with a quiet ongoing notification, as Android requires.
  * Pauses (and releases the microphone) during Jarvis calls, while the voice overlay is open, when Sir pauses it
  * from the notification and – by default, to save battery – while the screen is off.
@@ -61,7 +52,6 @@ class WakeWordService : Service() {
         private const val ACTION_RESUME = "systems.pje.jarvis.wake.RESUME"
         private const val ACTION_STOP = "systems.pje.jarvis.wake.STOP"
         private const val ACTION_REFRESH = "systems.pje.jarvis.wake.REFRESH"
-        private const val EXTRA_REBUILD = "rebuild"
         private const val NOTIFICATION_ID = 4711
 
         val state = MutableStateFlow(WakeState())
@@ -75,8 +65,8 @@ class WakeWordService : Service() {
         }
 
         /** Only while running (then the app counts as foreground and a plain start is allowed). */
-        fun refresh(c: Context, rebuild: Boolean) {
-            runCatching { c.startService(Intent(c, WakeWordService::class.java).setAction(ACTION_REFRESH).putExtra(EXTRA_REBUILD, rebuild)) }
+        fun refresh(c: Context) {
+            runCatching { c.startService(Intent(c, WakeWordService::class.java).setAction(ACTION_REFRESH)) }
         }
 
         fun stop(c: Context) {
@@ -90,7 +80,7 @@ class WakeWordService : Service() {
     private val screenOnly = MutableStateFlow(true)
     private val userPaused = MutableStateFlow(false)
     private val rebuilds = MutableStateFlow(0)
-    private var porcupine: PorcupineManager? = null
+    private var detector: WakeDetector? = null
     private var listening = false
     private var pauseReason: String? = "startet"
     private var error: String? = null
@@ -150,16 +140,9 @@ class WakeWordService : Service() {
             ACTION_PAUSE -> userPaused.value = true
             ACTION_RESUME -> userPaused.value = false
             ACTION_STOP -> {
-                WakeWord.configure(this, enabled = false, screenOnly = null, accessKey = null); return START_NOT_STICKY
+                WakeWord.configure(this, enabled = false, screenOnly = null); return START_NOT_STICKY
             }
-            ACTION_REFRESH -> {
-                screenOnly.value = WakeWord.screenOnly(this)
-                if (intent?.getBooleanExtra(EXTRA_REBUILD, false) == true) {
-                    Log.i(TAG, "rebuilding with new AccessKey")
-                    main.removeCallbacks(retry); retries = 0
-                    release(); error = null; rebuilds.value++
-                }
-            }
+            ACTION_REFRESH -> screenOnly.value = WakeWord.screenOnly(this)
         }
         return START_STICKY
     }
@@ -186,9 +169,9 @@ class WakeWordService : Service() {
 
     private fun listen() {
         if (listening || building) return
-        val pm = porcupine ?: return buildAsync()
+        val d = detector ?: return buildAsync()
         try {
-            pm.start(); listening = true; retries = 0
+            d.start(); listening = true; retries = 0
             Log.i(TAG, "listening")
         } catch (e: Exception) {
             fail(e)
@@ -198,44 +181,35 @@ class WakeWordService : Service() {
     private fun mute() {
         if (!listening) return
         listening = false
-        runCatching { porcupine?.stop() }
+        runCatching { detector?.stop() }
         Log.i(TAG, "microphone released")
     }
 
-    /** Porcupine activates the AccessKey online and copies model files – off the main thread. */
+    /** Loads the model from the assets – off the main thread. */
     private fun buildAsync() {
-        val key = WakeWord.accessKey(this) ?: return fail("Picovoice-AccessKey fehlt – in den Einstellungen eintragen", retry = false)
         val gen = ++buildGen
         building = true
         publish()
         scope.launch(Dispatchers.IO) {
-            val result = runCatching { build(key) }
+            val result = runCatching {
+                WakeDetector.build(
+                    applicationContext, WakeWord.sensitivity(this@WakeWordService),
+                    onWake = { main.post { onWake() } },
+                    onError = { e -> main.post { fail(e) } },
+                )
+            }
             main.post {
                 if (destroyed || gen != buildGen) {
-                    result.getOrNull()?.let { runCatching { it.delete() } }; return@post
+                    result.getOrNull()?.let { runCatching { it.release() } }; return@post
                 }
                 building = false
                 result.onSuccess {
-                    porcupine = it
+                    detector = it
+                    Log.i(TAG, "keyword spotter loaded")
                     update(pauseReason)
                 }.onFailure { fail(it) }
             }
         }
-    }
-
-    private fun build(key: String): PorcupineManager {
-        val b = PorcupineManager.Builder().setAccessKey(key).setSensitivity(WakeWord.sensitivity(this))
-        val keyword = WakeWord.customFile(this, ".ppn")
-        if (keyword != null) {
-            b.setKeywordPath(keyword)
-            WakeWord.customFile(this, ".pv")?.let { b.setModelPath(it) }
-            Log.i(TAG, "building Porcupine with custom keyword ${keyword.substringAfterLast('/')}")
-        } else {
-            b.setKeyword(Porcupine.BuiltInKeyword.JARVIS)
-            Log.i(TAG, "building Porcupine with built-in keyword JARVIS")
-        }
-        b.setErrorCallback { e -> main.post { fail(e) } }
-        return b.build(applicationContext) { main.post { onWake() } }
     }
 
     private fun onWake() {
@@ -250,55 +224,38 @@ class WakeWordService : Service() {
     }
 
     private fun fail(e: Throwable) {
-        fail(describe(e), retry = retryable(e), cause = e)
+        Log.w(TAG, "wake word error: ${e.javaClass.simpleName}: ${e.message}")
+        fail(describe(e), cause = e)
     }
 
     /**
-     * Shows the reason in the settings and the notification. Transient problems (no network for the activation,
-     * microphone busy) are retried with backoff instead of leaving the wake word deaf until Sir toggles it.
+     * Shows the reason in the settings and the notification. Problems (microphone busy, model not loadable) are
+     * retried with backoff instead of leaving the wake word deaf until Sir toggles it.
      */
-    private fun fail(message: String, retry: Boolean, cause: Throwable? = null) {
-        Log.w(TAG, "wake word error: $message" + (cause?.let { " (${it.javaClass.simpleName}: ${secret(it.message)})" } ?: ""))
+    private fun fail(message: String, cause: Throwable? = null) {
+        if (cause == null) Log.w(TAG, "wake word error: $message")
         error = message
         mute(); release()
         main.removeCallbacks(this.retry)
-        if (retry) {
-            val delay = (30_000L shl retries.coerceAtMost(5)).coerceAtMost(15 * 60_000L)
-            retries++
-            Log.i(TAG, "retry in ${delay / 1000}s")
-            main.postDelayed(this.retry, delay)
-        }
+        val delay = (30_000L shl retries.coerceAtMost(5)).coerceAtMost(15 * 60_000L)
+        retries++
+        Log.i(TAG, "retry in ${delay / 1000}s")
+        main.postDelayed(this.retry, delay)
         publish()
     }
 
-    private fun retryable(e: Throwable) = when (e) {
-        is PorcupineActivationLimitException, is PorcupineActivationRefusedException,
-        is PorcupineInvalidArgumentException, is PorcupineKeyException -> false
-        else -> true
-    }
-
-    /** Porcupine messages must never carry the AccessKey into logcat or the UI. */
-    private fun secret(message: String?): String {
-        val key = WakeWord.accessKey(this)
-        return message.orEmpty().let { if (key != null) it.replace(key, "***") else it }
-    }
-
     private fun describe(e: Throwable): String = when (e) {
-        is PorcupineActivationLimitException -> "AccessKey: Gerätelimit erreicht (Picovoice Console prüfen)"
-        is PorcupineActivationThrottledException -> "AccessKey: zu viele Aktivierungen – neuer Versuch folgt automatisch"
-        is PorcupineActivationRefusedException -> "AccessKey abgelehnt (Picovoice Console prüfen)"
-        is PorcupineKeyException -> "AccessKey ungültig – in den Einstellungen neu eintragen"
-        is PorcupineActivationException -> "AccessKey-Aktivierung fehlgeschlagen (Internet?) – neuer Versuch folgt automatisch"
-        is PorcupineInvalidArgumentException -> "AccessKey oder Schlüsselwortdatei ungültig: ${secret(e.message)}"
-        is PorcupineException -> "Wake-Word-Fehler: ${secret(e.message)}"
-        else -> "Mikrofon nicht verfügbar: ${secret(e.message)}"
+        is UnsatisfiedLinkError, is NoClassDefFoundError -> "Erkennungsbibliothek fehlt: ${e.message}"
+        is java.io.FileNotFoundException -> "Erkennungsmodell fehlt in der App: ${e.message}"
+        is IllegalStateException -> e.message ?: "Mikrofon nicht verfügbar"
+        else -> "Erkennung fehlgeschlagen: ${e.message ?: e.javaClass.simpleName}"
     }
 
     private fun release() {
         listening = false
         buildGen++; building = false
-        porcupine?.let { runCatching { it.stop() }; runCatching { it.delete() } }
-        porcupine = null
+        detector?.let { runCatching { it.release() } }
+        detector = null
     }
 
     // ------------------------------------------------------------------ status + notification

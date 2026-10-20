@@ -1,3 +1,5 @@
+import java.net.URI
+import java.security.MessageDigest
 import java.util.Properties
 
 plugins {
@@ -5,6 +7,22 @@ plugins {
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// sherpa-onnx (Apache-2.0) is not on Maven Central: fetch the release AAR once, verify the pinned hash.
+val sherpaVersion = "1.13.8"
+val sherpaSha256 = "633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96"
+val sherpaAar = file("libs/sherpa-onnx-$sherpaVersion.aar").also { aar ->
+    fun sha256(f: File) = MessageDigest.getInstance("SHA-256").digest(f.readBytes()).joinToString("") { "%02x".format(it) }
+    if (!aar.exists() || sha256(aar) != sherpaSha256) {
+        aar.parentFile.mkdirs()
+        val tmp = File(aar.parentFile, aar.name + ".part")
+        logger.lifecycle("Downloading sherpa-onnx $sherpaVersion (wake word) …")
+        URI("https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaVersion/${aar.name}").toURL()
+            .openStream().use { input -> tmp.outputStream().use { input.copyTo(it) } }
+        check(sha256(tmp) == sherpaSha256) { "sherpa-onnx AAR: checksum mismatch" }
+        tmp.renameTo(aar)
+    }
 }
 
 android {
@@ -78,9 +96,8 @@ dependencies {
     implementation("androidx.car.app:app:1.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation("io.livekit:livekit-android:2.29.0")
-    // "Hey Jarvis" wake word, on device (needs a Picovoice AccessKey – see docs/MOBILE.md › Hey Jarvis)
-    // 4.x: current Picovoice Console keyword files (.ppn) only load in the matching major version
-    implementation("ai.picovoice:porcupine-android:4.0.2")
+    // "Hey Jarvis" wake word, on device: sherpa-onnx keyword spotter, no account or key (see docs/MOBILE.md › Hey Jarvis)
+    implementation(files(sherpaAar))
     implementation(platform("com.google.firebase:firebase-bom:35.0.2"))
     implementation("com.google.firebase:firebase-messaging")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")

@@ -73,7 +73,7 @@
             android:exported="false"
             android:foregroundServiceType="phoneCall|microphone" />
 
-        <!-- "Hey Jarvis": on-device wake word (Porcupine) + voice overlay + default-assistant integration -->
+        <!-- "Hey Jarvis": on-device wake word (sherpa-onnx) + voice overlay + default-assistant integration -->
         <service
             android:name=".assist.WakeWordService"
             android:exported="false"
