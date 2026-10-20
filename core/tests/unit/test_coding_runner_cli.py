@@ -36,6 +36,7 @@ def _runner(tmp_path: Path, **cfg: Any) -> CodingRunner:
         "job_timeout_minutes": 5,
         "allowed_tools": ["Read", "Bash(git log:*)"],
         "extra_read_dirs": [],
+        "extra_write_dirs": [],
         "sandbox": False,
         "restricted": True,
     }

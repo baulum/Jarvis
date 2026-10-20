@@ -206,12 +206,10 @@ coding:
                   "Bash(git branch -a:*)", "Bash(git branch -r:*)", "Bash(git branch -v:*)",
                   "Bash(git branch -vv:*)", "Bash(git branch --list:*)", "Bash(git branch --show-current)",
                   "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(which:*)"]
-  # Nur lesen (Edit/Write dort werden verweigert):
-  extra_read_dirs: [/Users/paul/Downloads]
   # false = Claude Code läuft direkt auf dem Mac (Netzwerk, lokale Ports, Google Fonts, next build funktionieren)
   sandbox: false
-  # Zusätzlich zum Job-Worktree (exakte Pfade, keine Wildcards)
-  extra_read_dirs: [/Users/paul/Developer/Jarvis-Workspaces/repos]
+  # Zusätzlich zum Job-Worktree (exakte Pfade, keine Wildcards). Lesen: Edit/Write dort werden verweigert.
+  extra_read_dirs: [/Users/paul/Downloads, /Users/paul/Developer/Jarvis-Workspaces/repos]
   extra_write_dirs: [/Users/paul/Developer/Projects/night-motion-graphics]
 
 browser:

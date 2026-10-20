@@ -209,10 +209,9 @@ class CodingCfg(_Strict):
     max_parallel_jobs: int = 1
     job_timeout_minutes: int = 60
     allowed_tools: list[str] = Field(default_factory=list)
-    # Directories the worker may read (--add-dir); Edit/Write there are denied.
-    extra_read_dirs: list[str] = Field(default_factory=list)
     sandbox: bool = True
     # Exact absolute directories granted in addition to the job worktree (default: none = worktree only).
+    # Read dirs are added with --add-dir and Edit/Write there are denied ("~" is expanded, missing dirs are skipped).
     extra_read_dirs: list[Path] = Field(default_factory=list)
     extra_write_dirs: list[Path] = Field(default_factory=list)
 

@@ -13,7 +13,7 @@ MOTION = Path("/Users/paul/Developer/Projects/night-motion-graphics")
 def _argv(tmp_path: Path, **cfg: object) -> list[str]:
     defaults: dict[str, object] = {
         "max_parallel_jobs": 1,
-        "claude_binary": "claude",
+        "claude_command": "sh",  # any resolvable program; only the flags after it matter here
         "sandbox": False,
         "allowed_tools": [],
         "extra_read_dirs": [],

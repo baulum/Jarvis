@@ -558,8 +558,8 @@ class CodingRunner:
                 "network": {"allowedDomains": NETWORK_ALLOWLIST, "strictAllowlist": True},
                 "filesystem": {"allowWrite": [str(self.workspaces / ".cache")]},
             }
-        read_dirs = [str(p) for p in self.cfg.extra_read_dirs]
-        write_dirs = [str(p) for p in self.cfg.extra_write_dirs]
+        read_dirs = [str(p) for p in self._read_dirs()]
+        write_dirs = [str(Path(os.path.expanduser(str(p)))) for p in self.cfg.extra_write_dirs]
         if read_dirs or write_dirs:
             # Read-only extras get --add-dir plus an explicit Edit/Write deny; write extras are fully granted.
             read_only = [d for d in read_dirs if d not in write_dirs]
@@ -602,14 +602,11 @@ class CodingRunner:
             *add_dirs,
         ]
         hint = SYSTEM_PROMPT_HINT
-        read_dirs = self._read_dirs()
         if read_dirs:
-            for d in read_dirs:
-                argv += ["--add-dir", str(d)]
             # read-only: "//" marks an absolute path in permission rules
             deny = [f"{tool}(/{d}/**)" for d in read_dirs for tool in ("Edit", "Write")]
             argv += ["--disallowedTools", *deny]
-            hint += " Zusätzlich lesbar (nur lesen, nichts ändern): " + ", ".join(str(d) for d in read_dirs) + "."
+            hint += " Zusätzlich lesbar (nur lesen, nichts ändern): " + ", ".join(read_dirs) + "."
         argv += ["--append-system-prompt", hint]
         if model:
             argv += ["--model", model]
