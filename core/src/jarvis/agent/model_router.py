@@ -81,6 +81,21 @@ def normalize(word: str) -> str | None:
     return None
 
 
+def resolve_alias(value: str | None) -> str | None:
+    """haiku|sonnet|opus or a full model id (``claude-opus-5-5``) → alias; None for empty/``auto``/unknown."""
+    if not value:
+        return None
+    v = value.strip().lower()
+    for alias, m in MODELS.items():
+        if v == alias or v == m["id"]:
+            return alias
+    return None
+
+
+def model_id(alias: str) -> str:
+    return MODELS[alias]["id"]
+
+
 @dataclass(slots=True)
 class SwitchCommand:
     model: str | None  # None = back to automatic selection

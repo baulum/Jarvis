@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from jarvis.agent.model_router import EFFORTS
 from jarvis.coding.runner import CodingError, CodingRunner, slug
 from jarvis.connectors.base import Connector, Health, Manifest
 from jarvis.tools.executor import ToolUserError
@@ -24,7 +25,8 @@ class CodingConnector(Connector):
         category="developer",
         auth="local",
         default_enabled=True,
-        setup_instructions="Claude Code installieren und einmalig `claude` → /login mit der Claude-Subscription.",
+        setup_instructions="Claude Code installieren und einmalig den unter coding.claude_command konfigurierten "
+        "Befehl (Standard `claudeb`) starten → /login mit der Claude-Subscription.",
     )
 
     async def health(self) -> Health:
@@ -61,12 +63,16 @@ class CodingConnector(Connector):
                     a["project_path"],
                     test_command=a.get("test_command"),
                     actor=ctx.principal.label,
+                    model=a.get("model"),
+                    effort=a.get("effort"),
                 )
             except CodingError as e:
                 raise ToolUserError(str(e)) from e
             return {
                 "job_id": str(job.id),
                 "status": "queued",
+                "model": job.model,
+                "effort": job.effort,
                 "note": "Claude Code arbeitet im Hintergrund; Fortschritt in der App, Meldung bei Abschluss.",
             }
 
@@ -84,6 +90,8 @@ class CodingConnector(Connector):
                     "status": job.status,
                     "branch": job.branch,
                     "worktree": job.worktree_path,
+                    "model": job.model,
+                    "effort": job.effort,
                     "result": job.result,
                 }
 
@@ -95,7 +103,10 @@ class CodingConnector(Connector):
 
             async with session_scope() as s:
                 rows = (await s.execute(select(CodingJob).order_by(CodingJob.created_at.desc()).limit(10))).scalars()
-                return [{"job_id": str(j.id), "title": j.title, "status": j.status} for j in rows]
+                return [
+                    {"job_id": str(j.id), "title": j.title, "status": j.status, "model": j.model, "effort": j.effort}
+                    for j in rows
+                ]
 
         async def cancel(ctx: ToolContext, a: dict[str, Any]) -> Any:
             return {"cancelled": await runner().cancel(_uuid(a["job_id"]), ctx.principal.label)}
@@ -138,13 +149,20 @@ class CodingConnector(Connector):
             ToolSpec(
                 "coding_start_job",
                 "Übergibt einen Entwicklungsauftrag an Claude Code (eigener Git-Worktree, "
-                "Worktree). Auch zum Reparieren eigener Werkzeuge und Anbindungen (z. B. Lead-Tool-MCP, Export, Mailversand) nutzbar. project_path = Pfad des Projekts. Optional test_command, z. B. 'npm run build'.",
+                "Worktree). Auch zum Reparieren eigener Werkzeuge und Anbindungen (z. B. Lead-Tool-MCP, Export, "
+                "Mailversand) nutzbar. project_path = Pfad des Projekts. Optional test_command, z. B. "
+                "'npm run build'. "
+                "Optional model (haiku|sonnet|opus|auto) und effort (low|medium|high|xhigh|max): nennt Sir im Auftrag "
+                "ein Modell (z. B. 'Opus 5.5'), hier übergeben; ohne Angabe gilt das Standardmodell bzw. das im Chat "
+                "gewählte.",
                 _obj(
                     {
                         "title": {"type": "string"},
                         "instructions": {"type": "string", "minLength": 10},
                         "project_path": {"type": "string"},
                         "test_command": {"type": "string"},
+                        "model": {"type": "string", "enum": ["haiku", "sonnet", "opus", "auto"]},
+                        "effort": {"type": "string", "enum": list(EFFORTS)},
                     },
                     ["title", "instructions", "project_path"],
                 ),

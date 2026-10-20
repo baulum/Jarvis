@@ -306,6 +306,8 @@ class CodingJob(Base, TimestampMixin):
     result: Mapped[dict[str, Any]] = mapped_column(default=dict)
     test_command: Mapped[str | None] = mapped_column(String(300))
     task_id: Mapped[uuid.UUID | None] = mapped_column()
+    model: Mapped[str | None] = mapped_column(String(80))  # full model id the job runs with
+    effort: Mapped[str | None] = mapped_column(String(20))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

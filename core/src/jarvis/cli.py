@@ -267,6 +267,10 @@ def cmd_doctor(_: argparse.Namespace) -> None:
             f"binary {b}",
             shutil.which(b) is not None or (b == "psql" and Path("/opt/homebrew/opt/postgresql@17/bin/psql").exists()),
         )
+    from jarvis.coding.runner import resolve_command
+
+    coding_cmd = resolve_command(s.coding.claude_command, s.coding.claude_aliases)
+    check(f"coding command {s.coding.claude_command}", coding_cmd is not None, " ".join(coding_cmd or []))
     check("secret postgres", secret_store.exists(s.database.password_secret))
     check("desktop token", _token_file("desktop").exists(), "jarvisctl init")
     check("bridge token", _token_file("bridge").exists(), "JarvisBridge einmal starten")

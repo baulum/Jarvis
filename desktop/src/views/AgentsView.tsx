@@ -77,6 +77,7 @@ export function AgentsView() {
                 <div className="flex min-w-0 flex-col">
                   <div className="flex items-center gap-2 border-b border-seam px-4 py-2 text-xs text-ink-dim">
                     <span className="type-data truncate">{job.branch ?? "–"}</span>
+                    {job.model && <span className="type-data shrink-0 text-ink-faint">{job.model}{job.effort ? ` · ${job.effort}` : ""}</span>}
                     {job.status === "running" && (
                       <Button size="sm" variant="danger" className="ml-auto" icon={<Square className="size-3" />}
                               onClick={() => act.run("cancel", () => api.codingCancel(job.id), "Job abgebrochen")}>Abbrechen</Button>
