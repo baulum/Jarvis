@@ -4,7 +4,9 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUp, CircleStop, Loader2, Mic, MicOff } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalCard } from "../components/ApprovalCard";
+import { Markdown } from "../components/Markdown";
 import { ModelPicker } from "../components/ModelPicker";
+import { useSlash } from "../hooks/useSlash";
 import { emptyThread, threadFromHistory, type UiMessage } from "../lib/reducers";
 import { api, useApp } from "../store/app";
 import { useBrain } from "./store";
@@ -67,7 +69,7 @@ function Message({ m }: { m: UiMessage }) {
           ))}
         </div>
       )}
-      <span className={m.streaming ? "caret" : ""}>{m.text}</span>
+      <Markdown text={m.text} streaming={m.streaming} className="text-[0.875rem] leading-relaxed" />
       {m.interrupted && <span className="ml-2 text-2xs text-ink-faint">unterbrochen</span>}
       {m.error && m.error !== "cancelled" && <span className="ml-2 text-2xs text-alarm">{m.error}</span>}
     </div>
@@ -103,6 +105,7 @@ export function ChatDock() {
     };
   }, [sessionId, setThread]);
 
+  const slash = useSlash({ draft, setDraft, sessionId, sendText, onNew: () => setActive(null) });
   const messages = useMemo(() => thread?.messages ?? [], [thread?.messages]);
   const running = Boolean(thread?.running);
   const expanded = focused || messages.length > 2;
@@ -132,8 +135,13 @@ export function ChatDock() {
   async function send() {
     const text = draft.trim();
     if (!text || sending) return;
-    setSending(true);
+    if (await slash.tryRun(text)) return;
     setDraft("");
+    await sendText(text);
+  }
+
+  async function sendText(text: string) {
+    setSending(true);
     try {
       const res = await api.sendChat(text, sessionId);
       const st = useApp.getState();
@@ -199,25 +207,27 @@ export function ChatDock() {
         )}
       </AnimatePresence>
       <form
-        className="flex flex-col gap-1 px-3 pb-2.5 pt-2"
+        className="relative flex flex-col gap-1 px-3 pb-2.5 pt-2"
         onSubmit={(e) => {
           e.preventDefault();
           void send();
         }}
       >
+        {slash.menu}
         <textarea
           ref={input}
           rows={1}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
+            if (slash.onKeyDown(e)) return;
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void send();
             }
             if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur();
           }}
-          placeholder={listening ? "Ich höre zu …" : speaking ? "J.A.R.V.I.S. spricht …" : "Frag J.A.R.V.I.S. – oder sag „Hey Jarvis“"}
+          placeholder={listening ? "Ich höre zu …" : speaking ? "J.A.R.V.I.S. spricht …" : "Frag J.A.R.V.I.S. – „/“ für Befehle – oder sag „Hey Jarvis“"}
           aria-label="Nachricht an J.A.R.V.I.S."
           className="max-h-40 min-h-9 w-full resize-none bg-transparent px-2 py-2 text-[0.9rem] text-ink placeholder:text-ink-faint focus:outline-none"
         />
@@ -261,6 +271,7 @@ export function ChatDock() {
           </div>
         </div>
       </form>
+      {slash.dialog}
     </motion.section>
   );
 }

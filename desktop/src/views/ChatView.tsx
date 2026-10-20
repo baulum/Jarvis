@@ -6,7 +6,9 @@ import { Button, EmptyState, ErrorState, Skeleton } from "../components/ui";
 import { useQuery } from "../hooks/useQuery";
 import { formatMs, formatRelative } from "../lib/format";
 import { emptyThread, threadFromHistory, type ToolChip, type UiMessage } from "../lib/reducers";
+import { Markdown } from "../components/Markdown";
 import { ModelPicker } from "../components/ModelPicker";
+import { useSlash } from "../hooks/useSlash";
 import { api, useApp } from "../store/app";
 
 export function ChatView() {
@@ -102,6 +104,7 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
     };
   }, [sessionId, setThread]);
 
+  const slash = useSlash({ draft, setDraft, sessionId, sendText, onNew: () => setActive(null) });
   const messages = useMemo(() => thread?.messages ?? [], [thread?.messages]);
   const running = Boolean(thread?.running);
   const sessionApprovals = useMemo(
@@ -117,8 +120,13 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
   async function send() {
     const text = draft.trim();
     if (!text || sending) return;
-    setSending(true);
+    if (await slash.tryRun(text)) return;
     setDraft("");
+    await sendText(text);
+  }
+
+  async function sendText(text: string) {
+    setSending(true);
     stick.current = true;
     try {
       const res = await api.sendChat(text, sessionId);
@@ -195,23 +203,25 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
       <div className="border-t border-seam bg-hull/60 px-8 py-4">
         <div className="mx-auto mb-2 flex w-full max-w-[52rem]"><ModelPicker placement="up" /></div>
         <form
-          className="mx-auto flex w-full max-w-[52rem] items-end gap-2"
+          className="relative mx-auto flex w-full max-w-[52rem] items-end gap-2"
           onSubmit={(e) => {
             e.preventDefault();
             void send();
           }}
         >
+          {slash.menu}
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
+              if (slash.onKeyDown(e)) return;
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 void send();
               }
             }}
             rows={Math.min(6, Math.max(1, draft.split("\n").length))}
-            placeholder="Nachricht an J.A.R.V.I.S. – Enter sendet, Shift+Enter für neue Zeile"
+            placeholder="Nachricht an J.A.R.V.I.S. – Enter sendet, Shift+Enter neue Zeile, „/“ für Befehle"
             aria-label="Nachricht"
             className="field min-h-[2.4rem] flex-1 resize-none py-2 text-sm leading-relaxed"
           />
@@ -231,6 +241,7 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
           </Button>
         </form>
       </div>
+      {slash.dialog}
     </div>
   );
 }
@@ -255,8 +266,8 @@ function MessageRow({ m }: { m: UiMessage }) {
           ))}
         </div>
       )}
-      <div className={`max-w-[68ch] text-[0.9375rem] leading-[1.65] whitespace-pre-wrap text-ink ${m.streaming ? "caret" : ""}`}>
-        {empty ? <span className="text-ink-faint">Denkt nach</span> : m.text}
+      <div className="max-w-[72ch] text-[0.9375rem] leading-[1.7] text-ink">
+        {empty ? <span className="text-ink-faint">Denkt nach</span> : <Markdown text={m.text} streaming={m.streaming} />}
       </div>
       {(m.error || m.interrupted) && (
         <p className="flex items-center gap-1.5 text-xs text-ember">

@@ -7,14 +7,17 @@ import 'package:go_router/go_router.dart';
 import 'package:local_auth/local_auth.dart';
 
 import '../../core/api.dart';
+import '../../core/monitor.dart' show statusTextDe;
 import '../../core/theme.dart';
 import '../../state/activity.dart';
 import '../../state/providers.dart';
 import '../widgets/hud.dart';
+import 'monitor_sheet.dart';
 
 const _taskStatus = {
   'queued': 'Wartet',
   'running': 'Läuft',
+  'paused': 'Pausiert',
   'waiting_approval': 'Wartet auf Freigabe',
   'waiting_input': 'Braucht Angaben',
   'waiting_external': 'Wartet auf Ergebnis',
@@ -88,12 +91,15 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
 
   List<Widget> _sections(BuildContext context, ActivityData d) {
     final waiting = d.tasks.where((t) => t['status'] == 'waiting_input').toList();
-    final running = d.tasks.where((t) => ['queued', 'running', 'waiting_approval', 'waiting_external'].contains(t['status'])).toList();
+    final running = d.tasks.where((t) => ['queued', 'running', 'paused', 'waiting_approval', 'waiting_external'].contains(t['status'])).toList();
+    final liveJobs = d.jobs.where((j) => ['queued', 'running', 'paused'].contains(j['status'])).toList();
     final history = <({DateTime at, Widget w})>[
       for (final a in d.alerts) (at: DateTime.parse(a['created_at'] as String), w: _AlertRow(a: a)),
       for (final c in d.calls) (at: DateTime.parse(c['created_at'] as String), w: _CallRow(c: c, onTap: () => _openCall(context, c))),
       for (final t in d.tasks.where((t) => ['completed', 'failed', 'cancelled'].contains(t['status'])).take(15))
         (at: DateTime.parse(t['updated_at'] as String), w: _TaskRow(t: t, onTap: () => _openTask(context, t))),
+      for (final j in d.jobs.where((j) => ['completed', 'failed', 'cancelled'].contains(j['status'])).take(10))
+        (at: DateTime.parse((j['finished_at'] ?? j['created_at']) as String), w: _JobRow(j: j, onTap: () => openJobMonitor(context, j['id'] as String))),
     ]..sort((a, b) => b.at.compareTo(a.at));
 
     return [
@@ -101,6 +107,10 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
         const _Section('Wartet auf Sie', color: J.amber),
         for (final a in d.approvals) _ApprovalRow(a: a, onTap: () => openApproval(context, ref, a)),
         for (final t in waiting) _TaskRow(t: t, onTap: () => _openTask(context, t)),
+      ],
+      if (liveJobs.isNotEmpty) ...[
+        const _Section('Agenten', color: J.cyan),
+        for (final j in liveJobs) _JobRow(j: j, onTap: () => openJobMonitor(context, j['id'] as String)),
       ],
       if (running.isNotEmpty || d.watches.isNotEmpty) ...[
         const _Section('Läuft'),
@@ -131,6 +141,8 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
               const SizedBox(height: J.s3),
               Text(t['error'].toString(), style: J.mono(12, color: J.red)),
             ],
+            const SizedBox(height: J.s4),
+            TaskControls(task: t, onChanged: () => Navigator.of(ctx).maybePop()),
             const SizedBox(height: J.s5),
             const Caps('Schritte'),
             const SizedBox(height: J.s2),
@@ -414,6 +426,24 @@ class _TaskRow extends StatelessWidget {
       title: t['title'].toString(),
       sub: t['question']?.toString() ?? t['error']?.toString(),
       meta: 'AUFGABE · ${(_taskStatus[t['status']] ?? t['status']).toString().toUpperCase()} · $done/${steps.length} · ${relDay(DateTime.parse(t['updated_at'] as String))}',
+      onTap: onTap,
+    );
+  }
+}
+
+class _JobRow extends StatelessWidget {
+  const _JobRow({required this.j, required this.onTap});
+  final Map<String, dynamic> j;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) {
+    final status = j['status'] as String;
+    final when = DateTime.parse((status == 'running' || status == 'queued' ? j['created_at'] : (j['finished_at'] ?? j['created_at'])) as String);
+    return _Row(
+      dot: statusColor(status),
+      title: j['title'].toString(),
+      sub: j['branch']?.toString(),
+      meta: 'AGENT · ${(statusTextDe[status] ?? status).toUpperCase()} · ${relDay(when)}',
       onTap: onTap,
     );
   }

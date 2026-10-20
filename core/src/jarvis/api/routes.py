@@ -16,6 +16,8 @@ from sqlalchemy import func, select
 from jarvis.agent.persona import time_of_day_greeting
 from jarvis.api.deps import current_principal, get_state, require, require_owner
 from jarvis.app_state import VERSION, AppState
+from jarvis.coding.runner import CodingError
+from jarvis.commands import command_list
 from jarvis.config import RISK_ORDER
 from jarvis.db import session_scope
 from jarvis.db.models import Approval, AuditEntry, Call, ChatSession, CodingJob, Task
@@ -96,6 +98,12 @@ async def chat(body: ChatBody, st: AppState = StateDep, p: Principal = Actor) ->
         return {"session_id": str(res.session_id), "text": res.text, "error": res.error, "tools": res.tools}
     spawn(st.orchestrator.handle(p, channel, body.message, session_id=sess.id, images=body.images), name="chat")
     return {"session_id": str(sess.id), "accepted": True}
+
+
+@router.get("/commands")
+async def commands(p: Principal = Reader) -> dict[str, Any]:
+    """Slash commands for the chat input – one list for Desktop and Mobile."""
+    return command_list()
 
 
 class ModelBody(BaseModel):
@@ -297,6 +305,11 @@ async def task(tid: str, st: AppState = StateDep, p: Principal = Reader) -> dict
     return _task_dict(t)
 
 
+class AgentMessage(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+    immediate: bool = False  # stop the current agent run now and continue the session with the message
+
+
 class TaskCreate(BaseModel):
     playbook: str
     params: dict[str, Any]
@@ -327,6 +340,40 @@ async def task_input(tid: str, body: TaskInput, st: AppState = StateDep, p: Prin
 @router.post("/tasks/{tid}/cancel")
 async def task_cancel(tid: str, st: AppState = StateDep, p: Principal = Actor) -> dict[str, bool]:
     return {"cancelled": await st.tasks.cancel(_uuid(tid), p.label)}
+
+
+@router.post("/tasks/{tid}/pause")
+async def task_pause(tid: str, st: AppState = StateDep, p: Principal = Actor) -> dict[str, bool]:
+    return {"paused": await st.tasks.pause(_uuid(tid), p.label)}
+
+
+@router.post("/tasks/{tid}/resume")
+async def task_resume(tid: str, st: AppState = StateDep, p: Principal = Actor) -> dict[str, bool]:
+    return {"resumed": await st.tasks.resume(_uuid(tid), p.label)}
+
+
+@router.post("/tasks/{tid}/message")
+async def task_message(
+    tid: str, body: AgentMessage, st: AppState = StateDep, p: Principal = Actor
+) -> dict[str, Any]:
+    """Message to the agent working for this task: forwarded to its running coding job."""
+    async with session_scope() as s:
+        job_id = (
+            await s.execute(
+                select(CodingJob.id)
+                .where(CodingJob.task_id == _uuid(tid), CodingJob.status.in_(["queued", "running", "paused"]))
+                .order_by(CodingJob.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if job_id is None:
+        raise HTTPException(
+            409, "Diese Aufgabe hat gerade keinen laufenden Agenten – Rückfragen beantwortest du über /input"
+        )
+    try:
+        return {"job_id": str(job_id), **await st.coding.send_message(job_id, body.text, p.label, body.immediate)}
+    except CodingError as e:
+        raise HTTPException(409, str(e)) from e
 
 
 @router.post("/tasks/{tid}/retry")
@@ -1003,6 +1050,40 @@ async def coding_log(
 @router.post("/coding/jobs/{jid}/cancel")
 async def coding_cancel(jid: str, st: AppState = StateDep, p: Principal = Actor) -> dict[str, bool]:
     return {"cancelled": await st.coding.cancel(_uuid(jid), p.label)}
+
+
+@router.get("/coding/jobs/{jid}/monitor")
+async def coding_monitor(jid: str, st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    try:
+        return await st.coding.monitor(_uuid(jid))
+    except CodingError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@router.post("/coding/jobs/{jid}/pause")
+async def coding_pause(jid: str, st: AppState = StateDep, p: Principal = Actor) -> dict[str, bool]:
+    try:
+        return {"paused": await st.coding.pause(_uuid(jid), p.label)}
+    except CodingError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.post("/coding/jobs/{jid}/resume")
+async def coding_resume(jid: str, st: AppState = StateDep, p: Principal = Actor) -> dict[str, bool]:
+    try:
+        return {"resumed": await st.coding.resume(_uuid(jid), p.label)}
+    except CodingError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.post("/coding/jobs/{jid}/message")
+async def coding_message(
+    jid: str, body: AgentMessage, st: AppState = StateDep, p: Principal = Actor
+) -> dict[str, Any]:
+    try:
+        return await st.coding.send_message(_uuid(jid), body.text, p.label, body.immediate)
+    except CodingError as e:
+        raise HTTPException(409, str(e)) from e
 
 
 @router.post("/coding/jobs/{jid}/retry")

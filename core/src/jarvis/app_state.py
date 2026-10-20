@@ -356,7 +356,9 @@ class AppState:
                     select(func.count())
                     .select_from(Task)
                     .where(
-                        Task.status.in_(["running", "queued", "waiting_approval", "waiting_input", "waiting_external"])
+                        Task.status.in_(
+                            ["running", "queued", "paused", "waiting_approval", "waiting_input", "waiting_external"]
+                        )
                     )
                 )
             ).scalar_one()

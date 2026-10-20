@@ -127,6 +127,8 @@ const STATUS_LABELS: Record<string, string> = {
   queued: "Wartet",
   pending: "Ausstehend",
   running: "Läuft",
+  paused: "Pausiert",
+  aborted: "Abgebrochen",
   waiting_approval: "Wartet auf Freigabe",
   waiting_input: "Wartet auf Eingabe",
   waiting_external: "Wartet extern",
@@ -157,6 +159,7 @@ export function statusTone(s: string | null | undefined): Tone {
     case "running":
     case "queued":
       return "info";
+    case "paused":
     case "waiting_approval":
     case "waiting_input":
     case "waiting_external":
@@ -194,4 +197,17 @@ export function compactJson(v: unknown, max = 600): string {
   }
   if (s === undefined) s = "";
   return s.length > max ? `${s.slice(0, max)} …` : s;
+}
+
+/** 12345 -> "12,3 Tsd.", 2_400_000 -> "2,4 Mio." */
+export function formatTokens(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return "–";
+  if (n >= 1_000_000) return `${nf1.format(n / 1_000_000)} Mio.`;
+  if (n >= 10_000) return `${nf1.format(n / 1000)} Tsd.`;
+  return nf0.format(n);
+}
+
+export function formatUsd(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return "–";
+  return `${n < 1 ? n.toFixed(3).replace(".", ",") : nf1.format(n)} $`;
 }

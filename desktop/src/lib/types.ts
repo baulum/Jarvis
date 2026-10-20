@@ -142,6 +142,7 @@ export interface Approval {
 export type TaskStatus =
   | "queued"
   | "running"
+  | "paused"
   | "waiting_approval"
   | "waiting_input"
   | "waiting_external"
@@ -436,13 +437,72 @@ export interface CodingJob {
   finished_at: string | null;
 }
 
+/** One tool call of a job as the agent monitor shows it. */
+export interface MonitorStep {
+  id: string;
+  tool: string;
+  detail: string;
+  status: "running" | "ok" | "error" | "aborted" | "paused";
+  started_at: string | null;
+  finished_at: string | null;
+  duration_s: number | null;
+  result: string | null;
+}
+
+/** Snapshot from GET /coding/jobs/{id}/monitor. */
+export interface JobMonitor {
+  job_id: string;
+  title: string;
+  status: string;
+  model: string | null;
+  effort: string | null;
+  branch: string | null;
+  created_at: string;
+  finished_at: string | null;
+  elapsed_s: number;
+  /** server time of the snapshot (elapsed_s is valid as of then) */
+  snapshot_at: string;
+  current: { kind: "tool" | "thinking" | "waiting" | "paused" | "done"; label: string; tool?: string | null; since?: string | null };
+  steps: MonitorStep[];
+  step_count: number;
+  running_tools: MonitorStep[];
+  last_text: string;
+  messages: { text: string; ts: string | null; immediate: boolean }[];
+  pending_messages: number;
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_creation_tokens: number;
+    total_tokens: number;
+    cost_usd: number | null;
+    cost_final: boolean;
+  };
+  error: string | null;
+  can_pause: boolean;
+  can_resume: boolean;
+  can_cancel: boolean;
+  can_message: boolean;
+}
+
+export interface AgentMessageResult {
+  queued: boolean;
+  interrupted: boolean;
+  pending: number;
+  job_id?: string;
+}
+
 /** Compact Claude Code stream event as written to the job log. */
 export interface CodingLogLine {
   type: string;
   ts?: string;
   text?: string;
   tool?: string;
+  tool_id?: string;
   detail?: string;
+  result?: string;
+  action?: string;
+  immediate?: boolean;
   subtype?: string;
   is_error?: boolean;
   num_turns?: number;

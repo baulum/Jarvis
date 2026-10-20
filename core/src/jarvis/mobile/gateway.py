@@ -38,7 +38,7 @@ MOBILE_ROUTES: list[tuple[frozenset[str], re.Pattern[str]]] = [
     (frozenset({"POST"}), re.compile(r"^/api/chat(/interrupt)?$")),
     (frozenset({"GET"}), re.compile(r"^/api/sessions(/[0-9a-f-]{36}/messages)?$")),
     (frozenset({"GET"}), re.compile(r"^/api/tasks(/[0-9a-f-]{36})?$")),
-    (frozenset({"POST"}), re.compile(r"^/api/tasks/[0-9a-f-]{36}/(input|cancel|retry)$")),
+    (frozenset({"POST"}), re.compile(r"^/api/tasks/[0-9a-f-]{36}/(input|cancel|retry|pause|resume|message)$")),
     (frozenset({"GET"}), re.compile(r"^/api/approvals(/mode)?$")),  # deciding goes through /api/mobile (signed)
     (frozenset({"GET", "POST"}), re.compile(r"^/api/agent/model$")),  # model picker in the app
     (frozenset({"GET"}), re.compile(r"^/api/agent/usage$")),  # Claude quota display
@@ -50,6 +50,9 @@ MOBILE_ROUTES: list[tuple[frozenset[str], re.Pattern[str]]] = [
     (frozenset({"GET"}), re.compile(r"^/api/system/(status|greeting)$")),
     (frozenset({"POST"}), re.compile(r"^/api/system/killswitch$")),  # engaging only; release is owner-only
     (frozenset({"GET"}), re.compile(r"^/api/coding/jobs$")),
+    (frozenset({"GET"}), re.compile(r"^/api/coding/jobs/[0-9a-f-]{36}/(monitor|log)$")),  # agent monitor
+    (frozenset({"POST"}), re.compile(r"^/api/coding/jobs/[0-9a-f-]{36}/(pause|resume|cancel|message)$")),
+    (frozenset({"GET"}), re.compile(r"^/api/commands$")),  # slash-command list, same source as the desktop
     (frozenset({"POST"}), re.compile(r"^/api/voice/stt$")),
     (frozenset({"GET"}), re.compile(r"^/ws$")),
     (frozenset({"GET", "POST"}), re.compile(r"^/rtc(/.*)?$")),  # LiveKit signalling (proxied, see rtc_proxy)

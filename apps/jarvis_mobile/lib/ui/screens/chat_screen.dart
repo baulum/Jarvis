@@ -9,6 +9,7 @@ import '../../state/providers.dart';
 import '../widgets/composer.dart';
 import '../widgets/core_orb.dart';
 import '../widgets/hud.dart';
+import '../widgets/markdown_view.dart';
 import '../widgets/model_picker.dart';
 
 /// Conversation with the same Jarvis as on the Mac. No bubbles: Sir's words right-aligned in light,
@@ -207,7 +208,7 @@ class _MessageView extends StatelessWidget {
         if (m.text.isEmpty && m.streaming)
           const _Thinking()
         else
-          SelectableText(m.text, style: J.body),
+          SelectionArea(child: MarkdownView(text: m.text, streaming: m.streaming)),
         if (m.error != null && m.error != 'cancelled')
           Padding(padding: const EdgeInsets.only(top: J.s1), child: Text(m.error!, style: J.mono(11, color: J.amber))),
       ]),

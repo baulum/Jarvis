@@ -10,17 +10,24 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 
 import '../../core/api.dart';
+import '../../core/slash.dart';
 import '../../core/theme.dart';
+import '../../state/chat.dart';
+import '../../state/commands.dart';
 import '../../state/providers.dart';
 import 'hud.dart';
 import 'model_picker.dart';
+import 'slash_menu.dart';
 
 /// Floating input: text, hold-to-dictate (Whisper on the Mac), and the call button – always one tap away.
 class Composer extends ConsumerStatefulWidget {
-  const Composer({super.key, required this.onSend, this.busy = false, this.onStop, this.autofocus = false, this.sessionId});
+  const Composer({super.key, required this.onSend, this.busy = false, this.onStop, this.onNew, this.autofocus = false, this.sessionId});
   final ValueChanged<String> onSend;
   final bool busy;
   final VoidCallback? onStop;
+
+  /// "/neu" – defaults to starting a fresh conversation
+  final VoidCallback? onNew;
   final bool autofocus;
   final String? sessionId;
   @override
@@ -43,12 +50,54 @@ class _ComposerState extends ConsumerState<Composer> {
     super.dispose();
   }
 
+  List<SlashCommand> get _commands => ref.read(commandsProvider).valueOrNull ?? const [];
+
+  void _runCommand(SlashCommand c, String args) {
+    runSlashCommand(
+      context,
+      ref,
+      c,
+      args,
+      onSend: widget.onSend,
+      onNew: widget.onNew ?? () => ref.read(chatProvider.notifier).fresh(),
+      onStop: widget.onStop ?? () => ref.read(chatProvider.notifier).interrupt(),
+      sessionId: widget.sessionId,
+    );
+  }
+
+  void _pick(SlashItem item) {
+    HapticFeedback.selectionClick();
+    if (item.runs) {
+      _text.clear();
+      setState(() {});
+      _runCommand(item.command, item.arg ?? '');
+    } else {
+      _text.value = TextEditingValue(text: item.insert, selection: TextSelection.collapsed(offset: item.insert.length));
+      setState(() {});
+    }
+  }
+
   void _send() {
     final t = _text.text.trim();
     if (t.isEmpty) return;
+    final cmds = _commands;
+    final parsed = parseSlash(t, cmds);
+    if (parsed == null && t.startsWith('/') && !t.contains(' ')) {
+      // "/ne" + send: take the best suggestion instead of sending the fragment as a message
+      final hits = slashItems(t, cmds);
+      if (hits.isNotEmpty) {
+        _pick(hits.first);
+        return;
+      }
+    }
     HapticFeedback.lightImpact();
     _text.clear();
-    widget.onSend(t);
+    setState(() {});
+    if (parsed != null) {
+      _runCommand(parsed.command, parsed.args);
+    } else {
+      widget.onSend(t);
+    }
   }
 
   Future<void> _startDictation() async {
@@ -103,7 +152,11 @@ class _ComposerState extends ConsumerState<Composer> {
   @override
   Widget build(BuildContext context) {
     final offline = ref.watch(linkProvider).valueOrNull?.name == 'offline';
+    final slash = _text.text.startsWith('/');
+    final cmds = slash ? (ref.watch(commandsProvider).valueOrNull ?? const <SlashCommand>[]) : const <SlashCommand>[];
+    final items = slash ? slashItems(_text.text, cmds) : const <SlashItem>[];
     return Column(mainAxisSize: MainAxisSize.min, children: [
+      if (items.isNotEmpty) SlashMenu(items: items, onPick: _pick),
       AnimatedSize(
         duration: J.base,
         curve: J.enter,
@@ -151,7 +204,7 @@ class _ComposerState extends ConsumerState<Composer> {
                   decoration: InputDecoration(
                     isCollapsed: true,
                     border: InputBorder.none,
-                    hintText: offline ? 'Jarvis ist nicht erreichbar' : 'Nachricht an Jarvis',
+                    hintText: offline ? 'Jarvis ist nicht erreichbar' : 'Nachricht an Jarvis – „/“ für Befehle',
                     hintStyle: J.bodyDim.copyWith(color: J.text3),
                   ),
                 ),

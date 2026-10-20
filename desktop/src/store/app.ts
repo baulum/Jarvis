@@ -275,6 +275,7 @@ export function handleBusEvent(ev: BusEvent): void {
     useApp.setState((s) => ({
       codingLive: { ...s.codingLive, [d.job_id as string]: pushBounded(s.codingLive[d.job_id as string] ?? [], line, 500) },
     }));
+    debounce(`coding-progress:${d.job_id as string}`, 400, () => bump("coding")); // monitor refetches its snapshot
     return;
   }
   if (type.startsWith("coding.")) {
