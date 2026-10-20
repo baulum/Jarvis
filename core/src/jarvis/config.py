@@ -212,6 +212,9 @@ class CodingCfg(_Strict):
     # Directories the worker may read (--add-dir); Edit/Write there are denied.
     extra_read_dirs: list[str] = Field(default_factory=list)
     sandbox: bool = True
+    # Exact absolute directories granted in addition to the job worktree (default: none = worktree only).
+    extra_read_dirs: list[Path] = Field(default_factory=list)
+    extra_write_dirs: list[Path] = Field(default_factory=list)
 
 
 class BrowserCfg(_Strict):

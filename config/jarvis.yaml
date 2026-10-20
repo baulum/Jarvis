@@ -210,6 +210,9 @@ coding:
   extra_read_dirs: [/Users/paul/Downloads]
   # false = Claude Code läuft direkt auf dem Mac (Netzwerk, lokale Ports, Google Fonts, next build funktionieren)
   sandbox: false
+  # Zusätzlich zum Job-Worktree (exakte Pfade, keine Wildcards)
+  extra_read_dirs: [/Users/paul/Developer/Jarvis-Workspaces/repos]
+  extra_write_dirs: [/Users/paul/Developer/Projects/night-motion-graphics]
 
 browser:
   headless: true
