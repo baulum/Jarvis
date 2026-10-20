@@ -16,12 +16,21 @@ import time
 import urllib.parse
 from datetime import datetime, timedelta
 from email.message import EmailMessage
+from pathlib import Path
 from typing import Any
 
 import httpx
 
 from jarvis.agent.persona import TZ
 from jarvis.connectors.base import Connector, Health, Manifest, SecretField
+from jarvis.connectors.gmail_mime import (
+    b64url_decode,
+    collect_attachments,
+    public_view,
+    resolve_dest_dir,
+    sanitize_filename,
+    write_new,
+)
 from jarvis.secrets import secret_store
 from jarvis.security.guards import wrap_untrusted
 from jarvis.tools.executor import ToolUserError
@@ -171,6 +180,38 @@ class GoogleConnector(Connector):
             return Health("error", str(e))
 
     # ------------------------------------------------------------------ helpers
+    async def fetch_attachment_bytes(self, message_id: str, att: dict[str, Any]) -> bytes:
+        if att.get("data"):
+            return b64url_decode(att["data"])
+        res = await self._api(
+            "GET",
+            f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}/attachments/{att['attachmentId']}",
+        )
+        return b64url_decode(res.get("data", ""))
+
+    async def download_message_attachments(
+        self, message_id: str, dest_dir: str, only_images: bool = False, payload: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        """Save attachments of one message below an allowed root; never overwrites. Read-only on Gmail."""
+        home = Path.home()
+        dest = resolve_dest_dir(dest_dir, [home / "Downloads", home / "Documents"])
+        if payload is None:
+            m = await self._api(
+                "GET",
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}",
+                params={"format": "full"},
+            )
+            payload = m.get("payload", {})
+        dest.mkdir(parents=True, exist_ok=True)
+        saved = []
+        for att in collect_attachments(payload):
+            if only_images and not att["mimeType"].startswith("image/"):
+                continue
+            data = await self.fetch_attachment_bytes(message_id, att)
+            path = write_new(dest, sanitize_filename(att["filename"]), data)
+            saved.append({**public_view(att), "message_id": message_id, "path": str(path), "bytes": len(data)})
+        return saved
+
     async def send_mail(
         self,
         to: str,
@@ -234,12 +275,35 @@ class GoogleConnector(Connector):
             body = _extract_text(m.get("payload", {}))
             return {
                 "id": m["id"],
+                "attachments": [public_view(x) for x in collect_attachments(m.get("payload", {}))],
                 "from": hdr.get("From"),
                 "to": hdr.get("To"),
                 "subject": hdr.get("Subject"),
                 "date": hdr.get("Date"),
                 **wrap_untrusted(body, f"email von {hdr.get('From')}", 10000),
             }
+
+        async def gmail_download_attachments(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            files = await self.download_message_attachments(
+                a["message_id"], a["dest_dir"], bool(a.get("only_images", False))
+            )
+            return {"count": len(files), "files": files, "paths": [f["path"] for f in files]}
+
+        async def gmail_download_thread_attachments(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            if not a.get("thread_id") and not a.get("message_id"):
+                raise ToolUserError("thread_id oder message_id angeben.")
+            tid = a.get("thread_id")
+            if not tid:
+                tid = (await self._api("GET", f"{G}/messages/{a['message_id']}", params={"format": "minimal"}))[
+                    "threadId"
+                ]
+            thread = await self._api("GET", f"{G}/threads/{tid}", params={"format": "full"})
+            files: list[dict[str, Any]] = []
+            for m in thread.get("messages", []):
+                files += await self.download_message_attachments(
+                    m["id"], a["dest_dir"], bool(a.get("only_images", False)), m.get("payload", {})
+                )
+            return {"count": len(files), "files": files, "paths": [f["path"] for f in files]}
 
         async def gmail_draft(ctx: ToolContext, a: dict[str, Any]) -> Any:
             res = await self.send_mail(a["to"], a["subject"], a["body"], draft=True)
@@ -356,12 +420,49 @@ class GoogleConnector(Connector):
             ),
             ToolSpec(
                 "gmail_read",
-                "Liest eine E-Mail vollständig.",
+                "Liest eine E-Mail vollständig (inkl. Liste der Anhänge/Inline-Bilder).",
                 _obj({"message_id": {"type": "string"}}, ["message_id"]),
                 gmail_read,
                 "read",
                 S,
                 untrusted_output=True,
+            ),
+            ToolSpec(
+                "gmail_download_attachments",
+                "Lädt Anhänge/Inline-Bilder einer E-Mail in einen Ordner unter Downloads oder Documents "
+                "(überschreibt nichts) und liefert die Dateipfade.",
+                _obj(
+                    {
+                        "message_id": {"type": "string"},
+                        "dest_dir": {"type": "string"},
+                        "only_images": {"type": "boolean"},
+                    },
+                    ["message_id", "dest_dir"],
+                ),
+                gmail_download_attachments,
+                "medium",
+                S,
+                writes=True,
+                summarize=lambda a: f"Gmail-Anhänge von {a['message_id']} nach {a['dest_dir']} speichern",
+            ),
+            ToolSpec(
+                "gmail_download_thread_attachments",
+                "Lädt Anhänge/Inline-Bilder aller Nachrichten eines Threads (thread_id oder message_id) in einen "
+                "Ordner unter Downloads oder Documents.",
+                _obj(
+                    {
+                        "thread_id": {"type": "string"},
+                        "message_id": {"type": "string"},
+                        "dest_dir": {"type": "string"},
+                        "only_images": {"type": "boolean"},
+                    },
+                    ["dest_dir"],
+                ),
+                gmail_download_thread_attachments,
+                "medium",
+                S,
+                writes=True,
+                summarize=lambda a: f"Gmail-Thread-Anhänge nach {a['dest_dir']} speichern",
             ),
             ToolSpec(
                 "gmail_create_draft",
