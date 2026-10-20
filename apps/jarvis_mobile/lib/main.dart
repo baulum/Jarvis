@@ -11,6 +11,7 @@ import 'ui/screens/activity_screen.dart';
 import 'ui/screens/call_screen.dart';
 import 'ui/screens/chat_screen.dart';
 import 'ui/screens/home_screen.dart';
+import 'ui/screens/job_screen.dart';
 import 'ui/screens/memory_screen.dart';
 import 'ui/screens/pair_screen.dart';
 import 'ui/screens/settings_screen.dart';
@@ -36,6 +37,8 @@ String routeForLink(String link) {
       return Uri(path: '/activity', queryParameters: {'approval': ?id, 'decide': ?u.queryParameters['decide']}).toString();
     case 'task':
       return Uri(path: '/activity', queryParameters: {'task': ?id}).toString();
+    case 'job': // coding job: its own detail view (status, result / error, steps, PR / remove)
+      return id == null ? '/activity' : '/job/${Uri.encodeComponent(id)}';
     case 'call':
       return id == null ? '/call' : Uri(path: '/activity', queryParameters: {'call': id}).toString();
     case 'chat':
@@ -61,6 +64,7 @@ class _JarvisMobileState extends ConsumerState<JarvisMobile> with WidgetsBinding
   late final GoRouter _router;
   StreamSubscription<dynamic>? _native;
   final _refresh = ValueNotifier<int>(0);
+  String? _pendingLink;
 
   @override
   void initState() {
@@ -90,6 +94,10 @@ class _JarvisMobileState extends ConsumerState<JarvisMobile> with WidgetsBinding
           path: '/activity',
           pageBuilder: (_, s) => _slide(ActivityScreen(focus: s.uri.queryParameters), const Offset(1, 0)),
         ),
+        GoRoute(
+          path: '/job/:id',
+          pageBuilder: (_, s) => _slide(JobScreen(jobId: s.pathParameters['id']!), const Offset(1, 0)),
+        ),
         GoRoute(path: '/memory', pageBuilder: (_, _) => _slide(const MemoryScreen(), const Offset(-1, 0))),
         GoRoute(path: '/settings', pageBuilder: (_, _) => _slide(const SettingsScreen(), const Offset(1, 0))),
         GoRoute(path: '/call', pageBuilder: (_, _) => _fadeUp(const CallScreen())),
@@ -98,7 +106,7 @@ class _JarvisMobileState extends ConsumerState<JarvisMobile> with WidgetsBinding
     ref.listenManual(pairingProvider, (_, _) => _refresh.value++);
     final native = ref.read(nativeProvider);
     _native = native.events.listen((e) {
-      if (e.type == 'link') _router.go(routeForLink(e.data as String));
+      if (e.type == 'link') _openLink(e.data as String);
       if (e.type == 'revoked') ref.read(pairingProvider.notifier).refresh();
       if (e.type == 'call_state') {
         final s = (e.data as Map)['status'];
@@ -109,11 +117,34 @@ class _JarvisMobileState extends ConsumerState<JarvisMobile> with WidgetsBinding
     ref.read(callProvider); // start listening to native call state right away
     // Cold start by an incoming call (push woke the app): the ringing event may predate this listener.
     ref.listenManual(pairingProvider, (_, next) async {
+      final pending = _pendingLink;
+      if (pending != null && next.hasValue) {
+        _pendingLink = null;
+        _openLink(pending); // the notification that cold-started the app: open its target now
+      }
       if (next.valueOrNull?.paired != true) return;
       final s = await native.callState();
       final live = !['idle', 'ended', null].contains(s['status']);
       if (live && _router.routerDelegate.currentConfiguration.uri.path != '/call') _router.push('/call');
     }, fireImmediately: true);
+  }
+
+  /// Opens what a notification / deep link points to. At a cold start the pairing state is not loaded yet and the
+  /// router would redirect to the start page, so the link waits until the app knows whether it is paired.
+  void _openLink(String link) {
+    final p = ref.read(pairingProvider);
+    if (p.isLoading && !p.hasValue) {
+      _pendingLink = link;
+      return;
+    }
+    final route = routeForLink(link);
+    if (route == '/' || route.startsWith('/pair')) {
+      _router.go(route);
+      return;
+    }
+    // detail views sit on top of the start page, so "back" returns there
+    _router.go('/');
+    WidgetsBinding.instance.addPostFrameCallback((_) => _router.push(route));
   }
 
   CustomTransitionPage<void> _fadeUp(Widget child) => CustomTransitionPage(

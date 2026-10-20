@@ -112,6 +112,7 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
                 result.error("jarvis", "„Hey Jarvis“ konnte nicht gespeichert werden: ${e.javaClass.simpleName}", null)
             }
             "openAssist" -> { Assist.launch(context, "app"); result.success(true) }
+            "openUrl" -> result.success(openUrl(call.argument<String>("url").orEmpty()))
             else -> result.notImplemented()
         }
     }
@@ -131,6 +132,18 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
             .put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
             .put("sdk", Build.VERSION.SDK_INT)
             .toString()
+    }
+
+    /** Links in chat answers: only web and mail links, opened by the system's default app. */
+    private fun openUrl(url: String): Boolean {
+        val uri = Uri.parse(url.trim())
+        if (uri.scheme?.lowercase() !in listOf("http", "https", "mailto")) return false
+        return try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        } catch (e: ActivityNotFoundException) {
+            false
+        }
     }
 
     private fun openSettings(kind: String) {

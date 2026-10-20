@@ -6,6 +6,7 @@ customising the agent identity) and reused as system prompt for direct-LLM fallb
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -98,6 +99,25 @@ def time_of_day_greeting(p: Personality, now: datetime | None = None) -> str:
     return p.greetings.get(key, f"Hallo, {p.owner_title}.")
 
 
+_OPENING_GREETING = re.compile(r"^\s*(guten\s+(morgen|tag|abend)|hallo|noch wach)\b[^.!?\n]*[.!?]\s*", re.IGNORECASE)
+
+
+def short_greeting(p: Personality, now: datetime | None = None) -> str:
+    """One short greeting for the start of a call (no status report like the long chat greetings)."""
+    h = (now or datetime.now(TZ)).hour
+    word = (
+        "Guten Morgen" if 5 <= h < 11 else "Guten Tag" if 11 <= h < 17 else "Guten Abend" if 17 <= h < 23 else "Hallo"
+    )
+    return f"{word}, {p.owner_title}."
+
+
+def call_opening(p: Personality, message: str | None = None, now: datetime | None = None) -> str:
+    """What Jarvis says once when Sir picks up. A greeting the message already starts with is not repeated."""
+    hello = short_greeting(p, now)
+    body = _OPENING_GREETING.sub("", (message or "").strip(), count=1).strip()
+    return f"{hello} {body}".strip() if body else f"{hello} Ich höre."
+
+
 def turn_instructions(
     channel: str, now: datetime | None = None, memory_context: str = "", tainted: bool = False
 ) -> str:
@@ -111,7 +131,9 @@ def turn_instructions(
             "Geschäftsabläufe) startest du ZUERST mit dem passenden Werkzeug im Hintergrund und bestätigst erst "
             "danach in einem Satz (z. B. „Sehr wohl, Sir. Ich kümmere mich darum.“). Kündige nie etwas als "
             "gestartet oder erledigt an, bevor das Werkzeug es angenommen hat. Sir wird benachrichtigt, "
-            "sobald die Aufgabe fertig ist."
+            "sobald die Aufgabe fertig ist. Du sprichst bereits mit Sir: Die Begrüßung ist schon gesprochen, "
+            "wiederhole sie und die Anrufnachricht nie, rufe Sir nicht erneut an (kein mobile_call_owner) und "
+            "antworte nur auf das, was Sir gerade gesagt hat."
         )
     if tainted:
         parts.append(

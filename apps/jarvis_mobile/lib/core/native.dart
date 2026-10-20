@@ -77,6 +77,9 @@ class NativeBridge {
 
   /// Opens the voice overlay (same as saying "Hey Jarvis").
   Future<void> openAssist() => _ch.invokeMethod('openAssist');
+
+  /// Opens a web/mail link from a chat answer in the system's default app; false if that is not possible.
+  Future<bool> openUrl(String url) async => await _ch.invokeMethod<bool>('openUrl', {'url': url}) ?? false;
 }
 
 class NativeEvent {

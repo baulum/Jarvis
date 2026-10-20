@@ -149,7 +149,11 @@ Kann nicht angerufen werden (Agent/LiveKit/Push fehlt, Gerät hat keinen Push-To
 Benachrichtigung mit Begründung statt eines Anrufs, der nicht zustande käme. Verpasst/abgelehnt → die Nachricht folgt
 als Benachrichtigung („Verpasster Anruf von J.A.R.V.I.S.“) – nie ein zweiter Anruf. Klingeldauer 45 s.
 
-Im Gespräch: Jarvis begrüßt mit Tageszeit + Anlass („Guten Abend, Sir. Die Website ist fertig.“), die Begrüßung ist
+Im Gespräch: Jarvis begrüßt **einmal** kurz mit Tageszeit + Anlass („Guten Abend, Sir. Die Website ist fertig.“; ohne
+Statusbericht, eine Begrüßung in der Nachricht wird nicht verdoppelt, `persona.call_opening`). Aus dem laufenden
+Gespräch heraus kann Jarvis nicht erneut anrufen (`mobile_call_owner` wird dort abgewiesen), eigene, über den
+Lautsprecher zurückgehörte Sätze beantwortet er nicht, und ein „ruf mich an, sobald …“-Auftrag löst genau einmal aus.
+Die Begrüßung ist
 vorab synthetisiert (≈1,3–1,6 s nach Gesprächsbeginn hörbar). Danach normale Unterhaltung mit demselben Agenten,
 Gedächtnis und denselben Werkzeugen; echte Werkzeug-/Gedächtnis-Ereignisse erscheinen als Hinweis („Prüfe den
 Kalender …“). Unterbrechen per Stimme funktioniert (das Telefon entfernt Jarvis' Stimme per Echounterdrückung).
@@ -168,7 +172,7 @@ Freigaben, Erinnerungen, Systemstatus, Still (Ruhezeit), Eingehende/Laufende Anr
 
 | Aktion | Wirkung | Sicherheit |
 |---|---|---|
-| Öffnen / Tippen | Deep Link (`jarvis://task/<id>`, `…/approval/<id>`, `…/chat/<id>` …) | |
+| Öffnen / Tippen | Deep Link auf die Detailansicht (`jarvis://job/<id>` Coding-Job, `…/task/<id>`, `…/approval/<id>`, `…/call/<id>`, `…/chat/<id>`); der Push trägt dafür `link`, `target_type`, `target_id`. Ohne Ziel (z. B. Systemstatus, Termin) öffnet die Aktivität. Beim Kaltstart wartet der Link, bis die Kopplung geladen ist. | |
 | Genehmigen | öffnet die Freigabe → Fingerabdruck/PIN → signierte Anfrage | Gerätesignatur + Nonce + Zeitstempel, serverseitig geprüft; **kritische Aktionen nur am Mac** |
 | Ablehnen | direkt aus der Benachrichtigung | signiert mit dem Geräteschlüssel |
 | Später erinnern | in 30 min erneut (als Erinnerung) | |
