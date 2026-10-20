@@ -142,6 +142,21 @@
             </intent-filter>
         </service>
 
+        <!-- "Handy-Steuerung durch Jarvis": executes phone_* commands from the core (read screen, tap, type, keys).
+             Off until Sir enables it under Settings › Accessibility; password fields are never read or filled. -->
+        <service
+            android:name=".phone.PhoneControlService"
+            android:exported="true"
+            android:label="@string/phone_control_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/phone_control_service" />
+        </service>
+
         <receiver android:name=".call.CallActionReceiver" android:exported="false" />
         <receiver android:name=".notify.AlertActionReceiver" android:exported="false" />
         <!-- Device test without Firebase: only system/adb shell (DUMP) can send – see DevPushReceiver -->
@@ -177,6 +192,11 @@
         <meta-data android:name="flutterEmbedding" android:value="2" />
     </application>
     <queries>
+        <!-- phone_open_app / phone_list_apps: see the launchable apps without QUERY_ALL_PACKAGES -->
+        <intent>
+            <action android:name="android.intent.action.MAIN"/>
+            <category android:name="android.intent.category.LAUNCHER"/>
+        </intent>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

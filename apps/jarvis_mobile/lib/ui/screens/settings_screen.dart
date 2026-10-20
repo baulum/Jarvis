@@ -31,6 +31,7 @@ final _statusProvider = FutureProvider.autoDispose<Map<String, dynamic>>(
 final _devicesProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async =>
     ((await ref.read(apiProvider).get('/api/mobile/devices')) as List).map((e) => (e as Map).cast<String, dynamic>()).toList());
 final _locationProvider = FutureProvider.autoDispose<Map<String, dynamic>>((ref) => ref.read(nativeProvider).locationStatus());
+final _phoneControlProvider = FutureProvider.autoDispose<bool>((ref) => ref.read(nativeProvider).phoneControlEnabled());
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -38,8 +39,26 @@ class SettingsScreen extends ConsumerStatefulWidget {
   ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+class _SettingsScreenState extends ConsumerState<SettingsScreen> with WidgetsBindingObserver {
   String? _toast;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // back from Android's accessibility settings: show the new state of "Handy-Steuerung durch Jarvis"
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) ref.invalidate(_phoneControlProvider);
+  }
 
   Future<void> _patch(Map<String, dynamic> body) async {
     try {
@@ -249,6 +268,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
               const SizedBox(height: J.s6),
               const WakeSettings(),
+              const SizedBox(height: J.s6),
+              const Caps('Handy-Steuerung durch Jarvis'),
+              const SizedBox(height: J.s1),
+              Text('Jarvis kann dann auf Ihre Anweisung Apps öffnen, den Bildschirm lesen, tippen und scrollen '
+                  '(„Öffne WhatsApp auf meinem Handy“). Passwortfelder liest und füllt er nie. '
+                  'Wird über die Bedienungshilfen von Android eingeschaltet.',
+                  style: J.bodyDim.copyWith(fontSize: 13.5)),
+              ...ref.watch(_phoneControlProvider).when(
+                    loading: () => [const SizedBox(height: J.s4)],
+                    error: (e, _) => [Text('$e', style: J.bodyDim)],
+                    data: (on) => [
+                      _kv('Status', on ? 'aktiv' : 'inaktiv', color: on ? J.green : J.amber),
+                      if (!on)
+                        Text('Tippen Sie unter „Bedienungshilfen“ auf „J.A.R.V.I.S.“ › „Handy-Steuerung durch Jarvis“ und schalten Sie sie ein. '
+                            'Ist der Schalter ausgegraut: App-Info › ⋮ › „Eingeschränkte Einstellungen zulassen“.',
+                            style: J.mono(11, color: J.text3)),
+                      Wrap(spacing: J.s4, children: [
+                        LightAction('Bedienungshilfen öffnen', onTap: () => ref.read(nativeProvider).openSettings('accessibility')),
+                        if (!on) LightAction('App-Info', onTap: () => ref.read(nativeProvider).openSettings('app')),
+                      ]),
+                    ],
+                  ),
               const SizedBox(height: J.s6),
               const Caps('Berechtigungen'),
               Wrap(spacing: J.s4, children: [

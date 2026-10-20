@@ -53,6 +53,7 @@ from jarvis.mobile.calls import CallService
 from jarvis.mobile.gateway import GatewayServer
 from jarvis.mobile.livekit_server import LiveKitServer
 from jarvis.mobile.location import LocationStore
+from jarvis.mobile.phone_control import PhoneControl
 from jarvis.mobile.pairing import PairingService
 from jarvis.mobile.push import PushService
 from jarvis.secrets import secret_store
@@ -144,6 +145,7 @@ class AppState:
         self.alerts = AlertEngine(self)
         self.calls = CallService(self)
         self.location = LocationStore(self.push)
+        self.phone = PhoneControl(self.push)
 
         for conn_cls in (
             SystemConnector,
@@ -206,7 +208,9 @@ class AppState:
     def _register_mobile_tools(self) -> None:
         from jarvis.mobile.tools import mobile_tools
 
-        for spec in mobile_tools(self):
+        from jarvis.mobile.phone_tools import phone_tools
+
+        for spec in (*mobile_tools(self), *phone_tools(self)):
             self.registry.register(spec)
 
     # ------------------------------------------------------------------ lifecycle

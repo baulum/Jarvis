@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="phone_control_label">Handy-Steuerung durch Jarvis</string>
+    <string name="phone_control_description">Erlaubt J.A.R.V.I.S., auf Ihre Anweisung Apps zu öffnen, den Bildschirm zu lesen, zu tippen, zu scrollen und Text einzugeben. Befehle kommen nur von Ihrem gekoppelten Jarvis-Server. Passwortfelder werden nie gelesen oder ausgefüllt.</string>
+</resources>

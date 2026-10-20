@@ -198,6 +198,46 @@ Minuten und einen Hinweis, wenn er älter als 10 min ist oder fehlt. Eine Fahrze
 ist kein Routendienst vorhanden, der ohne zusätzliche Zugangsdaten nutzbar wäre, und jeder externe Dienst würde den
 Standort an Dritte geben.
 
+### Handy-Steuerung durch Jarvis (`phone_*`)
+
+Jarvis bedient das Handy wie den Mac (`mac_*`): „Jarvis, öffne WhatsApp auf meinem Handy“. Der System-Prompt
+(`agent/persona.py`) sagt ihm, bei „auf meinem Handy“ ausschließlich `phone_*` zu benutzen.
+
+| Werkzeug | Zweck | Risiko |
+|---|---|---|
+| `phone_list_apps` | installierte, startbare Apps (Name + Package) | read |
+| `phone_open_app` | App per Launch-Intent starten; Name unscharf aufgelöst („WhatsApp“ → `com.whatsapp`) | low |
+| `phone_ui_tree` | Bildschirm lesen (Text, Beschreibung, Klickbarkeit, Bounds, `element_id`) | read (Ergebnis gilt als nicht vertrauenswürdig) |
+| `phone_screenshot` | Screenshot via `AccessibilityService.takeScreenshot` (Android 11+, ohne MediaProjection) + Bildanalyse | low |
+| `phone_scroll` | scrollen (up/down/left/right) | low |
+| `phone_tap` | Element (`element_id`) oder Position (x/y) antippen | **high** (Freigabe) |
+| `phone_type_text` | Text in ein Eingabefeld schreiben | **high** (Freigabe) |
+| `phone_key` | back / home / recents / notifications | **high** (Freigabe) |
+
+**Weg der Befehle (derselbe Rückkanal wie bei der Standortabfrage, kein zweiter Mechanismus):** Der Core schickt einen
+Ende-zu-Ende-verschlüsselten Push `phone_command` (`cmd_id`, `action`, `args`); die App führt ihn aus
+(`phone/PhoneControl.kt`, `phone/PhoneControlService.kt`) und antwortet per `POST /api/mobile/phone/result`
+(gepinntes TLS, Zugriffstoken). Der Core nimmt nur eine Antwort von einem Handy an, an das der Befehl ging, und nur
+einmal. Befehle laufen nacheinander. Bildschirminhalte werden nirgends geloggt oder in der Datenbank gespeichert.
+
+**Ehrliche Fehlermeldungen:** Kein gekoppeltes Handy / Push fehlt → „Handy nicht verbunden …“; keine Antwort in
+25 s → „Handy nicht erreichbar …“; Dienst aus → „Bedienungshilfe in der Jarvis-App nicht aktiviert …“.
+
+**Passwortfelder** (`isPassword` bzw. Passwort-Eingabetyp) werden nie ausgelesen (im Baum nur `password: true`, ohne
+Text/Beschreibung) und nie befüllt (`password_field`). `element_id`s sind Pfade im Bildschirmbaum mit Fingerabdruck;
+hat sich der Bildschirm geändert, meldet die App `stale_element`, statt etwas Falsches anzutippen.
+
+**Einrichtung auf dem Handy (einmalig):** App neu installieren/aktualisieren → **Einstellungen › Handy-Steuerung durch
+Jarvis › „Bedienungshilfen öffnen“** → „J.A.R.V.I.S.“ › „Handy-Steuerung durch Jarvis“ einschalten. Bei einer
+Sideload-Installation (nicht aus dem Play Store) ist der Schalter ab Android 13 ausgegraut: App-Info › ⋮ ›
+„Eingeschränkte Einstellungen zulassen“, dann erneut einschalten. Die Zeile in der App zeigt „aktiv/inaktiv“.
+
+**Grenzen:** `phone_open_app` und `phone_list_apps` brauchen die Bedienungshilfe nicht, aber Android kann App-Starts aus
+dem Hintergrund blockieren; mit aktivem Dienst prüft die App nach dem Start, ob die App im Vordergrund ist
+(`foreground`). Bei gesperrtem Bildschirm, Apps mit `FLAG_SECURE` (Screenshot) oder Apps, die Bedienungshilfen aussperren
+(manche Banking-Apps), liefert die Steuerung nichts bzw. einen Fehler. Texte sind auf 600 Zeichen je Befehl begrenzt
+(Größe des Push-Kanals).
+
 ## 8. Sicherheit (Kurzfassung – Details in SECURITY.md › Smartphone)
 
 - Kopplung per Einmalcode im QR; Gerätebindung durch Keystore-Schlüssel (nicht exportierbar).

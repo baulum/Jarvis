@@ -25,6 +25,7 @@ import systems.pje.jarvis_mobile.call.CallManager
 import systems.pje.jarvis_mobile.location.LocationShare
 import systems.pje.jarvis_mobile.net.Gateway
 import systems.pje.jarvis_mobile.net.randomNonce
+import systems.pje.jarvis_mobile.phone.PhoneControlService
 import systems.pje.jarvis_mobile.net.sha256Hex
 import systems.pje.jarvis_mobile.push.PushRegistration
 import systems.pje.jarvis_mobile.secure.DeviceKey
@@ -101,7 +102,8 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
                 LocationShare.status(context).put("sent", sent).toString()
             }
             "reportLocation" -> async { LocationShare.report(context) }
-            "wakeStatus" -> result.success(WakeWord.status(context))
+            "phoneControlStatus" -> result.success(PhoneControlService.isEnabled(context))
+            "wakeStatus" ->result.success(WakeWord.status(context))
             "wakeConfigure" -> try {
                 WakeWord.configure(context, call.argument<Boolean>("enabled"), call.argument<Boolean>("screenOnly"))
                 result.success(WakeWord.status(context))
@@ -138,6 +140,8 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
             "fullscreen" -> if (Build.VERSION.SDK_INT >= 34) Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, pkg) else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
             "battery" -> Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
             "overlay" -> Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkg)
+            // "Handy-Steuerung durch Jarvis" is an accessibility service: straight to the system's list
+            "accessibility" -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
             // "Digital assistant app" page on Pixel/Samsung; elsewhere the list of default apps
             "assistant" -> Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)
             else -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
