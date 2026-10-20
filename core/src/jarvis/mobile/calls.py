@@ -464,7 +464,7 @@ class CallService:
     async def _latest(self, kind: str, session_id: str | None) -> str:
         async with session_scope() as s:
             if kind == "coding_job":
-                q = select(CodingJob.id).where(CodingJob.status.in_(["queued", "running"]))
+                q = select(CodingJob.id).where(CodingJob.status.in_(["queued", "running", "paused"]))
                 row = (await s.execute(q.order_by(CodingJob.created_at.desc()).limit(1))).first()
             else:
                 q2 = select(Task.id).where(Task.status.not_in(["completed", "failed", "cancelled"]))

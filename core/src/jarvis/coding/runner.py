@@ -22,6 +22,7 @@ import re
 import shlex
 import shutil
 import signal
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import select
 
 from jarvis.agent.model_router import EFFORTS, model_id, resolve_alias
+from jarvis.coding.monitor import build_monitor, compact_events
 from jarvis.db import session_scope
 from jarvis.db.models import CodingJob
 from jarvis.events import bus
@@ -140,6 +142,11 @@ class CodingRunner:
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._sessions: dict[uuid.UUID, str] = {}  # latest Claude session id per job (for automatic continuation)
         self.retry_delays: tuple[float, ...] = RETRY_DELAYS
+        self._paused: dict[uuid.UUID, float] = {}  # job id -> monotonic time the pause began
+        self._timeouts: dict[uuid.UUID, asyncio.Timeout] = {}  # so a pause does not eat the job's time budget
+        self._inbox: dict[uuid.UUID, list[str]] = {}  # messages for the agent, delivered between two runs
+        self._interrupted: set[uuid.UUID] = set()  # current run was stopped on purpose to deliver a message
+        self._closing: set[uuid.UUID] = set()  # job is past its last agent run: no more messages
 
     # ------------------------------------------------------------------ environment
     def _env(self) -> dict[str, str]:
@@ -338,9 +345,15 @@ class CodingRunner:
         proc = self._procs.get(job_id)
         if proc and proc.returncode is None:
             try:
+                if job_id in self._paused:  # a stopped process only sees SIGTERM after SIGCONT
+                    os.killpg(proc.pid, signal.SIGCONT)
                 os.killpg(proc.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+        self._paused.pop(job_id, None)
+        self._inbox.pop(job_id, None)
+        self._interrupted.discard(job_id)
+        self._closing.discard(job_id)
         task = self._tasks.get(job_id)
         if task:
             task.cancel()
@@ -353,6 +366,134 @@ class CodingRunner:
         await audit(actor, "coding.cancel", target=str(job_id))
         await bus.publish("coding.updated", job_id=str(job_id), status="cancelled")
         return True
+
+    # ------------------------------------------------------------------ monitor / control
+    def _log_path(self, job_id: uuid.UUID) -> Path:
+        return self.logs_dir / f"{job_id}.jsonl"
+
+    async def _log_entry(self, job_id: uuid.UUID, entry: dict[str, Any]) -> None:
+        """Append a control entry (pause, message …) to the job log and push it to the live clients."""
+        entry = {"ts": datetime.now(UTC).isoformat(timespec="seconds"), **entry}
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        with self._log_path(job_id).open("a", encoding="utf-8") as log:
+            log.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        await bus.publish("coding.progress", job_id=str(job_id), **entry)
+
+    async def monitor(self, job_id: uuid.UUID) -> dict[str, Any]:
+        """Live snapshot of one job (current step, tool calls with results, runtime, tokens, cost)."""
+        async with session_scope() as s:
+            job = await s.get(CodingJob, job_id)
+            if job is None:
+                raise CodingError("Job nicht gefunden")
+            row = {
+                "id": str(job.id),
+                "title": job.title,
+                "status": job.status,
+                "model": job.model,
+                "effort": job.effort,
+                "branch": job.branch,
+                "result": job.result,
+                "created_at": job.created_at.isoformat(),
+                "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+            }
+        entries = await self.log_tail(job_id, 5000)
+        return build_monitor(row, entries, pending_messages=len(self._inbox.get(job_id, [])))
+
+    async def pause(self, job_id: uuid.UUID, actor: str) -> bool:
+        """Freezes the agent process (SIGSTOP on its process group); ``resume`` continues it exactly there."""
+        proc = self._procs.get(job_id)
+        if proc is None or proc.returncode is not None:
+            raise CodingError("Job führt gerade keinen Agent-Schritt aus und kann nicht pausiert werden")
+        async with session_scope() as s:
+            job = await s.get(CodingJob, job_id)
+            if job is None or job.status != "running":
+                raise CodingError("Nur laufende Jobs können pausiert werden")
+            job.status = "paused"
+        try:
+            os.killpg(proc.pid, signal.SIGSTOP)
+        except ProcessLookupError as e:
+            await self._update(job_id, status="running")
+            raise CodingError("Agent-Prozess läuft nicht mehr") from e
+        self._paused[job_id] = time.monotonic()
+        await audit(actor, "coding.pause", target=str(job_id))
+        await self._log_entry(job_id, {"type": "control", "action": "paused", "actor": actor})
+        await bus.publish("coding.updated", job_id=str(job_id), status="paused")
+        return True
+
+    async def resume(self, job_id: uuid.UUID, actor: str) -> bool:
+        proc = self._procs.get(job_id)
+        began = self._paused.pop(job_id, None)
+        if proc is None or proc.returncode is not None or began is None:
+            raise CodingError("Job ist nicht pausiert")
+        try:
+            os.killpg(proc.pid, signal.SIGCONT)
+        except ProcessLookupError as e:
+            raise CodingError("Agent-Prozess läuft nicht mehr") from e
+        cm = self._timeouts.get(job_id)
+        if cm is not None and cm.when() is not None:  # the pause does not count against the job timeout
+            cm.reschedule(cm.when() + (time.monotonic() - began))  # type: ignore[operator]
+        await self._update(job_id, status="running")
+        await audit(actor, "coding.resume", target=str(job_id))
+        await self._log_entry(job_id, {"type": "control", "action": "resumed", "actor": actor})
+        await bus.publish("coding.updated", job_id=str(job_id), status="running")
+        return True
+
+    async def send_message(self, job_id: uuid.UUID, text: str, actor: str, immediate: bool = False) -> dict[str, Any]:
+        """Queues a message for the agent. The CLI takes its prompt on start, so the text reaches the agent as a
+        follow-up turn of the same Claude session: after the current run ends – or, with ``immediate``, right now
+        by stopping the current run (its work so far is kept; the session is resumed with the message)."""
+        text = text.strip()
+        if not text:
+            raise CodingError("Nachricht ist leer")
+        async with session_scope() as s:
+            job = await s.get(CodingJob, job_id)
+            if job is None:
+                raise CodingError("Job nicht gefunden")
+            status = job.status
+        if status not in ("queued", "running", "paused") or job_id in self._closing:
+            raise CodingError("Der Job nimmt keine Nachrichten mehr an (bereits im Abschluss oder beendet)")
+        self._inbox.setdefault(job_id, []).append(text[:8000])
+        await audit(actor, "coding.message", target=str(job_id), details={"immediate": immediate, "chars": len(text)})
+        await self._log_entry(
+            job_id, {"type": "user_message", "text": text[:2000], "immediate": immediate, "actor": actor}
+        )
+        interrupted = False
+        proc = self._procs.get(job_id)
+        if immediate and proc is not None and proc.returncode is None:
+            self._interrupted.add(job_id)
+            try:
+                if job_id in self._paused:
+                    os.killpg(proc.pid, signal.SIGCONT)
+                    self._paused.pop(job_id, None)
+                    await self._update(job_id, status="running")
+                os.killpg(proc.pid, signal.SIGTERM)
+                interrupted = True
+            except ProcessLookupError:
+                self._interrupted.discard(job_id)
+        await bus.publish("coding.updated", job_id=str(job_id), status="running" if interrupted else status)
+        return {"queued": True, "interrupted": interrupted, "pending": len(self._inbox.get(job_id, []))}
+
+    async def _drain_inbox(
+        self,
+        job_id: uuid.UUID,
+        cwd: Path,
+        log_path: Path,
+        result: dict[str, Any],
+        *,
+        model: str | None,
+        effort: str | None,
+    ) -> dict[str, Any]:
+        """Runs queued messages as follow-up turns of the job's Claude session."""
+        while self._inbox.get(job_id):
+            texts = self._inbox.pop(job_id)
+            prompt = "Nachricht von Sir an dich, berücksichtige sie bei der weiteren Arbeit:\n\n" + "\n\n".join(texts)
+            session = result.get("session_id") or self._sessions.get(job_id)
+            result = await self._claude_retrying(
+                job_id, cwd, prompt, log_path, resume_session=session, model=model, effort=effort
+            )
+            if result.get("is_error"):
+                break
+        return result
 
     async def delete(self, job_id: uuid.UUID, actor: str, delete_worktree: bool = False) -> dict[str, Any]:
         """Removes a failed/cancelled job from the job list. The branch is always kept; the
@@ -465,6 +606,8 @@ class CodingRunner:
                     model=job_model,
                     effort=job_effort,
                 )
+                wt_path = Path(worktree)
+                result = await self._drain_inbox(job_id, wt_path, log_path, result, model=job_model, effort=job_effort)
                 tests: dict[str, Any] | None = None
                 if test_cmd and not result.get("is_error"):
                     tests = await self._run_tests(Path(worktree), test_cmd)
@@ -488,6 +631,14 @@ class CodingRunner:
                             effort=job_effort,
                         )
                         tests = await self._run_tests(Path(worktree), test_cmd)
+                while self._inbox.get(job_id) and not result.get("is_error"):  # sent during the tests
+                    result = await self._drain_inbox(
+                        job_id, wt_path, log_path, result, model=job_model, effort=job_effort
+                    )
+                    if test_cmd and not result.get("is_error"):
+                        tests = await self._run_tests(wt_path, test_cmd)
+                self._closing.add(job_id)  # no await since the last inbox check: later messages are refused
+                self._inbox.pop(job_id, None)
                 commit = await self._commit(Path(worktree), title)
                 diffstat = (
                     await self._git(Path(worktree), "diff", "--stat", "HEAD~1", "HEAD", check=False) if commit else ""
@@ -705,7 +856,8 @@ class CodingRunner:
         result: dict[str, Any] = {}
         timeout = self.cfg.job_timeout_minutes * 60
         try:
-            async with asyncio.timeout(timeout):
+            async with asyncio.timeout(timeout) as budget:
+                self._timeouts[job_id] = budget
                 assert proc.stdout is not None
                 with log_path.open("a", encoding="utf-8") as log:
                     async for raw in proc.stdout:
@@ -717,8 +869,9 @@ class CodingRunner:
                         except json.JSONDecodeError:
                             log.write(json.dumps({"type": "raw", "text": line[:2000]}) + "\n")
                             continue
-                        compact = _compact_event(ev)
-                        log.write(json.dumps(compact, ensure_ascii=False) + "\n")
+                        entries = compact_events(ev)
+                        for compact in entries:
+                            log.write(json.dumps(compact, ensure_ascii=False) + "\n")
                         log.flush()
                         if ev.get("type") == "system" and ev.get("subtype") == "init":
                             if ev.get("session_id"):
@@ -726,14 +879,20 @@ class CodingRunner:
                             await self._update(job_id, claude_session_id=ev.get("session_id"))
                         elif ev.get("type") == "result":
                             result = ev
-                        if compact.get("text") or compact.get("tool"):
-                            await bus.publish("coding.progress", job_id=str(job_id), **compact)
+                        for compact in entries:
+                            if compact.get("text") or compact.get("tool") or compact.get("tool_id"):
+                                await bus.publish("coding.progress", job_id=str(job_id), **compact)
                 await proc.wait()
         except TimeoutError:
             os.killpg(proc.pid, signal.SIGTERM)
             raise CodingError(f"Zeitlimit von {self.cfg.job_timeout_minutes} Minuten überschritten") from None
         finally:
             self._procs.pop(job_id, None)
+            self._timeouts.pop(job_id, None)
+        if not result and job_id in self._interrupted:
+            # stopped on purpose to hand over a message: the session continues with it (see _drain_inbox)
+            self._interrupted.discard(job_id)
+            return {"is_error": False, "result": "", "session_id": self._sessions.get(job_id), "_interrupted": True}
         if not result:
             err = (await proc.stderr.read()).decode()[-800:] if proc.stderr else ""
             exc = TransientCodingError if is_transient_error(err) else CodingError
@@ -779,6 +938,10 @@ class CodingRunner:
         return await self._git(cwd, "rev-parse", "--short", "HEAD")
 
     async def _finish(self, job_id: uuid.UUID, title: str, status: str, result: dict[str, Any]) -> None:
+        for bucket in (self._closing, self._interrupted):
+            bucket.discard(job_id)
+        self._inbox.pop(job_id, None)
+        self._paused.pop(job_id, None)
         async with session_scope() as s:
             job = await s.get(CodingJob, job_id)
             if job is None:
@@ -816,22 +979,3 @@ class CodingRunner:
         body = f"{res.get('summary', '')}\n\n---\nTests: {res.get('tests')}\nErstellt von Jarvis mit Claude Code."
         pr = await gh.create_pr(repo_full_name, branch, base, f"Jarvis: {title}", body[:60000])  # type: ignore[attr-defined]
         return {"number": pr.get("number"), "url": pr.get("html_url")}
-
-
-def _compact_event(ev: dict[str, Any]) -> dict[str, Any]:
-    t = ev.get("type")
-    out: dict[str, Any] = {"type": t, "ts": datetime.now(UTC).isoformat(timespec="seconds")}
-    if t == "assistant":
-        for block in ev.get("message", {}).get("content", []) or []:
-            if block.get("type") == "text":
-                out["text"] = str(block.get("text", ""))[:1500]
-            elif block.get("type") == "tool_use":
-                inp = block.get("input", {})
-                out["tool"] = block.get("name")
-                out["detail"] = str(inp.get("command") or inp.get("file_path") or inp.get("pattern") or "")[:300]
-    elif t == "result":
-        out.update({k: ev.get(k) for k in ("subtype", "is_error", "num_turns", "duration_ms")})
-        out["text"] = str(ev.get("result", ""))[:1500]
-    elif t == "system":
-        out["subtype"] = ev.get("subtype")
-    return out

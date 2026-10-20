@@ -34,10 +34,13 @@ class MdQuote extends MdBlock {
 }
 
 class MdList extends MdBlock {
-  const MdList({required this.ordered, required this.start, required this.items});
+  const MdList({required this.ordered, required this.start, required this.items, required this.checked});
   final bool ordered;
   final int start;
   final List<List<MdBlock>> items;
+
+  /// task-list state per item (`- [x]` / `- [ ]`), null for a normal item
+  final List<bool?> checked;
 }
 
 class MdTable extends MdBlock {
@@ -68,6 +71,13 @@ final _ruleRe = RegExp(r'^\s{0,3}([-*_])(?:\s*\1){2,}\s*$');
 final _quoteRe = RegExp(r'^\s{0,3}>\s?');
 final _listRe = RegExp(r'^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$');
 final _tableSepRe = RegExp(r'^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$');
+final _taskRe = RegExp(r'^\[([ xX])\]\s+');
+
+/// Only http(s) and mailto links are ever made tappable.
+String? safeHref(String raw) {
+  final href = raw.trim();
+  return RegExp(r'^(https?://|mailto:)', caseSensitive: false).hasMatch(href) ? href : null;
+}
 
 List<MdBlock> parseMarkdown(String src) =>
     _blocks(src.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n'));
@@ -221,11 +231,14 @@ List<MdBlock> _blocks(List<String> lines) {
   final ordered = _isOrdered(first.group(2)!);
   final startNo = ordered ? int.tryParse(first.group(2)!.replaceAll(RegExp(r'[.)]'), '')) ?? 1 : 1;
   final items = <List<MdBlock>>[];
+  final checked = <bool?>[];
   var i = start;
   while (i < lines.length) {
     final m = _listRe.firstMatch(lines[i]);
     if (m == null || m.group(1)!.length != base || _isOrdered(m.group(2)!) != ordered) break;
-    final item = <String>[m.group(3)!];
+    final task = _taskRe.firstMatch(m.group(3)!);
+    checked.add(task == null ? null : task.group(1) != ' ');
+    final item = <String>[task == null ? m.group(3)! : m.group(3)!.substring(task.end)];
     i++;
     while (i < lines.length) {
       final l = lines[i];
@@ -257,7 +270,7 @@ List<MdBlock> _blocks(List<String> lines) {
       if (n != null && n.group(1)!.length == base && _isOrdered(n.group(2)!) == ordered) i = k;
     }
   }
-  return (MdList(ordered: ordered, start: startNo, items: items), i);
+  return (MdList(ordered: ordered, start: startNo, items: items, checked: checked), i);
 }
 
 // ------------------------------------------------------------------ inline
@@ -272,6 +285,21 @@ List<MdSpan> parseInline(String s) {
   final out = <MdSpan>[];
   _inline(s.replaceAll(_brRe, '\n'), false, false, false, null, out);
   return out;
+}
+
+/// Index of the `)` that closes a link target starting at [from]; balanced parentheses belong to the URL.
+int _closingParen(String s, int from) {
+  var depth = 1;
+  for (var j = from; j < s.length; j++) {
+    final c = s[j];
+    if (c == '\n') return -1;
+    if (c == '(') {
+      depth++;
+    } else if (c == ')' && --depth == 0) {
+      return j;
+    }
+  }
+  return -1;
 }
 
 int _closeStrong(String s, String marker, int from) {
@@ -370,12 +398,14 @@ void _inline(String s, bool b, bool it, bool st, String? href, List<MdSpan> out)
     if (c == '[' && href == null) {
       final close = s.indexOf(']', i + 1);
       if (close > i && close + 1 < s.length && s[close + 1] == '(') {
-        final end = s.indexOf(')', close + 2);
+        final end = _closingParen(s, close + 2);
         if (end > close + 1) {
-          final url = s.substring(close + 2, end).trim().split(RegExp(r'\s+')).first;
+          final raw = s.substring(close + 2, end).trim();
+          final url = raw.isEmpty ? '' : raw.split(RegExp(r'\s+')).first;
           if (url.isNotEmpty) {
             flush();
-            _inline(s.substring(i + 1, close), b, it, st, url, out);
+            // unsafe targets (javascript:, data:, file: …) leave just the link text
+            _inline(s.substring(i + 1, close), b, it, st, safeHref(url), out);
             i = end + 1;
             continue;
           }

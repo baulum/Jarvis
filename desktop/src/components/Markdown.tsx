@@ -1,5 +1,6 @@
 import { Check, Copy } from "lucide-react";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { copyText } from "../lib/clipboard";
 import { highlight, type TokenKind } from "../lib/highlight";
 import { parseMarkdown, safeHref, type MdBlock, type MdSpan } from "../lib/markdown";
 import { openExternal } from "../lib/native";
@@ -106,8 +107,18 @@ function Block({ b, compact, depth = 0, dim = false }: { b: MdBlock; compact: bo
           className={`flex flex-col gap-1 pl-6 marker:text-arc-dim ${b.ordered ? "list-decimal" : depth % 2 === 0 ? "list-disc" : "list-[circle]"}`}
         >
           {b.items.map((item, i) => (
-            <li key={i} className="pl-1">
-              <div className="flex flex-col gap-1">
+            <li key={i} className={b.checked[i] != null ? "-ml-6 flex list-none items-start gap-2" : "pl-1"}>
+              {b.checked[i] != null && (
+                <span
+                  role="checkbox"
+                  aria-checked={b.checked[i] === true}
+                  aria-label={b.checked[i] ? "erledigt" : "offen"}
+                  className={`mt-[0.35em] flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border ${b.checked[i] ? "border-arc-dim bg-arc-deep text-arc" : "border-seam-hi"}`}
+                >
+                  {b.checked[i] && <Check className="size-2.5" strokeWidth={3} />}
+                </span>
+              )}
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
                 {item.map((child, k) => (
                   <Block key={k} b={child} compact={compact} depth={depth + 1} dim={dim} />
                 ))}
@@ -163,13 +174,9 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
   const [copied, setCopied] = useState(false);
   const tokens = useMemo(() => highlight(code, lang), [code, lang]);
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    } catch {
-      setCopied(false);
-    }
+    const ok = await copyText(code);
+    setCopied(ok);
+    if (ok) window.setTimeout(() => setCopied(false), 1600);
   }
   return (
     <div className="overflow-hidden rounded-lg border border-seam-hi bg-void">

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { highlight } from "./highlight";
-import { parseMarkdown, safeHref, spansText, type MdBlock } from "./markdown";
+import { parseInline, parseMarkdown, safeHref, spansText, type MdBlock } from "./markdown";
 
 function at<T>(a: T[], i: number): T {
   const v = a[i];
@@ -55,6 +55,72 @@ describe("markdown parser", () => {
     expect(safeHref("https://example.com/a")).toBe("https://example.com/a");
     expect(safeHref("javascript:alert(1)")).toBeNull();
     expect(safeHref("file:///etc/passwd")).toBeNull();
+  });
+});
+
+describe("markdown parser (cases taken over from the former second renderer)", () => {
+  const kinds = (blocks: MdBlock[]) => blocks.map((b) => b.type);
+  const list = (b: MdBlock) => {
+    if (b.type !== "list") throw new Error("list expected");
+    return b;
+  };
+
+  it("parses headings, paragraphs and rules", () => {
+    const b = parseMarkdown("# Titel\n\nErster Absatz\nzweite Zeile\n\n---\n\n### Klein");
+    expect(kinds(b)).toEqual(["heading", "paragraph", "rule", "heading"]);
+    expect(at(b, 0)).toMatchObject({ level: 1 });
+    expect(at(b, 3)).toMatchObject({ level: 3 });
+    expect(spansText(para(at(b, 1)))).toBe("Erster Absatz\nzweite Zeile");
+  });
+
+  it("keeps fenced code verbatim, also with blank lines and a longer fence", () => {
+    const b = parseMarkdown("Text\n\n```ts\nconst a = 1;\n\n  indented\n```\nDanach");
+    expect(kinds(b)).toEqual(["paragraph", "code", "paragraph"]);
+    expect(at(b, 1)).toEqual({ type: "code", lang: "ts", code: "const a = 1;\n\n  indented" });
+    expect(at(parseMarkdown("````md\n```js\nx\n```\n````"), 0)).toMatchObject({ type: "code", lang: "md", code: "```js\nx\n```" });
+  });
+
+  it("parses task lists next to normal lists", () => {
+    const b = parseMarkdown("- [x] fertig\n- [ ] offen\n- normal");
+    const l = list(at(b, 0));
+    expect(l.checked).toEqual([true, false, null]);
+    expect(spansText(para(at(at(l.items, 0), 0)))).toBe("fertig");
+    expect(list(at(parseMarkdown("- eins\n- zwei"), 0)).checked).toEqual([null, null]);
+  });
+
+  it("lets a list follow a paragraph line without blank line", () => {
+    expect(kinds(parseMarkdown("Zutaten:\n- Mehl\n- Zucker"))).toEqual(["paragraph", "list"]);
+  });
+
+  it("pads short table rows and does not mistake a pipe in text for a table", () => {
+    const t = at(parseMarkdown("| Name | Wert | Rest |\n|:--|--:|:-:|\n| a | 1 |"), 0);
+    if (t.type !== "table") throw new Error("table expected");
+    expect(t.aligns).toEqual(["left", "right", "center"]);
+    expect(at(t.rows, 0).map(spansText)).toEqual(["a", "1", ""]);
+    expect(kinds(parseMarkdown("a | b\nkein Trenner"))).toEqual(["paragraph"]);
+  });
+
+  it("parses block quotes recursively", () => {
+    const q = at(parseMarkdown("> Zitat\n> - Punkt\n>\n> Ende"), 0);
+    if (q.type !== "quote") throw new Error("quote expected");
+    expect(kinds(q.blocks)).toEqual(["paragraph", "list", "paragraph"]);
+  });
+
+  it("keeps formatting out of code spans and raw html as text", () => {
+    expect(parseInline("`a*b*c`")).toEqual([{ text: "a*b*c", code: true }]);
+    expect(spansText(parseInline("<img src=x onerror=alert(1)>"))).toBe("<img src=x onerror=alert(1)>");
+    expect(spansText(parseInline("\\*kein em\\*"))).toBe("*kein em*");
+  });
+
+  it("keeps balanced parentheses in link targets and trims autolink punctuation", () => {
+    const links = parseInline("Siehe [Doku](https://x.de/a_(b)) oder https://y.de/pfad, ok.").filter((s) => s.href);
+    expect(links.map((s) => s.href)).toEqual(["https://x.de/a_(b)", "https://y.de/pfad"]);
+  });
+
+  it("only opens web and mail links, also for odd spacing", () => {
+    expect(safeHref("mailto:a@b.de")).toBe("mailto:a@b.de");
+    expect(safeHref("data:text/html,hi")).toBeNull();
+    expect(safeHref("  https://ok.de")).toBe("https://ok.de/");
   });
 });
 

@@ -15,7 +15,9 @@ import type {
   Connector,
   ConnectorHealth,
   ConnectorsResponse,
+  AgentMessageResult,
   Device,
+  JobMonitor,
   KillSwitchState,
   LogEntry,
   MemoryGraph,
@@ -33,6 +35,7 @@ import type {
   Task,
   ToolInfo,
 } from "./types";
+import type { SlashCommand } from "./slash";
 
 export const CORE_URL = "http://127.0.0.1:8765";
 
@@ -251,6 +254,16 @@ export function createApi(opts: ApiOptions) {
     backupStatus: () => get<BackupStatus>("/backup"),
     runBackup: () => post<BackupStatus["last"]>("/backup/run"),
     codingCancel: (jid: string) => post<{ cancelled: boolean }>(`/coding/jobs/${id(jid)}/cancel`),
+    codingMonitor: (jid: string) => get<JobMonitor>(`/coding/jobs/${id(jid)}/monitor`),
+    codingPause: (jid: string) => post<{ paused: boolean }>(`/coding/jobs/${id(jid)}/pause`),
+    codingResume: (jid: string) => post<{ resumed: boolean }>(`/coding/jobs/${id(jid)}/resume`),
+    codingMessage: (jid: string, text: string, immediate = false) =>
+      post<AgentMessageResult>(`/coding/jobs/${id(jid)}/message`, { text, immediate }),
+    taskPause: (tid: string) => post<{ paused: boolean }>(`/tasks/${id(tid)}/pause`),
+    taskResume: (tid: string) => post<{ resumed: boolean }>(`/tasks/${id(tid)}/resume`),
+    taskMessage: (tid: string, text: string, immediate = false) =>
+      post<AgentMessageResult>(`/tasks/${id(tid)}/message`, { text, immediate }),
+    commands: () => get<{ version: number; commands: SlashCommand[] }>("/commands"),
   };
 }
 

@@ -233,6 +233,29 @@ class TaskEngine:
         await bus.publish("task.updated", task_id=str(task_id), status="cancelled")
         return True
 
+    async def pause(self, task_id: uuid.UUID, actor: str) -> bool:
+        """Soft pause: the step in flight finishes (its tool calls are idempotent), then the task stays put."""
+        async with session_scope() as s:
+            task = await s.get(Task, task_id, with_for_update=True)
+            if task is None or task.status not in ("queued", "running"):
+                return False
+            task.status = "paused"
+            task.lease_until = None
+        await audit(actor, "task.pause", target=str(task_id))
+        await bus.publish("task.updated", task_id=str(task_id), status="paused")
+        return True
+
+    async def resume(self, task_id: uuid.UUID, actor: str) -> bool:
+        async with session_scope() as s:
+            task = await s.get(Task, task_id, with_for_update=True)
+            if task is None or task.status != "paused":
+                return False
+            task.status = "queued"
+        await audit(actor, "task.resume", target=str(task_id))
+        await bus.publish("task.updated", task_id=str(task_id), status="queued")
+        self._wake.set()
+        return True
+
     async def retry(self, task_id: uuid.UUID, actor: str) -> bool:
         async with session_scope() as s:
             task = await s.get(Task, task_id, with_for_update=True)
@@ -343,6 +366,8 @@ class TaskEngine:
             if self.state.kill_switch.engaged:
                 await self._set_task(task_id, status="queued", lease_until=None)
                 return
+            if await self._is_paused(task_id):
+                return  # stays "paused" until resume(); the next claim continues at this step
             sd = pb.steps[step.idx]
             await self._set_step(step.id, status="running", started_at=datetime.now(UTC), error=None)
             await bus.publish("task.step", task_id=str(task_id), step=step.idx, name=step.name, status="running")
@@ -432,8 +457,15 @@ class TaskEngine:
                 return
             if task.status == "cancelled" and fields.get("status") not in (None, "cancelled"):
                 fields.pop("status")
+            if task.status == "paused" and fields.get("status") in ("running", "queued"):
+                fields.pop("status")  # a pause is only lifted by resume()
             for k, v in fields.items():
                 setattr(task, k, v)
+
+    async def _is_paused(self, task_id: uuid.UUID) -> bool:
+        async with session_scope() as s:
+            task = await s.get(Task, task_id)
+            return task is not None and task.status == "paused"
 
     async def _set_step(self, step_id: uuid.UUID, **fields: Any) -> None:
         async with session_scope() as s:

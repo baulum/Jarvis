@@ -157,14 +157,23 @@ class _MarkdownViewState extends State<MarkdownView> {
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               SizedBox(
                 width: l.ordered ? 28 : 18,
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 1),
-                  child: Text(
-                    l.ordered ? '${l.start + i}.' : bullets[depth % bullets.length],
-                    textAlign: TextAlign.right,
-                    style: (l.ordered ? J.mono(14, color: J.cyanDeep, weight: 500) : J.body.copyWith(color: J.cyanDeep)).copyWith(height: 1.5),
-                  ),
-                ),
+                child: l.checked[i] != null
+                    ? Padding(
+                        padding: const EdgeInsets.only(top: 3),
+                        child: Icon(
+                          l.checked[i]! ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
+                          size: 17,
+                          color: l.checked[i]! ? J.cyan : J.text3,
+                        ),
+                      )
+                    : Padding(
+                        padding: const EdgeInsets.only(top: 1),
+                        child: Text(
+                          l.ordered ? '${l.start + i}.' : bullets[depth % bullets.length],
+                          textAlign: TextAlign.right,
+                          style: (l.ordered ? J.mono(14, color: J.cyanDeep, weight: 500) : J.body.copyWith(color: J.cyanDeep)).copyWith(height: 1.5),
+                        ),
+                      ),
               ),
               const SizedBox(width: J.s2),
               Expanded(

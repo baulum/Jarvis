@@ -91,7 +91,7 @@ class Task(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(300))
     kind: Mapped[str] = mapped_column(String(60))  # playbook name | "custom"
     status: Mapped[str] = mapped_column(String(30), index=True, default="queued")
-    # queued | running | waiting_approval | waiting_input | completed | failed | cancelled
+    # queued | running | paused | waiting_approval | waiting_input | completed | failed | cancelled
     params: Mapped[dict[str, Any]] = mapped_column(default=dict)
     context: Mapped[dict[str, Any]] = mapped_column(default=dict)  # step outputs shared across steps
     result: Mapped[dict[str, Any]] = mapped_column(default=dict)
@@ -299,7 +299,7 @@ class CodingJob(Base, TimestampMixin):
     worktree_path: Mapped[str] = mapped_column(String(500), default="")
     branch: Mapped[str] = mapped_column(String(200), default="")
     status: Mapped[str] = mapped_column(String(30), index=True, default="queued")
-    # queued | running | completed | failed | cancelled
+    # queued | running | paused | completed | failed | cancelled
     pid: Mapped[int | None] = mapped_column(Integer)
     log_path: Mapped[str] = mapped_column(String(500), default="")
     claude_session_id: Mapped[str | None] = mapped_column(String(80))

@@ -14,7 +14,8 @@ export interface MdSpan {
   href?: string;
 }
 
-export type MdList = { type: "list"; ordered: boolean; start: number; items: MdBlock[][] };
+/** `checked[i]` is the task-list state of item i (`- [x]` / `- [ ]`), null for a normal item. */
+export type MdList = { type: "list"; ordered: boolean; start: number; items: MdBlock[][]; checked: (boolean | null)[] };
 export type MdBlock =
   | { type: "heading"; level: number; spans: MdSpan[] }
   | { type: "paragraph"; spans: MdSpan[] }
@@ -29,7 +30,8 @@ const HEADING = /^\s{0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/;
 const RULE = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
 const QUOTE = /^\s{0,3}>\s?/;
 const LIST = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
-const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const TASK = /^\[([ xX])\]\s+/;
+const TABLE_SEP =/^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 
 // `noUncheckedIndexedAccess`: line / character / capture-group access that yields "" instead of undefined
 const at = (lines: string[], i: number): string => lines[i] ?? "";
@@ -168,11 +170,14 @@ function parseList(lines: string[], start: number): [MdList, number] {
   const ordered = isOrdered(marker);
   const startNo = ordered ? parseInt(marker, 10) || 1 : 1;
   const items: MdBlock[][] = [];
+  const checked: (boolean | null)[] = [];
   let i = start;
   while (i < lines.length) {
     const m = LIST.exec(at(lines, i));
     if (!m || grp(m, 1).length !== base || isOrdered(grp(m, 2)) !== ordered) break;
-    const item = [grp(m, 3)];
+    const task = TASK.exec(grp(m, 3));
+    checked.push(task ? grp(task, 1) !== " " : null);
+    const item = [task ? grp(m, 3).slice(task[0].length) : grp(m, 3)];
     i++;
     while (i < lines.length) {
       const l = at(lines, i);
@@ -200,7 +205,7 @@ function parseList(lines: string[], start: number): [MdList, number] {
       if (n && grp(n, 1).length === base && isOrdered(grp(n, 2)) === ordered) i = k;
     }
   }
-  return [{ type: "list", ordered, start: startNo, items }, i];
+  return [{ type: "list", ordered, start: startNo, items, checked }, i];
 }
 
 // ------------------------------------------------------------------ inline
@@ -212,6 +217,18 @@ export function parseInline(s: string): MdSpan[] {
   const out: MdSpan[] = [];
   inline(s.replace(/<br\s*\/?>/gi, "\n"), { bold: false, italic: false, strike: false }, undefined, out);
   return out;
+}
+
+/** Index of the `)` closing a link target that starts at `from`; balanced parentheses belong to the URL. */
+function closingParen(s: string, from: number): number {
+  let depth = 1;
+  for (let j = from; j < s.length; j++) {
+    const c = ch(s, j);
+    if (c === "\n") return -1;
+    if (c === "(") depth++;
+    else if (c === ")" && --depth === 0) return j;
+  }
+  return -1;
 }
 
 function closeStrong(s: string, marker: string, from: number): number {
@@ -322,7 +339,7 @@ function inline(s: string, st: Style, href: string | undefined, out: MdSpan[]): 
     if (c === "[" && href === undefined) {
       const close = s.indexOf("]", i + 1);
       if (close > i && ch(s, close + 1) === "(") {
-        const end = s.indexOf(")", close + 2);
+        const end = closingParen(s, close + 2);
         if (end > close + 1) {
           const url = s.slice(close + 2, end).trim().split(/\s+/)[0] ?? "";
           if (url) {

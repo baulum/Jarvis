@@ -1,27 +1,26 @@
-import { Square, TerminalSquare } from "lucide-react";
+import { TerminalSquare } from "lucide-react";
 import { useState } from "react";
-import { Button, Dot, EmptyState, ErrorState, KeyValue, Section, Skeleton, Tag } from "../components/ui";
-import { useAction, useQuery } from "../hooks/useQuery";
+import { AgentControls, JobMonitorPanel } from "../components/AgentMonitor";
+import { Dot, EmptyState, ErrorState, KeyValue, Section, Skeleton, StatusText, Tag } from "../components/ui";
+import { useQuery } from "../hooks/useQuery";
 import { formatClock, formatMs, formatRelative, statusLabel, statusTone } from "../lib/format";
+import type { Task } from "../lib/types";
 import { api, useApp } from "../store/app";
+
+const TASK_ACTIVE = ["queued", "running", "paused", "waiting_approval", "waiting_input", "waiting_external"];
 
 export function AgentsView() {
   const live = useApp((s) => s.liveTools);
   const status = useApp((s) => s.status);
-  const codingLive = useApp((s) => s.codingLive);
   const jobs = useQuery(() => api.codingJobs(), "coding-jobs", { topics: ["coding"] });
+  const tasks = useQuery(() => api.tasks(), "agent-tasks", { topics: ["task"] });
   const [selected, setSelected] = useState<string | null>(null);
   const job = jobs.data?.find((j) => j.id === selected) ?? jobs.data?.[0];
-  const log = useQuery(() => (job ? api.codingLog(job.id) : Promise.resolve([])), `coding-log-${job?.id ?? "none"}`, {
-    topics: ["coding"],
-    enabled: !!job,
-  });
-  const lines = [...(log.data ?? []), ...(job ? codingLive[job.id] ?? [] : [])];
-  const act = useAction();
+  const activeTasks = (tasks.data ?? []).filter((t) => TASK_ACTIVE.includes(t.status));
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto grid max-w-[76rem] gap-6 px-8 py-6 lg:grid-cols-[1fr_1.3fr]">
+      <div className="mx-auto grid max-w-[80rem] gap-6 px-8 py-6 lg:grid-cols-[1fr_1.5fr]">
         <div className="flex flex-col gap-6">
           <Section title="Agent" meta="Claude Code · Subscription">
             <div className="p-4">
@@ -35,11 +34,25 @@ export function AgentsView() {
               ]} />
             </div>
           </Section>
-          <Section title="Werkzeugaufrufe" meta="live">
+
+          <Section title="Aufgaben" meta={activeTasks.length ? `${activeTasks.length} aktiv` : "Task-Engine"}>
+            {tasks.loading && <div className="p-4"><Skeleton rows={3} /></div>}
+            {tasks.error && <div className="p-4"><ErrorState message={tasks.error} onRetry={tasks.refetch} /></div>}
+            {tasks.data && activeTasks.length === 0 && (
+              <div className="px-4"><EmptyState title="Keine aktiven Aufgaben." /></div>
+            )}
+            <ul className="divide-y divide-seam">
+              {activeTasks.map((t) => (
+                <TaskRow key={t.id} task={t} onChanged={tasks.refetch} />
+              ))}
+            </ul>
+          </Section>
+
+          <Section title="Werkzeugaufrufe" meta="live, Gespräche">
             {live.length === 0 ? (
               <div className="px-4"><EmptyState title="Noch keine Werkzeugaufrufe in dieser Sitzung." /></div>
             ) : (
-              <ul className="max-h-[28rem] divide-y divide-seam overflow-y-auto">
+              <ul className="max-h-[22rem] divide-y divide-seam overflow-y-auto">
                 {[...live].reverse().map((t) => (
                   <li key={t.key} className="flex items-center gap-3 px-4 py-2 text-sm">
                     <Dot tone={t.status === "running" ? "info" : t.status === "ok" ? "ok" : "bad"} pulse={t.status === "running"} />
@@ -62,7 +75,7 @@ export function AgentsView() {
             </EmptyState></div>
           )}
           {jobs.data && jobs.data.length > 0 && (
-            <div className="grid min-h-[28rem] grid-cols-[14rem_1fr] divide-x divide-seam">
+            <div className="grid min-h-[28rem] grid-cols-[13rem_1fr] divide-x divide-seam">
               <ul className="divide-y divide-seam overflow-y-auto">
                 {jobs.data.map((j) => (
                   <li key={j.id}>
@@ -74,30 +87,13 @@ export function AgentsView() {
                 ))}
               </ul>
               {job && (
-                <div className="flex min-w-0 flex-col">
-                  <div className="flex items-center gap-2 border-b border-seam px-4 py-2 text-xs text-ink-dim">
-                    <span className="type-data truncate">{job.branch ?? "–"}</span>
-                    {job.model && <span className="type-data shrink-0 text-ink-faint">{job.model}{job.effort ? ` · ${job.effort}` : ""}</span>}
-                    {job.status === "running" && (
-                      <Button size="sm" variant="danger" className="ml-auto" icon={<Square className="size-3" />}
-                              onClick={() => act.run("cancel", () => api.codingCancel(job.id), "Job abgebrochen")}>Abbrechen</Button>
-                    )}
+                <div className="min-w-0">
+                  <div className="border-b border-seam px-4 py-2.5">
+                    <p className="truncate text-[0.875rem] font-semibold text-ink">{job.title}</p>
+                    <p className="type-data truncate text-ink-faint">{job.branch ?? "–"}</p>
                   </div>
-                  <div className="selectable min-h-0 flex-1 overflow-y-auto p-4 font-mono text-[0.72rem] leading-relaxed">
-                    {lines.length === 0 && <span className="text-ink-faint">Noch keine Ausgabe.</span>}
-                    {lines.map((l, i) => (
-                      <div key={i} className="whitespace-pre-wrap break-words">
-                        {l.tool ? <span className="text-arc">▸ {l.tool} <span className="text-ink-dim">{l.detail}</span></span>
-                          : l.type === "result" ? <span className={l.is_error ? "text-alarm" : "text-ember"}>■ {l.text}</span>
-                          : <span className="text-ink">{l.text}</span>}
-                      </div>
-                    ))}
-                    {job.result && typeof job.result === "object" && "tests" in job.result && job.result.tests != null && (
-                      <div className="mt-3 border-t border-seam pt-3 text-ink-dim">
-                        Tests: {(job.result.tests as { passed?: boolean }).passed ? "bestanden" : "fehlgeschlagen"}
-                      </div>
-                    )}
-                  </div>
+                  <JobMonitorPanel key={job.id} jobId={job.id} />
+                  <RawLog jobId={job.id} />
                 </div>
               )}
             </div>
@@ -105,5 +101,61 @@ export function AgentsView() {
         </Section>
       </div>
     </div>
+  );
+}
+
+function TaskRow({ task, onChanged }: { task: Task; onChanged: () => Promise<void> }) {
+  const done = task.steps.filter((s) => s.status === "completed" || s.status === "skipped").length;
+  const current = task.steps.find((s) => !["completed", "skipped"].includes(s.status));
+  const controllable = task.status === "queued" || task.status === "running" || task.status === "paused";
+  const after = (p: Promise<unknown>) => p.then(onChanged);
+  return (
+    <li className="flex flex-col gap-2 px-4 py-3">
+      <div className="flex items-center gap-2">
+        <StatusText tone={statusTone(task.status)} pulse={task.status === "running"}>{statusLabel(task.status)}</StatusText>
+        <span className="min-w-0 flex-1 truncate text-sm text-ink">{task.title}</span>
+        <span className="type-data shrink-0 text-ink-faint">{done}/{task.steps.length}</span>
+      </div>
+      {current && <p className="type-data truncate text-ink-dim">Schritt {current.idx + 1}: {current.name}</p>}
+      {task.question && <p className="text-xs text-ember">{task.question}</p>}
+      <AgentControls
+        compact
+        subject="Aufgabe"
+        state={{
+          canPause: task.status === "queued" || task.status === "running",
+          canResume: task.status === "paused",
+          canCancel: !["completed", "failed", "cancelled"].includes(task.status),
+          canMessage: controllable || task.status === "waiting_external",
+        }}
+        onPause={() => after(api.taskPause(task.id))}
+        onResume={() => after(api.taskResume(task.id))}
+        onCancel={() => after(api.taskCancel(task.id))}
+        onMessage={(text, immediate) => api.taskMessage(task.id, text, immediate)}
+      />
+    </li>
+  );
+}
+
+/** Original raw stream (text, tool lines, result) – kept for debugging next to the structured monitor. */
+function RawLog({ jobId }: { jobId: string }) {
+  const [open, setOpen] = useState(false);
+  const codingLive = useApp((s) => s.codingLive[jobId]);
+  const log = useQuery(() => api.codingLog(jobId), `coding-log-${jobId}`, { topics: ["coding"], enabled: open });
+  const lines = [...(log.data ?? []), ...(codingLive ?? [])].filter((l) => l.type !== "tool_result" && l.type !== "control");
+  return (
+    <details className="border-t border-seam" onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary className="cursor-default px-4 py-2 text-xs text-ink-faint hover:text-ink-dim">Rohprotokoll</summary>
+      <div className="selectable max-h-72 overflow-y-auto px-4 pb-3 font-mono text-[0.72rem] leading-relaxed">
+        {lines.length === 0 && <span className="text-ink-faint">Noch keine Ausgabe.</span>}
+        {lines.map((l, i) => (
+          <div key={i} className="break-words whitespace-pre-wrap">
+            {l.tool ? <span className="text-arc">▸ {l.tool} <span className="text-ink-dim">{l.detail}</span></span>
+              : l.type === "result" ? <span className={l.is_error ? "text-alarm" : "text-ember"}>■ {l.text}</span>
+              : l.type === "user_message" ? <span className="text-ember">» {l.text}</span>
+              : <span className="text-ink">{l.text}</span>}
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }

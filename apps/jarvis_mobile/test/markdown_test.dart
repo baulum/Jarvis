@@ -53,6 +53,64 @@ void main() {
     expect(spansText(p.spans), 'mobile_call_owner und 2 * 3 und **offen');
   });
 
+  test('headings, paragraphs and rules', () {
+    final b = parseMarkdown('# Titel\n\nErster Absatz\nzweite Zeile\n\n---\n\n### Klein');
+    expect(b.map((x) => x.runtimeType), [MdHeading, MdParagraph, MdRule, MdHeading]);
+    expect((b[0] as MdHeading).level, 1);
+    expect((b[3] as MdHeading).level, 3);
+    expect(spansText((b[1] as MdParagraph).spans), 'Erster Absatz\nzweite Zeile');
+  });
+
+  test('fenced code with blank lines and a longer fence stays verbatim', () {
+    final b = parseMarkdown('Text\n\n```ts\nconst a = 1;\n\n  indented\n```\nDanach');
+    expect(b.map((x) => x.runtimeType), [MdParagraph, MdCode, MdParagraph]);
+    expect((b[1] as MdCode).code, 'const a = 1;\n\n  indented');
+    final nested = parseMarkdown('````md\n```js\nx\n```\n````').single as MdCode;
+    expect(nested.code, '```js\nx\n```');
+  });
+
+  test('task lists next to normal lists', () {
+    final l = parseMarkdown('- [x] fertig\n- [ ] offen\n- normal').single as MdList;
+    expect(l.checked, [true, false, null]);
+    expect(spansText((l.items[0].single as MdParagraph).spans), 'fertig');
+    expect((parseMarkdown('- eins\n- zwei').single as MdList).checked, [null, null]);
+  });
+
+  test('a list may follow a paragraph line directly', () {
+    expect(parseMarkdown('Zutaten:\n- Mehl\n- Zucker').map((x) => x.runtimeType), [MdParagraph, MdList]);
+  });
+
+  test('short table rows are padded and a pipe in plain text is no table', () {
+    final t = parseMarkdown('| Name | Wert | Rest |\n|:--|--:|:-:|\n| a | 1 |').single as MdTable;
+    expect(t.aligns, [MdAlign.left, MdAlign.right, MdAlign.center]);
+    expect(t.rows.single.map(spansText), ['a', '1', '']);
+    expect(parseMarkdown('a | b\nkein Trenner').single, isA<MdParagraph>());
+  });
+
+  test('quotes nest blocks', () {
+    final q = parseMarkdown('> Zitat\n> - Punkt\n>\n> Ende').single as MdQuote;
+    expect(q.blocks.map((x) => x.runtimeType), [MdParagraph, MdList, MdParagraph]);
+  });
+
+  test('code spans keep their markers, raw html and escapes stay text', () {
+    final code = parseInline('`a*b*c`').single;
+    expect(code.code, isTrue);
+    expect(code.text, 'a*b*c');
+    expect(spansText(parseInline('<img src=x onerror=alert(1)>')), '<img src=x onerror=alert(1)>');
+    expect(spansText(parseInline(r'\*kein em\*')), '*kein em*');
+  });
+
+  test('links keep balanced parentheses; only web and mail targets become links', () {
+    final links = parseInline('Siehe [Doku](https://x.de/a_(b)) oder https://y.de/pfad, ok.').where((s) => s.href != null);
+    expect(links.map((s) => s.href), ['https://x.de/a_(b)', 'https://y.de/pfad']);
+    final unsafe = parseInline('[klick](javascript:alert(1)) [x](data:text/html,hi)');
+    expect(unsafe.where((s) => s.href != null), isEmpty);
+    expect(spansText(unsafe), 'klick x');
+    expect(safeHref('javascript:alert(1)'), isNull);
+    expect(safeHref(' https://ok.de '), 'https://ok.de');
+    expect(safeHref('mailto:a@b.de'), 'mailto:a@b.de');
+  });
+
   test('syntax highlighting colours keywords, strings, numbers and comments', () {
     final spans = highlightCode('def f(x):\n  return "a" + 42  # fertig', 'python');
     final byText = {for (final s in spans) s.text: s.style?.color};

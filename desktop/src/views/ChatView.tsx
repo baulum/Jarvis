@@ -5,6 +5,7 @@ import { ApprovalCard } from "../components/ApprovalCard";
 import { Markdown } from "../components/Markdown";
 import { Button, EmptyState, ErrorState, Skeleton } from "../components/ui";
 import { useQuery } from "../hooks/useQuery";
+import { useSlash } from "../hooks/useSlash";
 import { formatMs, formatRelative } from "../lib/format";
 import { emptyThread, threadFromHistory, type ToolChip, type UiMessage } from "../lib/reducers";
 import { ModelPicker } from "../components/ModelPicker";
@@ -103,6 +104,7 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
     };
   }, [sessionId, setThread]);
 
+  const slash = useSlash({ draft, setDraft, sessionId, sendText, onNew: () => setActive(null) });
   const messages = useMemo(() => thread?.messages ?? [], [thread?.messages]);
   const running = Boolean(thread?.running);
   const sessionApprovals = useMemo(
@@ -118,8 +120,13 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
   async function send() {
     const text = draft.trim();
     if (!text || sending) return;
-    setSending(true);
+    if (await slash.tryRun(text)) return;
     setDraft("");
+    await sendText(text);
+  }
+
+  async function sendText(text: string) {
+    setSending(true);
     stick.current = true;
     try {
       const res = await api.sendChat(text, sessionId);
@@ -196,23 +203,25 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
       <div className="border-t border-seam bg-hull/60 px-8 py-4">
         <div className="mx-auto mb-2 flex w-full max-w-[52rem]"><ModelPicker placement="up" /></div>
         <form
-          className="mx-auto flex w-full max-w-[52rem] items-end gap-2"
+          className="relative mx-auto flex w-full max-w-[52rem] items-end gap-2"
           onSubmit={(e) => {
             e.preventDefault();
             void send();
           }}
         >
+          {slash.menu}
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
+              if (slash.onKeyDown(e)) return;
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 void send();
               }
             }}
             rows={Math.min(6, Math.max(1, draft.split("\n").length))}
-            placeholder="Nachricht an J.A.R.V.I.S. – Enter sendet, Shift+Enter für neue Zeile"
+            placeholder="Nachricht an J.A.R.V.I.S. – Enter sendet, Shift+Enter neue Zeile, „/“ für Befehle"
             aria-label="Nachricht"
             className="field min-h-[2.4rem] flex-1 resize-none py-2 text-sm leading-relaxed"
           />
@@ -232,6 +241,7 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
           </Button>
         </form>
       </div>
+      {slash.dialog}
     </div>
   );
 }

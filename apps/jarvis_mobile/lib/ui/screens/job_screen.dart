@@ -13,6 +13,7 @@ import '../widgets/markdown_view.dart';
 const _jobStatus = {
   'queued': 'Wartet',
   'running': 'Läuft',
+  'paused': 'Pausiert',
   'completed': 'Fertig',
   'failed': 'Fehlgeschlagen',
   'cancelled': 'Abgebrochen',

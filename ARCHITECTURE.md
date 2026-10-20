@@ -112,6 +112,17 @@ oder Kosinus ≥ 0,93 → Ergänzung statt neuer Notiz. Korrektur → alte Notiz
 --permission-prompts none --allowedTools … --settings {sandbox}` → Stream-JSON-Log → Testbefehl → bei Fehlschlag automatische
 Fehleranalyse (zweiter Lauf mit Testausgabe, `--resume`) → Commit auf `jarvis/*`-Branch → optional Draft-PR.
 
+**Agent-Monitor.** Das Coding-Log (`coding-logs/<job>.jsonl`) hält je Werkzeugaufruf Argument-Kurzfassung, Ergebnis-Kurzfassung und
+Token-Nutzung (`coding/monitor.py`); `GET /api/coding/jobs/{id}/monitor` macht daraus den Schnappschuss (aktueller Schritt, Schritte,
+Laufzeit ohne Pausen, Tokens, Kosten – Kosten meldet die CLI erst am Ende eines Laufs). Live per `coding.progress`-Events, Polling als
+Reserve. Steuerung: `pause`/`resume` (SIGSTOP/SIGCONT auf die Prozessgruppe, das Zeitlimit wird um die Pause verlängert), `cancel`,
+`message` (Folge-Turn derselben Claude-Session nach dem aktuellen Lauf, mit `immediate` sofort durch Beenden des Laufs). Aufgaben:
+`/api/tasks/{id}/pause|resume|message` (weiches Pausieren zwischen Schritten; Nachrichten gehen an den laufenden Coding-Job der Aufgabe).
+Desktop (`AgentsView`) und Handy (Aktivität → Agenten) nutzen dieselben Endpunkte; Pausieren und Abbrechen fragen im UI vorher nach.
+
+**Slash-Befehle.** `GET /api/commands` (`jarvis/commands.py`) ist die einzige Quelle der Befehlsliste für Desktop und Handy; der Server
+beschreibt (`action`: prompt, model, new, stop, navigate, killswitch), die Apps führen aus.
+
 **Telefonie.** Twilio Programmable Voice + bidirektionale Media Streams (µ-law 8 kHz über WebSocket). Webhooks mit
 `X-Twilio-Signature`-Prüfung, Einmal-Stream-Token je Anruf, PIN-Pflicht (DTMF oder gesprochen), Barge-in (`clear`),
 Transkript in `calls`. SIP-Endpunkte werden über eine Twilio SIP Domain / Elastic SIP Trunk auf denselben Webhook geleitet.
