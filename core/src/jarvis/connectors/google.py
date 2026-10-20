@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import mimetypes
 import secrets
 import time
 import urllib.parse
@@ -45,6 +46,61 @@ SCOPES = [
 ]
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105 - endpoint URL, not a secret
+
+# Attachments may only come from these folders (checked after resolving symlinks and "..").
+ATTACHMENT_ROOTS = (
+    Path("/Users/paul/Developer/Projects"),
+    Path("/Users/paul/Developer/Jarvis-Workspaces"),
+)
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+MAX_ATTACHMENTS = 10
+_BLOCKED_PARTS = {".git", ".ssh", ".env", ".aws", ".gnupg"}
+
+
+def load_attachments(
+    paths: list[str],
+    roots: tuple[Path, ...] = ATTACHMENT_ROOTS,
+    max_bytes: int = MAX_ATTACHMENT_BYTES,
+) -> list[tuple[str, str, bytes]]:
+    """Validate attachment paths and return (filename, mime type, data) tuples."""
+    if not isinstance(paths, list) or not all(isinstance(p, str) and p.strip() for p in paths):
+        raise ToolUserError("attachments muss eine Liste von Dateipfaden sein.")
+    if len(paths) > MAX_ATTACHMENTS:
+        raise ToolUserError(f"Zu viele Anhänge (maximal {MAX_ATTACHMENTS}).")
+    allowed = [r.resolve() for r in roots]
+    limit_mb = max_bytes // (1024 * 1024)
+    files: list[Path] = []
+    total = 0
+    for raw in paths:
+        try:
+            p = Path(raw).expanduser().resolve(strict=True)
+        except (FileNotFoundError, NotADirectoryError):
+            raise ToolUserError(f"Anhang nicht gefunden: {raw}") from None
+        except (OSError, RuntimeError):
+            raise ToolUserError(f"Anhang nicht lesbar: {raw}") from None
+        if not any(p.is_relative_to(r) for r in allowed):
+            raise ToolUserError(f"Anhang nicht erlaubt (Pfad außerhalb der freigegebenen Ordner): {raw}")
+        if _BLOCKED_PARTS & {part.lower() for part in p.parts} or p.name.lower().startswith(".env"):
+            raise ToolUserError(f"Anhang nicht erlaubt (sensible Datei): {raw}")
+        if not p.is_file():
+            raise ToolUserError(f"Anhang ist keine reguläre Datei: {raw}")
+        total += p.stat().st_size
+        if total > max_bytes:
+            raise ToolUserError(f"Anhänge zu groß (Gesamtgrenze {limit_mb} MB).")
+        files.append(p)
+    out: list[tuple[str, str, bytes]] = []
+    total = 0
+    for p in files:
+        try:
+            data = p.read_bytes()
+        except OSError:
+            raise ToolUserError(f"Anhang nicht lesbar: {p.name}") from None
+        total += len(data)
+        if total > max_bytes:
+            raise ToolUserError(f"Anhänge zu groß (Gesamtgrenze {limit_mb} MB).")
+        mime = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        out.append((p.name, mime, data))
+    return out
 
 
 def _obj(props: dict[str, Any], req: list[str] | None = None) -> dict[str, Any]:
@@ -310,8 +366,12 @@ class GoogleConnector(Connector):
             return {"draft_id": res.get("id")}
 
         async def gmail_send(ctx: ToolContext, a: dict[str, Any]) -> Any:
-            res = await self.send_mail(a["to"], a["subject"], a["body"])
-            return {"message_id": res.get("id"), "sent": True}
+            files = load_attachments(a["attachments"]) if a.get("attachments") else None
+            res = await self.send_mail(a["to"], a["subject"], a["body"], attachments=files)
+            out: dict[str, Any] = {"message_id": res.get("id"), "sent": True}
+            if files:
+                out["attachments"] = [name for name, _, _ in files]
+            return out
 
         async def cal_list(ctx: ToolContext, a: dict[str, Any]) -> Any:
             start = a.get("from") or datetime.now(TZ).isoformat()
@@ -408,6 +468,15 @@ class GoogleConnector(Connector):
             "description": {"type": "string"},
         }
         mail_props = {"to": {"type": "string"}, "subject": {"type": "string"}, "body": {"type": "string"}}
+        send_props = {
+            **mail_props,
+            "attachments": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional: absolute Dateipfade als Anhänge. Nur Dateien aus den freigegebenen "
+                "Ordnern (Projects, Jarvis-Workspaces), insgesamt max. 20 MB.",
+            },
+        }
         return [
             ToolSpec(
                 "gmail_search",
@@ -476,13 +545,14 @@ class GoogleConnector(Connector):
             ),
             ToolSpec(
                 "gmail_send",
-                "Sendet eine E-Mail.",
-                _obj(mail_props, ["to", "subject", "body"]),
+                "Sendet eine E-Mail, optional mit Dateianhängen (attachments: Liste von Dateipfaden).",
+                _obj(send_props, ["to", "subject", "body"]),
                 gmail_send,
                 "high",
                 S,
                 writes=True,
-                summarize=lambda a: f"E-Mail senden an {a['to']}: {a['subject']} – {a['body'][:120]}",
+                summarize=lambda a: f"E-Mail senden an {a['to']}: {a['subject']} – {a['body'][:120]}"
+                + (f" [Anhänge: {', '.join(a['attachments'])}]" if a.get("attachments") else ""),
             ),
             ToolSpec(
                 "calendar_list_events",
