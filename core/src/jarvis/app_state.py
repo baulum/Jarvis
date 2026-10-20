@@ -29,6 +29,7 @@ from jarvis.connectors.fish_audio import FishAudioConnector
 from jarvis.connectors.generic import HttpApiConnector, ShellConnector, WebhookConnector
 from jarvis.connectors.github import GitHubConnector
 from jarvis.connectors.google import GoogleConnector
+from jarvis.connectors.kie_creative import KieCreativeConnector
 from jarvis.connectors.lexware import LexwareConnector
 from jarvis.connectors.mac import BridgeClient, MacConnector
 from jarvis.connectors.memory_obsidian import ObsidianMemoryConnector
@@ -158,6 +159,7 @@ class AppState:
             HttpApiConnector,
             WebhookConnector,
             FishAudioConnector,
+            KieCreativeConnector,
             TelephonyConnector,
         ):
             self.connectors.add(conn_cls(self))
