@@ -20,6 +20,7 @@ import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -58,6 +59,10 @@ _TOOL_LABELS: list[tuple[str, str]] = [
     ("mobile_", "Plane eine Benachrichtigung …"),
     ("system_", "Prüfe das System …"),
 ]
+
+
+def _normalise(text: str) -> str:
+    return re.sub(r"\W+", " ", text.lower()).strip()
 
 
 def tool_label(name: str) -> str:
@@ -107,6 +112,7 @@ class CallVoiceAgent:
         self._greeting_pcm: asyncio.Future[bytes] | None = None
         self._owner_track = asyncio.Event()
         self._prepared: SpeechTurn | None = None
+        self._greeting_spoken = False
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -314,6 +320,19 @@ class CallVoiceAgent:
             spec = None
             self._turn_task = asyncio.create_task(self._turn(audio, text))
 
+    def _is_echo(self, text: str) -> bool:
+        """The recognised text is (part of) something Jarvis said a moment ago, e.g. the greeting via speaker."""
+        heard = _normalise(text)
+        if len(heard) < 8:
+            return False
+        for entry in self.transcript[-4:]:
+            if entry["role"] != "jarvis":
+                continue
+            said = _normalise(entry["text"])
+            if heard in said or SequenceMatcher(None, heard, said).ratio() > 0.75:
+                return True
+        return False
+
     async def _stt(self, audio: npt.NDArray[np.int16]) -> str:
         return (await self.state.stt.transcribe_wav(pcm_to_wav(audio, IN_RATE))).strip()
 
@@ -339,6 +358,10 @@ class CallVoiceAgent:
             text = await self._stt(audio)
         text = text.strip()
         if len(re.sub(r"\W", "", text)) < 2:
+            await self.set_state("listening")
+            return
+        if self._is_echo(text):  # Jarvis' own voice picked up again: never answer it (that would loop)
+            logger.info("Call %s: ignoring echo of Jarvis' own speech", self.call_id)
             await self.set_state("listening")
             return
         await self._transcript("user", text)
@@ -422,7 +445,11 @@ class CallVoiceAgent:
         return speech
 
     async def _speak_greeting(self, text: str) -> None:
-        """Play the pre-synthesised greeting as soon as the phone's audio is up (its subscription is ready too)."""
+        """Play the pre-synthesised greeting as soon as the phone's audio is up (its subscription is ready too).
+        Strictly once per call."""
+        if self._greeting_spoken:
+            return
+        self._greeting_spoken = True
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(self._owner_track.wait(), 5)
         pcm = b""

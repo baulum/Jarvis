@@ -6,6 +6,8 @@ void main() {
   test('deep links from notifications map onto routes', () {
     expect(routeForLink('jarvis://approval/abc?decide=approve'), '/activity?approval=abc&decide=approve');
     expect(routeForLink('jarvis://task/t1'), '/activity?task=t1');
+    expect(routeForLink('jarvis://job/j1'), '/job/j1');
+    expect(routeForLink('jarvis://job'), '/activity');
     expect(routeForLink('jarvis://call'), '/call');
     expect(routeForLink('jarvis://call/c1'), '/activity?call=c1');
     expect(routeForLink('jarvis://chat/s1'), '/chat?session=s1');

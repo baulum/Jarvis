@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -9,10 +10,11 @@ import '../../state/providers.dart';
 import '../widgets/composer.dart';
 import '../widgets/core_orb.dart';
 import '../widgets/hud.dart';
+import '../widgets/markdown_view.dart';
 import '../widgets/model_picker.dart';
 
-/// Conversation with the same Jarvis as on the Mac. No bubbles: Sir's words right-aligned in light,
-/// Jarvis' answers as text on the dark, tool use shown as the real tool calls of that answer.
+/// Conversation with the same Jarvis as on the Mac. Sir's words in a tinted bubble on the right, Jarvis' answers
+/// in a wide panel bubble with rendered Markdown, tool use shown as the real tool calls of that answer.
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key, this.sessionId, this.initial});
   final String? sessionId;
@@ -163,28 +165,51 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       };
 }
 
-class _MessageView extends StatelessWidget {
+class _MessageView extends ConsumerWidget {
   const _MessageView({required this.m});
   final Msg m;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     if (m.role == 'user') {
+      // Sir: right-aligned, tinted bubble with a flat corner at the sender's side
       return Padding(
-        padding: const EdgeInsets.only(bottom: J.s5, left: J.s7),
+        padding: const EdgeInsets.only(bottom: J.s4, left: J.s6),
         child: Align(
           alignment: Alignment.centerRight,
           child: Container(
-            padding: const EdgeInsets.only(right: J.s3),
-            decoration: const BoxDecoration(border: Border(right: BorderSide(color: J.cyan, width: 1.5))),
-            child: Text(m.text, style: J.body.copyWith(color: J.ice), textAlign: TextAlign.right),
+            padding: const EdgeInsets.symmetric(horizontal: J.s4, vertical: J.s3),
+            decoration: BoxDecoration(
+              color: J.cyan.withValues(alpha: 0.10),
+              border: Border.all(color: J.cyan.withValues(alpha: 0.32)),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(16),
+                topRight: Radius.circular(16),
+                bottomLeft: Radius.circular(16),
+                bottomRight: Radius.circular(4),
+              ),
+            ),
+            child: SelectableText(m.text, style: J.body.copyWith(color: J.ice)),
           ),
         ),
       );
     }
+    // Jarvis: wide panel bubble with rendered Markdown
     return Padding(
-      padding: const EdgeInsets.only(bottom: J.s5, right: J.s5),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      padding: const EdgeInsets.only(bottom: J.s4, right: J.s2),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(J.s4, J.s3, J.s4, J.s4),
+        decoration: const BoxDecoration(
+          color: J.panel,
+          border: Border.fromBorderSide(BorderSide(color: J.line)),
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(4),
+            topRight: Radius.circular(16),
+            bottomLeft: Radius.circular(16),
+            bottomRight: Radius.circular(16),
+          ),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (m.tools.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: J.s2),
@@ -207,11 +232,24 @@ class _MessageView extends StatelessWidget {
         if (m.text.isEmpty && m.streaming)
           const _Thinking()
         else
-          SelectableText(m.text, style: J.body),
+          SelectionArea(
+            child: MarkdownView(m.text, onLink: (url) => _openLink(context, ref, url)),
+          ),
         if (m.error != null && m.error != 'cancelled')
           Padding(padding: const EdgeInsets.only(top: J.s1), child: Text(m.error!, style: J.mono(11, color: J.amber))),
       ]),
+      ),
     );
+  }
+
+  Future<void> _openLink(BuildContext context, WidgetRef ref, String url) async {
+    final opened = await ref.read(nativeProvider).openUrl(url).catchError((Object _) => false);
+    if (!opened && context.mounted) {
+      await Clipboard.setData(ClipboardData(text: url));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link kopiert')));
+      }
+    }
   }
 }
 

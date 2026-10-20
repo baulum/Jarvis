@@ -82,10 +82,13 @@ object AlertNotifier {
         val category = msg.optString("category", "system")
         val silent = msg.optBoolean("silent")
         val nid = alertId.hashCode()
-        val link = msg.optString("link").ifBlank { "jarvis://activity" }
+        val targetType = msg.optString("target_type")
+        val targetId = msg.optString("target_id")
+        val link = AlertLinks.resolve(msg.optString("link"), targetType, targetId)
         val open = PendingIntent.getActivity(
             context, nid,
             Intent(context, MainActivity::class.java).setAction(Intent.ACTION_VIEW).setData(Uri.parse(link))
+                .putExtra("target_type", targetType).putExtra("target_id", targetId)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )

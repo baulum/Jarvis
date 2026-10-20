@@ -28,7 +28,7 @@ def mobile_tools(state: AppState) -> list[ToolSpec]:
                 a.get("body", ""),
                 "warning" if a.get("urgent") else "info",
                 event_key=a.get("event_key") or "",
-                deep_link=f"jarvis://chat/{ctx.session_id}" if ctx.session_id else "jarvis://home",
+                deep_link=f"jarvis://chat/{ctx.session_id}" if ctx.session_id else "jarvis://activity",
                 data={"session_id": str(ctx.session_id)} if ctx.session_id else {},
                 source="agent",
             )
@@ -38,6 +38,9 @@ def mobile_tools(state: AppState) -> list[ToolSpec]:
         return res
 
     async def call_now(ctx: ToolContext, a: dict[str, Any]) -> Any:
+        # Inside a running call this would hang up that very call and ring again → greeting, call, greeting, …
+        if state.calls.in_call(ctx.session_id):
+            raise ToolUserError("Sir ist bereits im Gespräch mit mir – kein weiterer Anruf nötig.")
         # Sir asked explicitly: check first whether a new call is possible at all, only then end the running one
         blocker = await state.calls.call_blocker(None, explicit=True)
         if blocker:

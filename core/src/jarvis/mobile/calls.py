@@ -17,13 +17,14 @@ import contextlib
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select
 
-from jarvis.agent.persona import TZ, time_of_day_greeting
+from jarvis.agent.persona import TZ, call_opening
 from jarvis.db import session_scope
 from jarvis.db.models import CallSession, CodingJob, Task
 from jarvis.events import Event, bus, spawn
@@ -46,6 +47,7 @@ class CallService:
         self.cfg = state.settings.mobile.calls
         self.agents: dict[uuid.UUID, CallVoiceAgent] = {}
         self._ring_timers: dict[uuid.UUID, asyncio.Task[None]] = {}
+        self._fired: set[str] = set()  # watches already triggered (idempotent: never fires twice)
         self.watches_path: Path = state.settings.paths.data_dir / "call-watches.json"
 
     def start(self) -> None:
@@ -114,6 +116,12 @@ class CallService:
                 if timer:
                     timer.cancel()
         return live
+
+    def in_call(self, session_id: uuid.UUID | None) -> bool:
+        """True if this chat session is the conversation of a call that is running right now."""
+        return session_id is not None and any(
+            getattr(a, "session_id", None) == session_id for a in self.agents.values()
+        )
 
     async def end_active_calls(self, reason: str = "superseded") -> int:
         """Hang up every ringing/connecting/active call (Sir explicitly asks for a fresh one)."""
@@ -206,7 +214,7 @@ class CallService:
                     event_key=event_key,
                 )
             )
-        greeting = f"{time_of_day_greeting(self.state.personality)} {message}".strip()
+        greeting = call_opening(self.state.personality, message)  # said once, a greeting in the message is not doubled
         self._start_agent(call_id, room, greeting, join_timeout=self.cfg.ring_timeout_s + 30)
         if skip_push:
             self._ring_timers[call_id] = spawn(self._ring_timeout(call_id), name=f"ring-{call_id}")
@@ -289,7 +297,7 @@ class CallService:
                     device_id=principal.device_id,
                 )
             )
-        agent = self._start_agent(call_id, room, time_of_day_greeting(self.state.personality), join_timeout=40)
+        agent = self._start_agent(call_id, room, call_opening(self.state.personality), join_timeout=40)
         agent.set_owner(principal)
         await bus.publish("call.started", call_id=str(call_id), direction="to_jarvis")
         return self._join_info(call_id, room, principal)
@@ -472,15 +480,23 @@ class CallService:
         self._save_watches(rest)
         return len(rest) != len(watches)
 
+    def _claim_watches(self, match: Callable[[dict[str, Any]], bool]) -> list[dict[str, Any]]:
+        """Take the matching watches out of the store in one synchronous step (no await in between), so each
+        watch fires exactly once even when several events for the same job arrive concurrently."""
+        watches = self._load_watches()
+        hits = [w for w in watches if w.get("id") not in self._fired and not w.get("fired") and match(w)]
+        if hits:
+            self._fired.update(w["id"] for w in hits)
+            claimed = {w["id"] for w in hits}
+            self._save_watches([w for w in watches if w["id"] not in claimed])
+        return hits
+
     async def _on_finished_event(self, ev: Event) -> None:
         d = ev.data
         kind = "coding_job" if ev.type == "coding.finished" else "task"
         target = str(d.get("job_id") if kind == "coding_job" else (d.get("task_id") or ev.task_id or d.get("id")))
-        hits = [w for w in self._load_watches() if w["type"] == kind and w["target"] == target]
-        if not hits:
-            return
+        hits = self._claim_watches(lambda w: w["type"] == kind and w["target"] == target)
         for w in hits:
-            self.remove_watch(w["id"])
             ok = d.get("status", "completed") == "completed" and ev.type != "task.failed"
             title = str(d.get("title") or "Auftrag")
             detail = w["message"] if ok else f"Leider ist „{title}“ fehlgeschlagen. {str(d.get('error') or '')[:200]}"
@@ -491,7 +507,7 @@ class CallService:
                     detail,
                     "info" if ok else "warning",
                     event_key=f"watch:{w['id']}",
-                    deep_link=f"jarvis://task/{target}" if kind == "task" else "jarvis://activity",
+                    deep_link=f"jarvis://{'task' if kind == 'task' else 'job'}/{target}",
                     call_requested=True,
                     call_message=detail,
                     data={"task_id": target} if kind == "task" else {"job_id": target},
@@ -501,20 +517,18 @@ class CallService:
 
     async def check_watches_time(self) -> None:
         now = datetime.now(UTC)
-        for w in self._load_watches():
-            if w["type"] == "time" and datetime.fromisoformat(w["target"]) <= now:
-                self.remove_watch(w["id"])
-                await self.state.alerts.dispatch(
-                    Alert(
-                        "reminder",
-                        "Erinnerung",
-                        w["message"],
-                        event_key=f"watch:{w['id']}",
-                        call_requested=True,
-                        call_message=w["message"],
-                        source="watch",
-                    )
+        for w in self._claim_watches(lambda w: w["type"] == "time" and datetime.fromisoformat(w["target"]) <= now):
+            await self.state.alerts.dispatch(
+                Alert(
+                    "reminder",
+                    "Erinnerung",
+                    w["message"],
+                    event_key=f"watch:{w['id']}",
+                    call_requested=True,
+                    call_message=w["message"],
+                    source="watch",
                 )
+            )
 
 
 def call_dict(c: CallSession) -> dict[str, Any]:

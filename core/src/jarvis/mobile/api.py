@@ -514,6 +514,43 @@ async def watch_delete(wid: str, st: AppState = StateDep, p: Principal = OwnerOr
     return {"removed": st.calls.remove_watch(wid)}
 
 
+# ------------------------------------------------------------------ coding jobs (detail view of a notification)
+@router.get("/coding/jobs/{jid}")
+async def coding_job_detail(jid: str, st: AppState = StateDep, p: Principal = OwnerOrMobile) -> dict[str, Any]:
+    """One coding job with status, result/error and the last steps of its log – target of the push tap."""
+    from jarvis.api.routes import _job_dict
+    from jarvis.db.models import CodingJob
+
+    job_id = _uuid(jid)
+    async with session_scope() as s:
+        job = await s.get(CodingJob, job_id)
+    if job is None:
+        raise HTTPException(404, "Job nicht gefunden (vielleicht schon entfernt)")
+    steps = [
+        {k: ev[k] for k in ("ts", "type", "tool", "detail", "text") if ev.get(k)}
+        for ev in await st.coding.log_tail(job_id, 60)
+        if ev.get("tool") or ev.get("text")
+    ]
+    return {
+        **_job_dict(job),
+        "task_id": str(job.task_id) if job.task_id else None,
+        "steps": steps[-40:],
+        "can_delete": job.status in ("failed", "cancelled"),
+        "can_pr": job.status == "completed",
+    }
+
+
+@router.post("/coding/jobs/{jid}/delete")
+async def coding_job_delete(jid: str, st: AppState = StateDep, p: Principal = Mobile) -> dict[str, Any]:
+    """Remove a failed/cancelled job from the list (branch and worktree stay, as for the agent tool)."""
+    from jarvis.coding.runner import CodingError
+
+    try:
+        return await st.coding.delete(_uuid(jid), p.label, delete_worktree=False)
+    except CodingError as e:
+        raise HTTPException(409, str(e)) from e
+
+
 # ------------------------------------------------------------------ approvals (signed)
 class MobileDecision(BaseModel):
     approve: bool

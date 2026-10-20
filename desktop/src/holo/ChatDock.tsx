@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUp, CircleStop, Loader2, Mic, MicOff } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalCard } from "../components/ApprovalCard";
+import { Markdown } from "../components/Markdown";
 import { ModelPicker } from "../components/ModelPicker";
 import { emptyThread, threadFromHistory, type UiMessage } from "../lib/reducers";
 import { api, useApp } from "../store/app";
@@ -67,7 +68,9 @@ function Message({ m }: { m: UiMessage }) {
           ))}
         </div>
       )}
-      <span className={m.streaming ? "caret" : ""}>{m.text}</span>
+      <div className={m.streaming ? "caret" : ""}>
+        <Markdown text={m.text} compact />
+      </div>
       {m.interrupted && <span className="ml-2 text-2xs text-ink-faint">unterbrochen</span>}
       {m.error && m.error !== "cancelled" && <span className="ml-2 text-2xs text-alarm">{m.error}</span>}
     </div>

@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, CircleStop, Loader2, Plus, SendHorizontal, TriangleAlert, Wrench, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalCard } from "../components/ApprovalCard";
+import { Markdown } from "../components/Markdown";
 import { Button, EmptyState, ErrorState, Skeleton } from "../components/ui";
 import { useQuery } from "../hooks/useQuery";
 import { formatMs, formatRelative } from "../lib/format";
@@ -237,33 +238,41 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
 
 function MessageRow({ m }: { m: UiMessage }) {
   if (m.role === "user") {
+    // Sir: tinted bubble on the right with a flat corner at the sender's side
     return (
-      <div className="flex flex-col items-end">
-        <div className={`max-w-[80%] rounded-lg border border-seam bg-plate px-3.5 py-2 text-sm whitespace-pre-wrap text-ink ${m.pending ? "opacity-70" : ""}`}>
+      <div className="flex flex-col items-end gap-1">
+        <span className="type-data px-1 text-ink-faint uppercase">Sie</span>
+        <div
+          className={`max-w-[80%] rounded-2xl rounded-br-sm border border-arc-dim/40 bg-arc-deep/60 px-4 py-2.5 text-[0.9375rem] leading-relaxed whitespace-pre-wrap text-white ${m.pending ? "opacity-70" : ""}`}
+        >
           {m.text}
         </div>
       </div>
     );
   }
   const empty = !m.text && m.streaming;
+  // Jarvis: wide plate bubble on the left, answer rendered as Markdown
   return (
-    <div className="flex flex-col gap-2">
-      {m.tools.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {m.tools.map((t) => (
-            <ToolChipView key={t.key} t={t} />
-          ))}
+    <div className="flex flex-col items-start gap-1">
+      <span className="type-data px-1 text-arc-dim uppercase">Jarvis</span>
+      <div className="flex w-full max-w-[min(100%,46rem)] flex-col gap-2 rounded-2xl rounded-tl-sm border border-seam bg-plate/70 px-5 py-4">
+        {m.tools.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {m.tools.map((t) => (
+              <ToolChipView key={t.key} t={t} />
+            ))}
+          </div>
+        )}
+        <div className={m.streaming ? "caret" : ""}>
+          {empty ? <span className="text-ink-faint">Denkt nach</span> : <Markdown text={m.text} />}
         </div>
-      )}
-      <div className={`max-w-[68ch] text-[0.9375rem] leading-[1.65] whitespace-pre-wrap text-ink ${m.streaming ? "caret" : ""}`}>
-        {empty ? <span className="text-ink-faint">Denkt nach</span> : m.text}
+        {(m.error || m.interrupted) && (
+          <p className="flex items-center gap-1.5 text-xs text-ember">
+            <TriangleAlert className="size-3.5" />
+            {m.interrupted || m.error === "cancelled" ? "Antwort wurde unterbrochen." : `Fehler: ${m.error}`}
+          </p>
+        )}
       </div>
-      {(m.error || m.interrupted) && (
-        <p className="flex items-center gap-1.5 text-xs text-ember">
-          <TriangleAlert className="size-3.5" />
-          {m.interrupted || m.error === "cancelled" ? "Antwort wurde unterbrochen." : `Fehler: ${m.error}`}
-        </p>
-      )}
     </div>
   );
 }

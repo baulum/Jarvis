@@ -86,6 +86,23 @@ class Alert:
     allow_call: bool = True  # False for follow-ups of a call (a missed call must never ring again)
 
 
+_TARGET_KEYS: tuple[tuple[str, str], ...] = (
+    ("approval_id", "approval"),
+    ("job_id", "job"),
+    ("task_id", "task"),
+    ("call_id", "call"),
+    ("session_id", "chat"),
+)
+
+
+def alert_target(alert: Alert) -> tuple[str, str]:
+    """(type, id) of what the notification is about – job | task | approval | call | chat – or ("", "")."""
+    for key, kind in _TARGET_KEYS:
+        if alert.data.get(key):
+            return kind, str(alert.data[key])
+    return "", ""
+
+
 @dataclass(slots=True)
 class Decision:
     mode: str
@@ -279,9 +296,13 @@ class AlertEngine:
             "actions": CATEGORY_ACTIONS.get(alert.category, ["open"]),
             "group": alert.category,
         }
-        for k in ("approval_id", "task_id", "job_id", "session_id"):
+        for k in ("approval_id", "task_id", "job_id", "session_id", "call_id"):
             if alert.data.get(k):
                 payload[k] = str(alert.data[k])
+        target_type, target_id = alert_target(alert)
+        if target_type:
+            payload["target_type"], payload["target_id"] = target_type, target_id
+            payload["link"] = f"jarvis://{target_type}/{target_id}"  # the tap always lands on the detail view
         results = await self.state.push.send_all(
             "alert", payload, high_priority=alert.level != "info" or alert.category == "approval", ttl_s=86400
         )

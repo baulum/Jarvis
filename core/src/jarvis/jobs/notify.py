@@ -42,9 +42,11 @@ def _alert_for(event: str, title: str, body: str, level: str, data: dict[str, An
     if event == "coding.finished" and data.get("status") != "completed":
         category = "error"
     key_id = data.get("approval_id") or data.get("id") or data.get("task_id") or data.get("job_id") or nid
-    link = "jarvis://home"
+    link = "jarvis://activity"
     if data.get("task_id"):
         link = f"jarvis://task/{data['task_id']}"
+    if data.get("job_id"):  # a coding job has its own detail view (preferred over the task it belongs to)
+        link = f"jarvis://job/{data['job_id']}"
     if event == "approval.requested" and data.get("approval_id"):
         link = f"jarvis://approval/{data['approval_id']}"
     extra = {"approval_id": data["approval_id"]} if data.get("approval_id") else {}
