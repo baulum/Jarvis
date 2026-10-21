@@ -113,7 +113,7 @@ def call_agent(question: str | None) -> tuple[Any, FakeOrchestrator, list[str]]:
     async def drain() -> None:
         pass
 
-    agent.state = SimpleNamespace(orchestrator=orch)
+    agent.state = SimpleNamespace(orchestrator=orch, personality=SimpleNamespace(owner_title="Sir"))
     agent.call_id = uuid.uuid4()
     agent.principal = SimpleNamespace()
     agent.session_id = uuid.uuid4()
