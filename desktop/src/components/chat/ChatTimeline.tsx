@@ -91,14 +91,19 @@ export function ChatTimeline({ thread, compact = false, lastRows, onLoadOlder, l
 // ------------------------------------------------------------------ message types
 
 const UserBubble = memo(function UserBubble({ event, compact }: { event: TimelineEvent<MessageData>; compact: boolean }) {
-  if (compact) return <p className="selectable text-right text-[0.8125rem] whitespace-pre-wrap text-ink-dim">{event.data.text}</p>;
+  if (compact)
+    return (
+      <div className="selectable text-right text-ink-dim">
+        <Markdown text={event.data.text} compact />
+      </div>
+    );
   return (
     <div className="flex flex-col items-end gap-1">
       <span className="type-data px-1 text-ink-faint">Sie</span>
       <div
-        className={`selectable max-w-[80%] rounded-2xl rounded-br-sm border border-arc-dim/40 bg-arc-deep/60 px-4 py-2.5 text-[0.9375rem] leading-relaxed whitespace-pre-wrap text-white ${event.local ? "opacity-70" : ""}`}
+        className={`selectable max-w-[80%] rounded-2xl rounded-br-sm border border-arc-dim/40 bg-arc-deep/60 px-4 py-2.5 ${event.local ? "opacity-70" : ""}`}
       >
-        {event.data.text}
+        <Markdown text={event.data.text} />
       </div>
     </div>
   );
