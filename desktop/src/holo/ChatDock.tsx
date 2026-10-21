@@ -4,10 +4,11 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUp, CircleStop, Loader2, Mic, MicOff } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalCard } from "../components/ApprovalCard";
-import { Markdown } from "../components/Markdown";
+import { ChatTimeline } from "../components/chat/ChatTimeline";
 import { ModelPicker } from "../components/ModelPicker";
 import { useSlash } from "../hooks/useSlash";
-import { emptyThread, threadFromHistory, type UiMessage } from "../lib/reducers";
+import { useStickToBottom } from "../hooks/useStickToBottom";
+import { buildRows } from "../lib/timeline";
 import { api, useApp } from "../store/app";
 import { useBrain } from "./store";
 
@@ -45,44 +46,12 @@ function Waveform({ active, source }: { active: boolean; source: "input" | "outp
   return <canvas ref={canvas} width={192} height={28} className="h-7 w-24" aria-hidden />;
 }
 
-function Message({ m }: { m: UiMessage }) {
-  const select = useBrain((s) => s.select);
-  if (m.role === "user") {
-    return <p className="selectable text-right text-[0.8125rem] text-ink-dim">{m.text}</p>;
-  }
-  return (
-    <div className="selectable text-[0.875rem] leading-relaxed text-ink">
-      {m.tools.length > 0 && (
-        <div className="mb-1.5 flex flex-wrap gap-1.5">
-          {m.tools.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => select(`tool:${t.name}`)}
-              className={`type-data rounded border px-1.5 py-px text-[0.62rem] ${
-                t.status === "running" ? "border-arc-dim text-arc" : t.status === "failed" ? "border-alarm/50 text-alarm" : "border-seam-hi text-ink-faint"
-              }`}
-              title={t.error ?? t.args ?? t.name}
-            >
-              {t.name}
-            </button>
-          ))}
-        </div>
-      )}
-      <div className={m.streaming ? "caret" : ""}>
-        <Markdown text={m.text} compact />
-      </div>
-      {m.interrupted && <span className="ml-2 text-2xs text-ink-faint">unterbrochen</span>}
-      {m.error && m.error !== "cancelled" && <span className="ml-2 text-2xs text-alarm">{m.error}</span>}
-    </div>
-  );
-}
-
 export function ChatDock() {
   const sessionId = useApp((s) => s.activeSessionId);
   const setActive = useApp((s) => s.setActiveSession);
   const thread = useApp((s) => (sessionId ? s.threads[sessionId] : undefined));
-  const setThread = useApp((s) => s.setThread);
+  const loadThread = useApp((s) => s.loadThread);
+  const sendMessage = useApp((s) => s.sendMessage);
   const pushToast = useApp((s) => s.pushToast);
   const voice = useApp((s) => s.voice);
   const pending = useApp((s) => s.pendingApprovals);
@@ -92,33 +61,20 @@ export function ChatDock() {
   const [focused, setFocused] = useState(false);
   const [sending, setSending] = useState(false);
   const [ptt, setPtt] = useState(false);
-  const scroller = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (!sessionId || useApp.getState().threads[sessionId]?.messages.length) return;
-    let cancelled = false;
-    api
-      .sessionMessages(sessionId)
-      .then((rows) => !cancelled && !useApp.getState().threads[sessionId]?.running && setThread(threadFromHistory(sessionId, rows)))
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, setThread]);
+    if (!sessionId || useApp.getState().threads[sessionId]?.loaded) return;
+    void loadThread(sessionId).catch(() => undefined);
+  }, [sessionId, loadThread]);
 
   const slash = useSlash({ draft, setDraft, sessionId, sendText, onNew: () => setActive(null) });
-  const messages = useMemo(() => thread?.messages ?? [], [thread?.messages]);
+  const rowCount = useMemo(() => (thread ? buildRows(thread.events).length : 0), [thread]);
   const running = Boolean(thread?.running);
-  const expanded = focused || messages.length > 2;
-  const shown = expanded ? messages.slice(-24) : messages.slice(-2);
+  const expanded = focused || rowCount > 2;
   const sessionApprovals = pending.filter((a) => sessionId && approvalSessions[a.id] === sessionId);
-
-  const lastText = messages[messages.length - 1]?.text;
-  useEffect(() => {
-    const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [shown.length, lastText, expanded]);
+  // growing on expand is followed by the hook's ResizeObserver; new events by the signal
+  const { ref: scrollRef, onScroll, toBottom } = useStickToBottom<HTMLDivElement>(thread?.events);
 
   // Enter focuses the input from anywhere (unless typing elsewhere)
   useEffect(() => {
@@ -144,18 +100,10 @@ export function ChatDock() {
 
   async function sendText(text: string) {
     setSending(true);
+    toBottom(false);
     try {
-      const res = await api.sendChat(text, sessionId);
-      const st = useApp.getState();
-      const t = st.threads[res.session_id] ?? emptyThread(res.session_id);
-      if (!t.messages.some((m) => m.role === "user" && m.text === text && !m.pending)) {
-        st.setThread({
-          ...t,
-          running: true,
-          messages: [...t.messages, { id: `local-${Date.now()}`, role: "user", text, tools: [], streaming: false, pending: true, ts: new Date().toISOString() }],
-        });
-      }
-      if (res.session_id !== sessionId) setActive(res.session_id);
+      const sid = await sendMessage(text, sessionId);
+      if (sid !== sessionId) setActive(sid);
     } catch (e) {
       setDraft(text);
       pushToast({ tone: "bad", title: "Nachricht nicht gesendet", body: (e as Error).message });
@@ -188,7 +136,7 @@ export function ChatDock() {
       onBlur={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setFocused(false)}
     >
       <AnimatePresence initial={false}>
-        {(shown.length > 0 || sessionApprovals.length > 0 || (!sessionId && greeting && focused)) && (
+        {(rowCount > 0 || sessionApprovals.length > 0 || (!sessionId && greeting && focused)) && (
           <motion.div
             key="log"
             initial={{ opacity: 0, height: 0 }}
@@ -196,14 +144,18 @@ export function ChatDock() {
             exit={{ opacity: 0, height: 0 }}
             className="overflow-hidden"
           >
-            <div ref={scroller} className={`flex flex-col gap-3 overflow-y-auto px-5 pt-4 pb-2 ${expanded ? "max-h-[38vh]" : "max-h-[8.5rem]"}`}>
-              {!sessionId && greeting && shown.length === 0 && <p className="text-[0.875rem] text-ink-dim">{greeting}</p>}
-              {shown.map((m) => (
-                <Message key={m.id} m={m} />
-              ))}
-              {sessionApprovals.map((a) => (
-                <ApprovalCard key={a.id} approval={a} compact />
-              ))}
+            <div
+              ref={scrollRef}
+              onScroll={onScroll}
+              className={`overflow-y-auto px-5 pt-4 pb-2 [overflow-anchor:none] ${expanded ? "max-h-[38vh]" : "max-h-[8.5rem]"}`}
+            >
+              <div className="flex flex-col gap-3">
+                {!sessionId && greeting && rowCount === 0 && <p className="text-[0.875rem] text-ink-dim">{greeting}</p>}
+                {thread && <ChatTimeline thread={thread} compact lastRows={expanded ? 24 : 2} />}
+                {sessionApprovals.map((a) => (
+                  <ApprovalCard key={a.id} approval={a} compact />
+                ))}
+              </div>
             </div>
           </motion.div>
         )}

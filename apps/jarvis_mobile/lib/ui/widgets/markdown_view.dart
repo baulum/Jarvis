@@ -8,9 +8,15 @@ import '../../core/theme.dart';
 /// Renders a chat answer: headings, lists, tables (horizontally scrollable), quotes, inline code,
 /// code blocks with syntax colours and a copy button, links. No raw Markdown characters remain visible.
 class MarkdownView extends StatefulWidget {
-  const MarkdownView(this.data, {super.key, this.onLink});
+  const MarkdownView(this.data, {super.key, this.onLink, this.checks, this.onToggleTask});
   final String data;
   final void Function(String url)? onLink;
+
+  /// stored task-list state by item index; overrides `- [ ]` / `- [x]` of the text
+  final Map<String, bool>? checks;
+
+  /// makes task-list items tappable (index, new state)
+  final void Function(int index, bool checked)? onToggleTask;
 
   @override
   State<MarkdownView> createState() => _MarkdownViewState();
@@ -158,14 +164,7 @@ class _MarkdownViewState extends State<MarkdownView> {
               SizedBox(
                 width: l.ordered ? 28 : 18,
                 child: l.checked[i] != null
-                    ? Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: Icon(
-                          l.checked[i]! ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
-                          size: 17,
-                          color: l.checked[i]! ? J.cyan : J.text3,
-                        ),
-                      )
+                    ? _taskBox(l.tasks[i], l.checked[i]!)
                     : Padding(
                         padding: const EdgeInsets.only(top: 1),
                         child: Text(
@@ -185,6 +184,36 @@ class _MarkdownViewState extends State<MarkdownView> {
             ]),
           ),
       ],
+    );
+  }
+
+  Widget _taskBox(int? index, bool parsed) {
+    final stored = index == null ? null : widget.checks?['$index'];
+    final checked = stored ?? parsed;
+    final icon = Padding(
+      padding: const EdgeInsets.only(top: 3),
+      child: Icon(
+        checked ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
+        size: 17,
+        color: checked ? J.cyan : J.text3,
+      ),
+    );
+    final toggle = widget.onToggleTask;
+    if (toggle == null || index == null) {
+      return Semantics(checked: checked, child: icon);
+    }
+    return Semantics(
+      checked: checked,
+      button: true,
+      label: checked ? 'Als offen markieren' : 'Als erledigt markieren',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          HapticFeedback.selectionClick();
+          toggle(index, !checked);
+        },
+        child: icon,
+      ),
     );
   }
 

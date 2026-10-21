@@ -36,6 +36,7 @@ import type {
   ToolInfo,
 } from "./types";
 import type { SlashCommand } from "./slash";
+import type { TimelineEvent } from "./timeline";
 
 export const CORE_URL = "http://127.0.0.1:8765";
 
@@ -166,6 +167,14 @@ export function createApi(opts: ApiOptions) {
     interruptChat: () => post<{ interrupted: boolean }>("/chat/interrupt"),
     sessions: (limit = 40) => get<ChatSessionInfo[]>("/sessions", { limit }),
     sessionMessages: (sid: string) => get<ChatMessageRow[]>(`/sessions/${id(sid)}/messages`),
+    /** Chronological timeline (messages, tool calls, process steps), newest `turns` exchanges. */
+    sessionEvents: (sid: string, opts: { turns?: number; beforeSeq?: number } = {}) =>
+      get<{ events: TimelineEvent[]; has_more: boolean }>(`/sessions/${id(sid)}/events`, {
+        turns: opts.turns,
+        before_seq: opts.beforeSeq,
+      }),
+    setCheck: (sid: string, eventId: string, index: number, checked: boolean) =>
+      post<{ ok: boolean }>(`/sessions/${id(sid)}/events/${id(eventId)}/check`, { index, checked }),
 
     // approvals
     approvals: (status: "pending" | "all" | string = "pending") => get<Approval[]>("/approvals", { status }),

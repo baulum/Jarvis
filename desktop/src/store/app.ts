@@ -4,15 +4,17 @@ import { useBrain } from "../holo/store";
 import { ApiError, CORE_URL, createApi } from "../lib/api";
 import { nativeLog, nativeNotify } from "../lib/native";
 import { RealtimeClient, type ConnectionState } from "../lib/realtime";
+import { applyToolEvent, applyVoiceStatus, pushBounded, type LiveToolCall } from "../lib/reducers";
 import {
+  addOptimisticUser,
   applyChatEvent,
-  applyToolEvent,
-  applyVoiceStatus,
+  applyDeltas,
   emptyThread,
-  pushBounded,
+  isMessage,
+  mergeServer,
+  setCheck,
   type ChatThread,
-  type LiveToolCall,
-} from "../lib/reducers";
+} from "../lib/timeline";
 import { notificationTarget } from "../lib/targets";
 import type { Approval, BusEvent, CodingLogLine, LogEntry, SystemStatus, VoiceState } from "../lib/types";
 
@@ -101,7 +103,14 @@ interface AppState {
   refreshStatus: () => Promise<void>;
   refreshApprovals: () => Promise<void>;
   refreshUnread: () => Promise<void>;
+  /** Loads the newest turns of a conversation (or, with `older`, the page before the oldest shown). */
+  loadThread: (sid: string, older?: boolean) => Promise<void>;
+  /** Sends a message; returns the session id it went to. */
+  sendMessage: (text: string, sid: string | null) => Promise<string>;
+  toggleCheck: (sid: string, eventId: string, index: number, checked: boolean) => Promise<void>;
 }
+
+const PAGE_TURNS = 40;
 
 export const useApp = create<AppState>((set, get) => ({
   token: null,
@@ -179,6 +188,34 @@ export const useApp = create<AppState>((set, get) => ({
       // surfaced in the approvals view itself
     }
   },
+  loadThread: async (sid, older = false) => {
+    const cur = get().threads[sid] ?? emptyThread(sid);
+    const firstSeq = cur.events.find((e) => !e.local)?.seq;
+    const res = await api.sessionEvents(sid, { turns: PAGE_TURNS, beforeSeq: older ? firstSeq : undefined });
+    flushDeltas(); // buffered text first, then the snapshot: nothing is applied twice or lost
+    const latest = get().threads[sid] ?? emptyThread(sid);
+    get().setThread(mergeServer(latest, res.events, res.has_more, older));
+  },
+  sendMessage: async (text, sid) => {
+    const res = await api.sendChat(text, sid);
+    const t = get().threads[res.session_id] ?? emptyThread(res.session_id);
+    // the server's copy may already be here (fast core): then no optimistic copy, it would never be replaced
+    const lastUser = [...t.events].reverse().find((e) => isMessage(e) && !e.local && e.data.role === "user");
+    const echoed = lastUser !== undefined && (lastUser.data as { text: string }).text === text && Date.now() - lastUser.ts < 15_000;
+    get().setThread(echoed ? { ...t, running: true } : addOptimisticUser(t, text));
+    return res.session_id;
+  },
+  toggleCheck: async (sid, eventId, index, checked) => {
+    const before = get().threads[sid];
+    if (before) get().setThread(setCheck(before, eventId, index, checked));
+    try {
+      await api.setCheck(sid, eventId, index, checked);
+    } catch (e) {
+      const now = get().threads[sid];
+      if (now) get().setThread(setCheck(now, eventId, index, !checked));
+      get().pushToast({ tone: "bad", title: "Haken nicht gespeichert", body: (e as Error).message });
+    }
+  },
   refreshUnread: async () => {
     try {
       const rows = await api.notifications(true);
@@ -216,6 +253,32 @@ function debounce(key: string, ms: number, fn: () => void) {
   );
 }
 
+// Streaming text arrives token by token. It is buffered and applied at most every 50 ms in one store update,
+// which keeps long answers smooth (one Markdown parse per frame instead of per token).
+const DELTA_FLUSH_MS = 50;
+const deltaBuf = new Map<string, Map<string, string>>(); // session -> item id -> text
+let deltaTimer: ReturnType<typeof setTimeout> | null = null;
+
+function bufferDelta(sid: string, eventId: string, text: string) {
+  const perSession = deltaBuf.get(sid) ?? new Map<string, string>();
+  perSession.set(eventId, (perSession.get(eventId) ?? "") + text);
+  deltaBuf.set(sid, perSession);
+  deltaTimer ??= setTimeout(flushDeltas, DELTA_FLUSH_MS);
+}
+
+export function flushDeltas(): void {
+  if (deltaTimer) clearTimeout(deltaTimer);
+  deltaTimer = null;
+  if (deltaBuf.size === 0) return;
+  const threads = { ...useApp.getState().threads };
+  for (const [sid, deltas] of deltaBuf) {
+    const t = threads[sid];
+    if (t) threads[sid] = { ...applyDeltas(t, deltas), running: true };
+  }
+  deltaBuf.clear();
+  useApp.setState({ threads });
+}
+
 export function handleBusEvent(ev: BusEvent): void {
   useBrain.getState().onEvent(ev); // live layer of the brain (tool calls, recalls, jobs …)
   if (ev.type === "voice.level") return;
@@ -234,10 +297,14 @@ export function handleBusEvent(ev: BusEvent): void {
   }
   if (type.startsWith("chat.")) {
     const sid = typeof d.session_id === "string" ? d.session_id : null;
-    if (sid) {
-      const thread = st.threads[sid] ?? emptyThread(sid);
+    if (sid && (type === "chat.delta" || type === "chat.thinking")) {
+      if (typeof d.event_id === "string" && typeof d.text === "string") bufferDelta(sid, d.event_id, d.text);
+    } else if (sid) {
+      flushDeltas(); // keep the event order: buffered text belongs before this event
+      const threads = useApp.getState().threads;
+      const thread = threads[sid] ?? emptyThread(sid);
       const next = applyChatEvent(thread, ev);
-      if (next !== thread || !st.threads[sid]) st.setThread(next);
+      if (next !== thread || !threads[sid]) st.setThread(next);
     }
     if (type === "chat.done" || type === "chat.user") debounce("sessions", 400, () => bump("session"));
     return;
@@ -371,6 +438,8 @@ export function startRealtime(): RealtimeClient {
       void st.refreshStatus();
       void st.refreshApprovals();
       void st.refreshUnread();
+      // events sent while the socket was down are in the stored timeline: merge them back in, by seq
+      if (st.activeSessionId && st.threads[st.activeSessionId]?.loaded) void st.loadThread(st.activeSessionId).catch(() => undefined);
       (Object.keys(st.versions) as Topic[]).forEach(bump);
     },
   });

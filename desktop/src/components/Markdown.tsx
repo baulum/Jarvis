@@ -1,5 +1,5 @@
 import { Check, Copy } from "lucide-react";
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { createContext, Fragment, useContext, useMemo, useState, type ReactNode } from "react";
 import { copyText } from "../lib/clipboard";
 import { highlight, type TokenKind } from "../lib/highlight";
 import { parseMarkdown, safeHref, type MdBlock, type MdSpan } from "../lib/markdown";
@@ -18,15 +18,62 @@ const TOKEN_CLASS: Record<TokenKind, string> = {
   hunk: "text-arc-dim",
 };
 
-/** Renders an answer as formatted Markdown. `compact` is the smaller variant for the chat dock. */
-export function Markdown({ text, compact = false }: { text: string; compact?: boolean }) {
+interface TaskState {
+  checks?: Record<string, boolean>;
+  onToggle?: (index: number, checked: boolean) => void;
+}
+const TaskContext = createContext<TaskState>({});
+
+/** Renders an answer as formatted Markdown. Raw HTML stays text (React escapes it), only web/mail links open.
+ * `checks` overrides the state of task-list items by their index; with `onToggleTask` they are clickable. */
+export function Markdown({
+  text,
+  compact = false,
+  checks,
+  onToggleTask,
+}: {
+  text: string;
+  compact?: boolean;
+  checks?: Record<string, boolean>;
+  onToggleTask?: (index: number, checked: boolean) => void;
+}) {
   const blocks = useMemo(() => parseMarkdown(text), [text]);
+  const tasks = useMemo(() => ({ checks, onToggle: onToggleTask }), [checks, onToggleTask]);
   return (
-    <div className={`md ${compact ? "text-[0.875rem] leading-relaxed" : "text-[0.9375rem] leading-[1.65]"} flex flex-col gap-3 text-ink`}>
-      {blocks.map((b, i) => (
-        <Block key={i} b={b} compact={compact} />
-      ))}
-    </div>
+    <TaskContext.Provider value={tasks}>
+      <div className={`md ${compact ? "text-[0.875rem] leading-relaxed" : "text-[0.9375rem] leading-[1.65]"} flex flex-col gap-3 text-ink`}>
+        {blocks.map((b, i) => (
+          <Block key={i} b={b} compact={compact} />
+        ))}
+      </div>
+    </TaskContext.Provider>
+  );
+}
+
+function TaskBox({ index, parsed }: { index: number | null; parsed: boolean }) {
+  const { checks, onToggle } = useContext(TaskContext);
+  const checked = index !== null && checks?.[String(index)] !== undefined ? Boolean(checks[String(index)]) : parsed;
+  const cls = `mt-[0.32em] flex size-4 shrink-0 items-center justify-center rounded-[4px] border transition-colors ${
+    checked ? "border-arc-dim bg-arc-deep text-arc" : "border-seam-hi"
+  }`;
+  if (!onToggle || index === null) {
+    return (
+      <span role="checkbox" aria-checked={checked} aria-label={checked ? "erledigt" : "offen"} className={cls}>
+        {checked && <Check className="size-3" strokeWidth={3} />}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      aria-label={checked ? "Als offen markieren" : "Als erledigt markieren"}
+      onClick={() => onToggle(index, !checked)}
+      className={`${cls} hover:border-arc`}
+    >
+      {checked && <Check className="size-3" strokeWidth={3} />}
+    </button>
   );
 }
 
@@ -53,6 +100,8 @@ function Inline({ spans }: { spans: MdSpan[] }) {
           node = href ? (
             <a
               href={href}
+              target="_blank"
+              rel="noopener noreferrer"
               onClick={(e) => {
                 e.preventDefault();
                 void openExternal(href);
@@ -108,16 +157,7 @@ function Block({ b, compact, depth = 0, dim = false }: { b: MdBlock; compact: bo
         >
           {b.items.map((item, i) => (
             <li key={i} className={b.checked[i] != null ? "-ml-6 flex list-none items-start gap-2" : "pl-1"}>
-              {b.checked[i] != null && (
-                <span
-                  role="checkbox"
-                  aria-checked={b.checked[i] === true}
-                  aria-label={b.checked[i] ? "erledigt" : "offen"}
-                  className={`mt-[0.35em] flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border ${b.checked[i] ? "border-arc-dim bg-arc-deep text-arc" : "border-seam-hi"}`}
-                >
-                  {b.checked[i] && <Check className="size-2.5" strokeWidth={3} />}
-                </span>
-              )}
+              {b.checked[i] != null && <TaskBox index={b.tasks[i] ?? null} parsed={b.checked[i] === true} />}
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 {item.map((child, k) => (
                   <Block key={k} b={child} compact={compact} depth={depth + 1} dim={dim} />

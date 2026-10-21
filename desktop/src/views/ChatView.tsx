@@ -1,14 +1,15 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, CircleStop, Loader2, Plus, SendHorizontal, TriangleAlert, Wrench, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, CircleStop, Plus, SendHorizontal } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { ApprovalCard } from "../components/ApprovalCard";
-import { Markdown } from "../components/Markdown";
+import { ChatTimeline } from "../components/chat/ChatTimeline";
+import { ModelPicker } from "../components/ModelPicker";
 import { Button, EmptyState, ErrorState, Skeleton } from "../components/ui";
 import { useQuery } from "../hooks/useQuery";
 import { useSlash } from "../hooks/useSlash";
-import { formatMs, formatRelative } from "../lib/format";
-import { emptyThread, threadFromHistory, type ToolChip, type UiMessage } from "../lib/reducers";
-import { ModelPicker } from "../components/ModelPicker";
+import { useStickToBottom } from "../hooks/useStickToBottom";
+import { formatRelative } from "../lib/format";
+import { emptyThread } from "../lib/timeline";
 import { api, useApp } from "../store/app";
 
 export function ChatView() {
@@ -18,7 +19,7 @@ export function ChatView() {
 
   return (
     <div className="flex h-full">
-      <aside className="flex w-[264px] shrink-0 flex-col border-r border-seam">
+      <aside className="flex w-[264px] shrink-0 flex-col border-r border-seam max-[900px]:hidden">
         <div className="flex items-center justify-between px-4 py-3">
           <span className="text-xs text-ink-dim">Gespräche</span>
           <Button size="sm" variant="ghost" icon={<Plus className="size-3.5" />} onClick={() => setActive(null)}>
@@ -67,55 +68,39 @@ export function ChatView() {
 
 function Conversation({ sessionId }: { sessionId: string | null }) {
   const thread = useApp((s) => (sessionId ? s.threads[sessionId] : undefined));
-  const setThread = useApp((s) => s.setThread);
+  const loadThread = useApp((s) => s.loadThread);
+  const sendMessage = useApp((s) => s.sendMessage);
   const setActive = useApp((s) => s.setActiveSession);
   const greeting = useApp((s) => s.greeting);
   const pending = useApp((s) => s.pendingApprovals);
   const approvalSessions = useApp((s) => s.approvalSessions);
+  const pushToast = useApp((s) => s.pushToast);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
-  const scroller = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
-  const pushToast = useApp((s) => s.pushToast);
+  const events = thread?.events;
+  const { ref: scrollRef, onScroll, atBottom, toBottom, keepPosition } = useStickToBottom<HTMLDivElement>(events);
+  const loading = Boolean(sessionId) && !thread?.loaded && !loadError;
 
-  // load history unless a live thread for this session already exists
+  // the stored timeline is the source of truth; live events of a running answer merge into it by seq
   useEffect(() => {
-    if (!sessionId) return;
-    const existing = useApp.getState().threads[sessionId];
-    if (existing && existing.messages.length > 0) return;
+    if (!sessionId || useApp.getState().threads[sessionId]?.loaded) return;
     let cancelled = false;
-    setLoading(true);
-    api
-      .sessionMessages(sessionId)
-      .then((rows) => {
-        if (cancelled) return;
-        const live = useApp.getState().threads[sessionId];
-        if (live && live.running) return;
-        setThread(threadFromHistory(sessionId, rows));
-        setLoadError(null);
-      })
-      .catch((e: Error) => !cancelled && setLoadError(e.message))
-      .finally(() => !cancelled && setLoading(false));
+    loadThread(sessionId).catch((e: Error) => !cancelled && setLoadError(e.message));
     return () => {
       cancelled = true;
     };
-  }, [sessionId, setThread]);
+  }, [sessionId, loadThread]);
 
   const slash = useSlash({ draft, setDraft, sessionId, sendText, onNew: () => setActive(null) });
-  const messages = useMemo(() => thread?.messages ?? [], [thread?.messages]);
   const running = Boolean(thread?.running);
+  const empty = !events || events.length === 0;
   const sessionApprovals = useMemo(
     () => pending.filter((a) => sessionId && approvalSessions[a.id] === sessionId),
     [pending, approvalSessions, sessionId],
   );
-
-  useEffect(() => {
-    const el = scroller.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [messages, sessionApprovals.length]);
 
   async function send() {
     const text = draft.trim();
@@ -127,28 +112,28 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
 
   async function sendText(text: string) {
     setSending(true);
-    stick.current = true;
+    toBottom(false);
     try {
-      const res = await api.sendChat(text, sessionId);
-      const st = useApp.getState();
-      const t = st.threads[res.session_id] ?? emptyThread(res.session_id);
-      const echoed = t.messages.some((m) => m.role === "user" && m.text === text && !m.pending);
-      if (!echoed) {
-        st.setThread({
-          ...t,
-          running: true,
-          messages: [
-            ...t.messages,
-            { id: `local-${Date.now()}`, role: "user", text, tools: [], streaming: false, pending: true, ts: new Date().toISOString() },
-          ],
-        });
-      }
-      if (res.session_id !== sessionId) setActive(res.session_id);
+      const sid = await sendMessage(text, sessionId);
+      if (sid !== sessionId) setActive(sid);
     } catch (e) {
       setDraft(text);
       pushToast({ tone: "bad", title: "Nachricht nicht gesendet", body: (e as Error).message });
     } finally {
       setSending(false);
+    }
+  }
+
+  async function loadOlder() {
+    if (!sessionId) return;
+    setLoadingOlder(true);
+    keepPosition();
+    try {
+      await loadThread(sessionId, true);
+    } catch (e) {
+      pushToast({ tone: "bad", title: "Ältere Nachrichten nicht geladen", body: (e as Error).message });
+    } finally {
+      setLoadingOlder(false);
     }
   }
 
@@ -165,19 +150,21 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
   }
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col">
-      <div
-        ref={scroller}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-        }}
-        className="selectable min-h-0 flex-1 overflow-y-auto"
-      >
-        <div className="mx-auto flex w-full max-w-[52rem] flex-col gap-7 px-8 py-8">
+    <div className="relative flex min-w-0 flex-1 flex-col">
+      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]">
+        <div className="mx-auto flex w-full max-w-[52rem] flex-col gap-7 px-8 py-8 max-[700px]:px-4">
           {loading && <Skeleton rows={5} />}
-          {loadError && <ErrorState message={loadError} />}
-          {!sessionId && messages.length === 0 && (
+          {loadError && (
+            <ErrorState
+              message={loadError}
+              onRetry={() => {
+                if (!sessionId) return;
+                setLoadError(null);
+                loadThread(sessionId).catch((e: Error) => setLoadError(e.message));
+              }}
+            />
+          )}
+          {!sessionId && empty && (
             <div className="pt-[12vh]">
               <p className="type-display text-[2rem] text-ink">{greeting ?? "Bereit."}</p>
               <p className="mt-3 max-w-[52ch] text-sm text-ink-dim">
@@ -185,12 +172,12 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
               </p>
             </div>
           )}
-          {sessionId && !loading && !loadError && messages.length === 0 && (
-            <EmptyState title="Dieses Gespräch ist leer." />
-          )}
-          {messages.map((m) => (
-            <MessageRow key={m.id} m={m} />
-          ))}
+          {sessionId && !loading && !loadError && empty && <EmptyState title="Dieses Gespräch ist leer." />}
+          <ChatTimeline
+            thread={thread ?? emptyThread(sessionId ?? "new")}
+            onLoadOlder={() => void loadOlder()}
+            loadingOlder={loadingOlder}
+          />
           <AnimatePresence>
             {sessionApprovals.map((a) => (
               <motion.div key={a.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
@@ -200,7 +187,17 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
           </AnimatePresence>
         </div>
       </div>
-      <div className="border-t border-seam bg-hull/60 px-8 py-4">
+      {!atBottom && (
+        <button
+          type="button"
+          onClick={() => toBottom()}
+          className="absolute right-6 bottom-28 flex items-center gap-1.5 rounded-full border border-seam-hi bg-hull px-3 py-1.5 text-xs text-ink-dim shadow-lg hover:text-ink"
+        >
+          <ArrowDown className="size-3.5" />
+          Zum Ende
+        </button>
+      )}
+      <div className="border-t border-seam bg-hull/60 px-8 py-4 max-[700px]:px-4">
         <div className="mx-auto mb-2 flex w-full max-w-[52rem]"><ModelPicker placement="up" /></div>
         <form
           className="relative mx-auto flex w-full max-w-[52rem] items-end gap-2"
@@ -221,7 +218,7 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
               }
             }}
             rows={Math.min(6, Math.max(1, draft.split("\n").length))}
-            placeholder="Nachricht an J.A.R.V.I.S. – Enter sendet, Shift+Enter neue Zeile, „/“ für Befehle"
+            placeholder="Nachricht an Jarvis – Enter sendet, Shift+Enter neue Zeile, „/“ für Befehle"
             aria-label="Nachricht"
             className="field min-h-[2.4rem] flex-1 resize-none py-2 text-sm leading-relaxed"
           />
@@ -245,68 +242,3 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
     </div>
   );
 }
-
-function MessageRow({ m }: { m: UiMessage }) {
-  if (m.role === "user") {
-    // Sir: tinted bubble on the right with a flat corner at the sender's side
-    return (
-      <div className="flex flex-col items-end gap-1">
-        <span className="type-data px-1 text-ink-faint uppercase">Sie</span>
-        <div
-          className={`max-w-[80%] rounded-2xl rounded-br-sm border border-arc-dim/40 bg-arc-deep/60 px-4 py-2.5 text-[0.9375rem] leading-relaxed whitespace-pre-wrap text-white ${m.pending ? "opacity-70" : ""}`}
-        >
-          {m.text}
-        </div>
-      </div>
-    );
-  }
-  const empty = !m.text && m.streaming;
-  // Jarvis: wide plate bubble on the left, answer rendered as Markdown
-  return (
-    <div className="flex flex-col items-start gap-1">
-      <span className="type-data px-1 text-arc-dim uppercase">Jarvis</span>
-      <div className="flex w-full max-w-[min(100%,46rem)] flex-col gap-2 rounded-2xl rounded-tl-sm border border-seam bg-plate/70 px-5 py-4">
-        {m.tools.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {m.tools.map((t) => (
-              <ToolChipView key={t.key} t={t} />
-            ))}
-          </div>
-        )}
-        <div className={m.streaming ? "caret" : ""}>
-          {empty ? <span className="text-ink-faint">Denkt nach</span> : <Markdown text={m.text} />}
-        </div>
-        {(m.error || m.interrupted) && (
-          <p className="flex items-center gap-1.5 text-xs text-ember">
-            <TriangleAlert className="size-3.5" />
-            {m.interrupted || m.error === "cancelled" ? "Antwort wurde unterbrochen." : `Fehler: ${m.error}`}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ToolChipView({ t }: { t: ToolChip }) {
-  const icon =
-    t.status === "running" ? (
-      <Loader2 className="size-3 spin-slow text-arc" />
-    ) : t.status === "failed" ? (
-      <X className="size-3 text-alarm" />
-    ) : (
-      <Check className="size-3 text-arc-dim" />
-    );
-  const title = [t.args && `Argumente: ${t.args}`, t.preview, t.error && `Fehler: ${t.error}`].filter(Boolean).join("\n");
-  return (
-    <span
-      title={title || undefined}
-      className={`inline-flex items-center gap-1.5 rounded border px-2 py-0.5 ${t.status === "failed" ? "border-alarm/40" : t.status === "running" ? "border-arc-dim/60" : "border-seam-hi"}`}
-    >
-      <Wrench className="size-3 text-ink-faint" />
-      <span className="type-data text-ink-dim">{t.name}</span>
-      {t.durationMs !== undefined && <span className="type-data text-ink-faint">{formatMs(t.durationMs)}</span>}
-      {icon}
-    </span>
-  );
-}
-

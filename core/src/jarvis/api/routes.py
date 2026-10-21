@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from jarvis.agent.persona import time_of_day_greeting
+from jarvis.agent.timeline import redact_for_mobile
 from jarvis.api.deps import current_principal, get_state, require, require_owner
 from jarvis.app_state import VERSION, AppState
 from jarvis.coding.runner import CodingError
@@ -191,6 +192,47 @@ async def session_messages(sid: str, st: AppState = StateDep, p: Principal = Rea
         if sess is None or sess.actor_id != p.id:
             raise HTTPException(404, "not found")
     return await st.orchestrator.history(session_id, limit=200)
+
+
+async def _own_session(session_id: uuid.UUID, p: Principal) -> None:
+    async with session_scope() as s:
+        sess = await s.get(ChatSession, session_id)
+    if sess is None or (p.role not in ("owner", "mobile_owner") and sess.actor_id != p.id):
+        raise HTTPException(404, "not found")
+
+
+@router.get("/sessions/{sid}/events")
+async def session_events(
+    sid: str,
+    st: AppState = StateDep,
+    p: Principal = Reader,
+    turns: int = Query(80, ge=1, le=500),
+    before_seq: int | None = None,
+) -> dict[str, Any]:
+    """Chronological timeline (messages, tool calls, process steps) sorted by ``seq`` – survives reloads."""
+    session_id = _uuid(sid)
+    await _own_session(session_id, p)
+    out = await st.orchestrator.timeline(session_id, turns=turns, before_seq=before_seq)
+    if p.role == "mobile_owner":
+        out["events"] = [redact_for_mobile(e) for e in out["events"]]
+    return out
+
+
+class CheckBody(BaseModel):
+    index: int = Field(ge=0, le=10000)
+    checked: bool
+
+
+@router.post("/sessions/{sid}/events/{event_id}/check")
+async def session_event_check(
+    sid: str, event_id: str, body: CheckBody, st: AppState = StateDep, p: Principal = Actor
+) -> dict[str, Any]:
+    """Toggle a task-list item of a message; the state is stored in the message and synced via ``chat.check``."""
+    session_id = _uuid(sid)
+    await _own_session(session_id, p)
+    if not await st.orchestrator.set_check(session_id, event_id[:40], body.index, body.checked):
+        raise HTTPException(404, "not found")
+    return {"ok": True, "index": body.index, "checked": body.checked}
 
 
 # ------------------------------------------------------------------ approvals

@@ -137,4 +137,22 @@ void main() {
     expect(find.textContaining('**'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('task-list items are tappable and show the stored state', (tester) async {
+    final toggles = <(int, bool)>[];
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: MarkdownView(
+          '- [ ] Schirm\n- [x] Kalender',
+          checks: const {'0': true},
+          onToggleTask: (i, c) => toggles.add((i, c)),
+        ),
+      ),
+    ));
+    // item 0 is unchecked in the text but checked in the stored state
+    expect(find.byIcon(Icons.check_box_rounded), findsNWidgets(2));
+    await tester.tap(find.byIcon(Icons.check_box_rounded).last);
+    expect(toggles, [(1, false)]);
+    expect(tester.takeException(), isNull);
+  });
 }

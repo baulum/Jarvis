@@ -3,140 +3,164 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/api.dart';
+import '../core/live.dart';
 import 'providers.dart';
-
-class Msg {
-  const Msg({required this.role, required this.text, this.tools = const [], this.streaming = false, this.error, this.at});
-  final String role; // user | assistant
-  final String text;
-  final List<ToolMark> tools;
-  final bool streaming;
-  final String? error;
-  final DateTime? at;
-
-  Msg copy({String? text, List<ToolMark>? tools, bool? streaming, String? error}) => Msg(
-        role: role,
-        text: text ?? this.text,
-        tools: tools ?? this.tools,
-        streaming: streaming ?? this.streaming,
-        error: error ?? this.error,
-        at: at,
-      );
-}
-
-class ToolMark {
-  const ToolMark(this.name, this.status);
-  final String name;
-  final String status; // running | ok | failed
-}
+import 'timeline.dart';
 
 class ChatState {
-  const ChatState({this.sessionId, this.messages = const [], this.sending = false, this.loading = false, this.error});
+  const ChatState({this.sessionId, this.timeline = const Timeline(), this.sending = false, this.loading = false, this.loadingOlder = false, this.error});
   final String? sessionId;
-  final List<Msg> messages;
+  final Timeline timeline;
   final bool sending;
   final bool loading;
+  final bool loadingOlder;
   final String? error;
 
-  ChatState copy({String? sessionId, List<Msg>? messages, bool? sending, bool? loading, String? error, bool clearError = false}) =>
+  bool get running => timeline.running;
+
+  ChatState copy({
+    String? sessionId,
+    Timeline? timeline,
+    bool? sending,
+    bool? loading,
+    bool? loadingOlder,
+    String? error,
+    bool clearError = false,
+  }) =>
       ChatState(
         sessionId: sessionId ?? this.sessionId,
-        messages: messages ?? this.messages,
+        timeline: timeline ?? this.timeline,
         sending: sending ?? this.sending,
         loading: loading ?? this.loading,
+        loadingOlder: loadingOlder ?? this.loadingOlder,
         error: clearError ? null : (error ?? this.error),
       );
 }
 
-/// Conversation with the same Jarvis core as the Mac: same sessions, same agent, same memory.
-/// Replies stream in via `chat.delta` events of the session.
+const _pageTurns = 40;
+const _deltaFlush = Duration(milliseconds: 60);
+
+/// Conversation with the same Jarvis core as the Mac: same sessions, same agent, same memory, same timeline.
+/// Text and tool calls arrive as `chat.event` items ordered by `seq`; streamed text as `chat.delta` for an item id.
 class ChatController extends Notifier<ChatState> {
+  final Map<String, String> _deltas = {};
+  Timer? _flush;
+
   @override
   ChatState build() {
     final sock = ref.watch(liveSocketProvider);
     final sub = sock?.events.listen(_onEvent);
-    ref.onDispose(() => sub?.cancel());
+    // back online: what happened meanwhile is in the stored timeline – merge it in by seq
+    ref.listen(linkProvider, (prev, next) {
+      if (next.valueOrNull == Link.online && prev?.valueOrNull != Link.online && state.sessionId != null) {
+        _load(state.sessionId!);
+      }
+    });
+    ref.onDispose(() {
+      sub?.cancel();
+      _flush?.cancel();
+    });
     return const ChatState();
   }
 
   Api get _api => ref.read(apiProvider);
 
-  void _onEvent(dynamic ev) {
-    final sid = ev.sessionId as String? ?? ev.data['session_id']?.toString();
+  void _onEvent(CoreEvent ev) {
+    if (!ev.type.startsWith('chat.')) return;
+    final sid = ev.sessionId ?? ev.data['session_id']?.toString();
     if (sid == null || sid != state.sessionId) return;
-    final msgs = [...state.messages];
-    Msg? last = msgs.isNotEmpty && msgs.last.role == 'assistant' && msgs.last.streaming ? msgs.last : null;
-    void put(Msg m) {
-      if (last != null) {
-        msgs[msgs.length - 1] = m;
-      } else {
-        msgs.add(m);
-      }
-      last = m;
+    if (ev.type == 'chat.delta' || ev.type == 'chat.thinking') {
+      final id = ev.data['event_id']?.toString();
+      final text = ev.data['text']?.toString() ?? '';
+      if (id == null || text.isEmpty) return;
+      _deltas[id] = (_deltas[id] ?? '') + text;
+      _flush ??= Timer(_deltaFlush, _flushDeltas);
+      return;
     }
+    _flushDeltas(); // buffered text belongs before this event
+    final next = applyChatEvent(state.timeline, ev.type, ev.data);
+    if (!identical(next, state.timeline)) {
+      state = state.copy(timeline: next, sending: ev.type == 'chat.done' ? false : null);
+    }
+  }
 
-    switch (ev.type as String) {
-      case 'chat.delta':
-        final t = ev.data['text']?.toString() ?? '';
-        if (t.isEmpty) return;
-        put((last ?? const Msg(role: 'assistant', text: '', streaming: true)).copy(text: (last?.text ?? '') + t));
-      case 'chat.tool_started':
-        final name = ((ev.data['data'] as Map?)?['name'] ?? 'Werkzeug').toString().split('__').last;
-        final base = last ?? const Msg(role: 'assistant', text: '', streaming: true);
-        put(base.copy(tools: [...base.tools, ToolMark(name, 'running')]));
-      case 'chat.tool_completed':
-      case 'chat.tool_failed':
-        if (last == null) return;
-        final ok = ev.type == 'chat.tool_completed';
-        final tools = [...last!.tools];
-        final i = tools.lastIndexWhere((t) => t.status == 'running');
-        if (i >= 0) tools[i] = ToolMark(tools[i].name, ok ? 'ok' : 'failed');
-        put(last!.copy(tools: tools));
-      case 'chat.done':
-        final text = ev.data['text']?.toString() ?? last?.text ?? '';
-        final err = ev.data['error']?.toString();
-        put((last ?? const Msg(role: 'assistant', text: '')).copy(text: text, streaming: false, error: err));
-        state = state.copy(messages: msgs, sending: false);
-        return;
-      default:
-        return;
-    }
-    state = state.copy(messages: msgs);
+  void _flushDeltas() {
+    _flush?.cancel();
+    _flush = null;
+    if (_deltas.isEmpty) return;
+    final deltas = Map<String, String>.of(_deltas);
+    _deltas.clear();
+    state = state.copy(timeline: applyDeltas(state.timeline, deltas));
+  }
+
+  Future<void> _load(String sessionId, {bool older = false}) async {
+    final first = state.timeline.items.where((e) => !e.local).map((e) => e.seq).firstOrNull;
+    final q = older && first != null ? '&before_seq=$first' : '';
+    final res = await _api.get('/api/sessions/$sessionId/events?turns=$_pageTurns$q') as Map;
+    if (state.sessionId != sessionId) return;
+    final items = ((res['events'] as List?) ?? const []).map((e) => TItem.fromJson((e as Map).cast<String, dynamic>())).toList();
+    _flushDeltas();
+    state = state.copy(timeline: mergeServer(state.timeline, items, hasMore: res['has_more'] == true, older: older));
   }
 
   Future<void> open(String sessionId) async {
+    _deltas.clear();
     state = ChatState(sessionId: sessionId, loading: true);
     try {
-      final rows = await _api.get('/api/sessions/$sessionId/messages') as List;
-      state = state.copy(
-        loading: false,
-        messages: [
-          for (final r in rows.cast<Map>())
-            if (r['role'] == 'user' || r['role'] == 'assistant')
-              Msg(role: r['role'] as String, text: r['content'].toString(), at: DateTime.tryParse(r['created_at'].toString())),
-        ],
-      );
+      await _load(sessionId);
+      state = state.copy(loading: false, clearError: true);
     } on ApiError catch (e) {
       state = state.copy(loading: false, error: e.message);
     }
   }
 
-  void fresh() => state = const ChatState();
+  Future<void> loadOlder() async {
+    final sid = state.sessionId;
+    if (sid == null || state.loadingOlder) return;
+    state = state.copy(loadingOlder: true);
+    try {
+      await _load(sid, older: true);
+      state = state.copy(loadingOlder: false);
+    } on ApiError catch (e) {
+      state = state.copy(loadingOlder: false, error: e.message);
+    }
+  }
+
+  void fresh() {
+    _deltas.clear();
+    state = const ChatState();
+  }
 
   Future<void> send(String text) async {
     final t = text.trim();
     if (t.isEmpty || state.sending) return;
-    state = state.copy(
-      sending: true,
-      clearError: true,
-      messages: [...state.messages, Msg(role: 'user', text: t, at: DateTime.now()), const Msg(role: 'assistant', text: '', streaming: true)],
-    );
+    final before = state.timeline;
+    state = state.copy(sending: true, clearError: true, timeline: addOptimisticUser(before, state.sessionId ?? '', t));
     try {
+      final wasNew = state.sessionId == null;
       final res = await _api.post('/api/chat', {'message': t, 'session_id': state.sessionId, 'channel': 'mobile'}) as Map;
-      state = state.copy(sessionId: res['session_id'] as String);
+      final sid = res['session_id'] as String;
+      state = state.copy(sessionId: sid, sending: false);
+      // events of a new conversation may have arrived before its id was known: take them from the store
+      if (wasNew) unawaited(_load(sid).catchError((Object _) {}));
     } on ApiError catch (e) {
-      final msgs = [...state.messages]..removeLast();
-      state = state.copy(sending: false, messages: msgs, error: e.offline ? 'Jarvis ist nicht erreichbar – Nachricht nicht gesendet.' : e.message);
+      state = state.copy(
+        sending: false,
+        timeline: before,
+        error: e.offline ? 'Jarvis ist nicht erreichbar – Nachricht nicht gesendet.' : e.message,
+      );
+    }
+  }
+
+  /// Ticks a task-list item; the state is stored in the message on the core (and synced to the Mac).
+  Future<void> toggleCheck(String itemId, int index, bool checked) async {
+    final sid = state.sessionId;
+    if (sid == null) return;
+    state = state.copy(timeline: setCheck(state.timeline, itemId, index, checked));
+    try {
+      await _api.post('/api/sessions/$sid/events/$itemId/check', {'index': index, 'checked': checked});
+    } on ApiError catch (e) {
+      state = state.copy(timeline: setCheck(state.timeline, itemId, index, !checked), error: 'Haken nicht gespeichert: ${e.message}');
     }
   }
 

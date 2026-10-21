@@ -57,6 +57,15 @@ def claude_env() -> dict[str, str]:
     return env
 
 
+def _result_text(content: Any) -> str:
+    """Text of a ``tool_result`` block (a string or a list of content blocks)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(str(c.get("text", "")) for c in content if isinstance(c, dict) and c.get("type") == "text")
+    return ""
+
+
 def friendly_error(text: str) -> str:
     low = text.lower()
     if "limit" in low and ("reset" in low or "usage" in low or "session" in low or "rate" in low):
@@ -76,6 +85,7 @@ class _Proc:
     busy: bool = False
     stderr_tail: list[str] = field(default_factory=list)
     tool_names: dict[str, str] = field(default_factory=dict)  # tool_use id -> tool name (for results)
+    thinking_streamed: bool = False  # reasoning of the current API message already arrived as deltas
 
     @property
     def alive(self) -> bool:
@@ -358,12 +368,22 @@ class ClaudeCodeAgent:
             return []
         if t == "stream_event":
             inner = ev.get("event", {})
-            if inner.get("type") == "content_block_delta" and inner.get("delta", {}).get("type") == "text_delta":
-                return [AgentEvent("delta", text=str(inner["delta"].get("text", "")))]
+            if inner.get("type") == "message_start":
+                p.thinking_streamed = False
+            if inner.get("type") == "content_block_delta":
+                delta = inner.get("delta", {})
+                if delta.get("type") == "text_delta":
+                    return [AgentEvent("delta", text=str(delta.get("text", "")))]
+                if delta.get("type") == "thinking_delta" and delta.get("thinking"):
+                    # only what the API actually returns (summarised reasoning); empty when it is omitted
+                    p.thinking_streamed = True
+                    return [AgentEvent("thinking", text=str(delta["thinking"]))]
             return []
         if t == "assistant":
             out = []
             for block in ev.get("message", {}).get("content", []) or []:
+                if block.get("type") == "thinking" and block.get("thinking") and not p.thinking_streamed:
+                    out.append(AgentEvent("thinking", text=str(block["thinking"])))
                 if block.get("type") == "tool_use":
                     name = str(block.get("name", "")).removeprefix(MCP_PREFIX)
                     use_id = str(block.get("id") or "")
@@ -372,7 +392,12 @@ class ClaudeCodeAgent:
                     out.append(
                         AgentEvent(
                             "tool_started",
-                            data={"name": name, "tool_use_id": use_id, "args": json.dumps(block.get("input"))[:300]},
+                            data={
+                                "name": name,
+                                "tool_use_id": use_id,
+                                "args": json.dumps(block.get("input"))[:300],
+                                "input": block.get("input"),
+                            },
                         )
                     )
             return out
@@ -382,12 +407,11 @@ class ClaudeCodeAgent:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
                     use_id = str(block.get("tool_use_id") or "")
                     name = p.tool_names.pop(use_id, "tool")
-                    out.append(
-                        AgentEvent(
-                            "tool_failed" if block.get("is_error") else "tool_completed",
-                            data={"name": name, "tool_use_id": use_id},
-                        )
-                    )
+                    result = _result_text(block.get("content"))
+                    data: dict[str, Any] = {"name": name, "tool_use_id": use_id, "result": result}
+                    if block.get("is_error"):
+                        data["error"] = result[:500]
+                    out.append(AgentEvent("tool_failed" if block.get("is_error") else "tool_completed", data=data))
             return out
         if t == "rate_limit_event":
             self.state.usage.on_rate_limit(ev.get("rate_limit_info") or {})
