@@ -30,7 +30,10 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        handle(intent)
+        // Only a fresh launch carries a new link: after a rotation (saved state) or when reopened from the recents
+        // list Android hands over the old intent again, which would jump back to an old notification's target.
+        val fromHistory = ((intent?.flags ?: 0) and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+        if (savedInstanceState == null && !fromHistory) handle(intent)
         callWatch = CoroutineScope(Dispatchers.Main).launch {
             CallManager.state.collect { s ->
                 val inCall = s.status !in listOf("idle", "ended")
