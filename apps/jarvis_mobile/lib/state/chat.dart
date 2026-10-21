@@ -39,6 +39,7 @@ class ChatState {
 
 const _pageTurns = 40;
 const _deltaFlush = Duration(milliseconds: 60);
+const _maxEarly = 2000;
 
 /// Conversation with the same Jarvis core as the Mac: same sessions, same agent, same memory, same timeline.
 /// Text and tool calls arrive as `chat.event` items ordered by `seq`; streamed text as `chat.delta` for an item id.
@@ -46,15 +47,18 @@ class ChatController extends Notifier<ChatState> {
   final Map<String, String> _deltas = {};
   Timer? _flush;
 
+  /// While a message is on its way: events of sessions the phone does not show yet. The core may answer in a
+  /// session that only `POST /api/chat` names (a new conversation, or a fresh one because the old had expired),
+  /// and its first events can arrive before that response.
+  List<CoreEvent>? _early;
+
   @override
   ChatState build() {
     final sock = ref.watch(liveSocketProvider);
     final sub = sock?.events.listen(_onEvent);
     // back online: what happened meanwhile is in the stored timeline – merge it in by seq
     ref.listen(linkProvider, (prev, next) {
-      if (next.valueOrNull == Link.online && prev?.valueOrNull != Link.online && state.sessionId != null) {
-        _load(state.sessionId!);
-      }
+      if (next.valueOrNull == Link.online && prev?.valueOrNull != Link.online) _resync();
     });
     ref.onDispose(() {
       sub?.cancel();
@@ -65,10 +69,22 @@ class ChatController extends Notifier<ChatState> {
 
   Api get _api => ref.read(apiProvider);
 
+  void _resync() {
+    final sid = state.sessionId;
+    if (sid != null) unawaited(_load(sid).catchError((Object _) {}));
+  }
+
+  static String? _sessionOf(CoreEvent ev) => ev.sessionId ?? ev.data['session_id']?.toString();
+
   void _onEvent(CoreEvent ev) {
     if (!ev.type.startsWith('chat.')) return;
-    final sid = ev.sessionId ?? ev.data['session_id']?.toString();
-    if (sid == null || sid != state.sessionId) return;
+    final sid = _sessionOf(ev);
+    if (sid == null) return;
+    if (sid != state.sessionId) {
+      final early = _early;
+      if (early != null && early.length < _maxEarly) early.add(ev);
+      return;
+    }
     if (ev.type == 'chat.delta' || ev.type == 'chat.thinking') {
       final id = ev.data['event_id']?.toString();
       final text = ev.data['text']?.toString() ?? '';
@@ -135,20 +151,35 @@ class ChatController extends Notifier<ChatState> {
     final t = text.trim();
     if (t.isEmpty || state.sending) return;
     final before = state.timeline;
-    state = state.copy(sending: true, clearError: true, timeline: addOptimisticUser(before, state.sessionId ?? '', t));
+    final prev = state.sessionId;
+    state = state.copy(sending: true, clearError: true, timeline: addOptimisticUser(before, prev ?? '', t));
+    final early = <CoreEvent>[];
+    _early = early;
     try {
-      final wasNew = state.sessionId == null;
-      final res = await _api.post('/api/chat', {'message': t, 'session_id': state.sessionId, 'channel': 'mobile'}) as Map;
+      final res = await _api.post('/api/chat', {'message': t, 'session_id': prev, 'channel': 'mobile'}) as Map;
       final sid = res['session_id'] as String;
-      state = state.copy(sessionId: sid, sending: false);
-      // events of a new conversation may have arrived before its id was known: take them from the store
-      if (wasNew) unawaited(_load(sid).catchError((Object _) {}));
+      if (state.sessionId != prev) return; // Sir opened another conversation meanwhile; this one is in the history
+      if (sid == prev) {
+        state = state.copy(sending: false);
+      } else {
+        // a new conversation – or the core started a fresh one because this one had expired. Its items are numbered
+        // from 1 again: merged into the old list they would sort above it, out of sight. Show that session alone.
+        _deltas.clear();
+        state = ChatState(sessionId: sid, timeline: startSession(state.timeline));
+      }
+      for (final ev in early) {
+        if (_sessionOf(ev) == sid) _onEvent(ev);
+      }
+      // what happened before the id was known and is not in the replay above: take it from the store
+      if (sid != prev) unawaited(_load(sid).catchError((Object _) {}));
     } on ApiError catch (e) {
       state = state.copy(
         sending: false,
         timeline: before,
         error: e.offline ? 'Jarvis ist nicht erreichbar – Nachricht nicht gesendet.' : e.message,
       );
+    } finally {
+      if (identical(_early, early)) _early = null;
     }
   }
 
