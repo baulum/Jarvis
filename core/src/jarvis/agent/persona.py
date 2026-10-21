@@ -43,8 +43,8 @@ Skript, ein Jarvis-Werkzeug, ein Export ohne Anhang oder PDF), behebe sie selbst
 einen Auftrag auf dem passenden Projekt (project_path), beschreibe Problem und gewünschtes Verhalten genau, \
 gib einen test_command mit, warte mit `coding_job_status` auf das Ergebnis und führe danach Sirs ursprüngliche \
 Aufgabe zu Ende. Frage dafür nicht um Erlaubnis; berichte Sir danach kurz, was du geändert hast.
-- Bekannte Projekte: Lead-Tool (PJE Sales AI, MCP-Paket @pje/mcp) liegt in `/Users/paul/Documents/PJE Systems/Lead-Tool`, \
-Jarvis selbst in `/Users/paul/Documents/Programmieren/Jarvis`.
+- Bekannte Projekte: Lead-Tool (PJE Sales AI, MCP-Paket @pje/mcp) liegt in \
+`/Users/paul/Documents/PJE Systems/Lead-Tool`, Jarvis selbst in `/Users/paul/Documents/Programmieren/Jarvis`.
 - Stelle Rückfragen nur, wenn die Antwort wirklich nicht zu erraten ist und ein Irrtum Schaden anrichtet \
 (Geld, Löschen, fremde Empfänger). Bei Unklarheit wähle die naheliegendste Lesart, sag in einem Satz welche, \
 und liefere. „Alle Leads“ heißt alle, nicht nur ein Ausschnitt.
@@ -99,7 +99,31 @@ def time_of_day_greeting(p: Personality, now: datetime | None = None) -> str:
     return p.greetings.get(key, f"Hallo, {p.owner_title}.")
 
 
-_OPENING_GREETING = re.compile(r"^\s*(guten\s+(morgen|tag|abend)|hallo|noch wach)\b[^.!?\n]*[.!?]\s*", re.IGNORECASE)
+GREETING_WORDS: tuple[str, ...] = ("guten morgen", "guten tag", "guten abend", "hallo", "noch wach")
+_GREETING_RE = r"(?:guten\s+(?:morgen|tag|abend)|hallo|noch\s+wach)"
+_PUNCT = r"[,.!?:;–-]"
+
+
+def _title_re(title: str) -> str:
+    return re.escape(title.strip() or "Sir")
+
+
+def strip_greeting(text: str, title: str) -> str:
+    """Drop a greeting the text opens with ("Guten Abend, Sir.", "Hallo Sir, …") – only the greeting and the
+    form of address, never the rest of the sentence."""
+    pattern = rf"^\s*{_GREETING_RE}\b\s*,?\s*(?:{_title_re(title)}\b)?\s*{_PUNCT}*\s*"
+    rest = re.sub(pattern, "", text, count=1, flags=re.IGNORECASE)
+    return text if rest == text else rest
+
+
+def strip_address(text: str, title: str) -> str:
+    """Drop a leading form of address ("Sir, …") – after the greeting it would be said twice."""
+    rest = re.sub(rf"^\s*{_title_re(title)}\s*{_PUNCT}+\s*", "", text, count=1, flags=re.IGNORECASE)
+    return text if rest == text else rest
+
+
+def _capitalise(text: str) -> str:
+    return text[:1].upper() + text[1:]
 
 
 def short_greeting(p: Personality, now: datetime | None = None) -> str:
@@ -112,10 +136,52 @@ def short_greeting(p: Personality, now: datetime | None = None) -> str:
 
 
 def call_opening(p: Personality, message: str | None = None, now: datetime | None = None) -> str:
-    """What Jarvis says once when Sir picks up. A greeting the message already starts with is not repeated."""
+    """What Jarvis says once when Sir picks up. A greeting or "Sir," the message already starts with is not
+    repeated ("Guten Abend, Sir. Sir, …")."""
     hello = short_greeting(p, now)
-    body = _OPENING_GREETING.sub("", (message or "").strip(), count=1).strip()
+    body = _capitalise(strip_address(strip_greeting((message or "").strip(), p.owner_title), p.owner_title).strip())
     return f"{hello} {body}".strip() if body else f"{hello} Ich höre."
+
+
+class LeadingGreetingFilter:
+    """Streams a spoken reply through, dropping a greeting it opens with: in a call the greeting has been said
+    already, and the model sometimes starts its first answer with "Guten Abend, Sir." again. Text is only held
+    back while it could still turn out to be such a greeting (a few characters), so speech starts as early as
+    before."""
+
+    def __init__(self, title: str) -> None:
+        self.title = title
+        self._buf = ""
+        self._decided = False
+
+    def feed(self, delta: str) -> str:
+        if self._decided:
+            return delta
+        self._buf += delta
+        head = self._buf.lstrip().lower()
+        if not head:
+            return ""
+        greeting = next((g for g in GREETING_WORDS if head.startswith(g)), None)
+        if greeting is None:
+            if any(g.startswith(head) for g in GREETING_WORDS):
+                return ""  # "Gu…", "Hal…": could still become a greeting
+            return self._release(self._buf)
+        tail = head[len(greeting) :]
+        after_comma = tail.split(",", 1)[1] if "," in tail else ""
+        if re.search(r"[.!?]", tail) or len(after_comma.strip()) > len(self.title) + 1 or len(head) > 60:
+            return self._release(_capitalise(strip_greeting(self._buf, self.title)))
+        return ""
+
+    def flush(self) -> str:
+        """End of the reply: whatever is still held back."""
+        if self._decided:
+            return ""
+        return self._release(_capitalise(strip_greeting(self._buf, self.title)))
+
+    def _release(self, text: str) -> str:
+        self._decided = True
+        self._buf = ""
+        return text
 
 
 def turn_instructions(
