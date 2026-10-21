@@ -243,6 +243,104 @@
   animation: caret 1s steps(1) infinite;
 }
 
+/* ---------------------------------------------------------------- chat timeline */
+/* long conversations: off-screen rows are not laid out; the remembered size keeps the scrollbar stable */
+.timeline-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 140px;
+}
+/* every tool call on the shared time axis of its answer: overlapping bars = parallel calls */
+.tool-track {
+  position: relative;
+  display: block;
+  width: 5.5rem;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--color-seam);
+}
+.tool-track__bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 2px;
+  border-radius: 2px;
+}
+@keyframes live-dot {
+  50% {
+    opacity: 0.25;
+  }
+}
+.live-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  background: var(--color-arc);
+  animation: live-dot 1.2s ease-in-out infinite;
+}
+.source-tag {
+  font-family: var(--font-mono);
+  font-stretch: 87.5%;
+  font-size: 0.65rem;
+  line-height: 1.2;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--color-seam-hi);
+  color: var(--color-ink-dim);
+}
+.source-tag--model {
+  border-color: color-mix(in oklab, var(--color-arc) 55%, transparent);
+  color: var(--color-arc);
+}
+.source-tag--summary {
+  border-style: dashed;
+}
+
+/* route map: OSM tiles darkened to sit inside the instrument panels */
+.route-map {
+  background: var(--color-void);
+}
+.route-map .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(0.82) contrast(0.92) saturate(0.55);
+}
+.route-map .leaflet-control-attribution {
+  background: color-mix(in oklab, var(--color-void) 80%, transparent);
+  color: var(--color-ink-faint);
+  font-size: 10px;
+}
+.route-map .leaflet-control-zoom a {
+  background: var(--color-plate);
+  color: var(--color-ink);
+  border-color: var(--color-seam-hi);
+}
+.route-pin {
+  display: flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  border: 2px solid var(--color-void);
+  box-shadow: 0 0 0 1px var(--color-seam-hi);
+}
+.route-pin--start {
+  background: var(--color-arc);
+  color: var(--color-void);
+}
+.route-pin--end {
+  background: var(--color-ember);
+  color: var(--color-void);
+}
+.route-pin--inline {
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
 @keyframes spin-slow {
   to {
     transform: rotate(360deg);
@@ -260,7 +358,8 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
-  .caret::after {
+  .caret::after,
+  .live-dot {
     animation: none;
   }
 }

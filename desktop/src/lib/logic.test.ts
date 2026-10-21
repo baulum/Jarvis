@@ -3,39 +3,9 @@ import { buildUrl, describeErrorBody } from "./api";
 import { describeCron, validateCron } from "./cron";
 import { formatBytes, formatDuration, healthTone } from "./format";
 import { backoffDelay, buildWsUrl, parseFrame } from "./realtime";
-import { addOptimisticUser, applyChatEvent, emptyThread, filterLogs, pushBounded } from "./reducers";
-import type { BusEvent } from "./types";
+import { filterLogs, pushBounded } from "./reducers";
 
-const ev = (type: string, data: Record<string, unknown>, id = Math.random().toString(36)): BusEvent =>
-  ({ id, type, ts: "2026-10-15T10:00:00Z", data }) as BusEvent;
-
-describe("chat reducer", () => {
-  it("streams deltas into one assistant message and finishes on chat.done", () => {
-    let t = addOptimisticUser(emptyThread("s1"), "Hallo");
-    t = applyChatEvent(t, ev("chat.user", { session_id: "s1", text: "Hallo" }));
-    expect(t.messages).toHaveLength(1);
-    expect(t.messages[0]?.pending).toBe(false);
-    t = applyChatEvent(t, ev("chat.delta", { session_id: "s1", text: "Guten " }));
-    t = applyChatEvent(t, ev("chat.delta", { session_id: "s1", text: "Tag, Sir." }));
-    t = applyChatEvent(t, ev("chat.done", { session_id: "s1", text: "Guten Tag, Sir." }));
-    const last = t.messages[t.messages.length - 1];
-    expect(last?.role).toBe("assistant");
-    expect(last?.text).toBe("Guten Tag, Sir.");
-    expect(last?.streaming).toBe(false);
-    expect(t.running).toBe(false);
-  });
-
-  it("ignores events of other sessions", () => {
-    const t = emptyThread("s1");
-    expect(applyChatEvent(t, ev("chat.delta", { session_id: "other", text: "x" }))).toBe(t);
-  });
-
-  it("records tool chips", () => {
-    let t = emptyThread("s1");
-    t = applyChatEvent(t, ev("chat.tool_started", { session_id: "s1", data: { name: "mac_open_app" } }));
-    expect(t.messages[0]?.tools[0]?.name).toBe("mac_open_app");
-  });
-});
+// the chat reducer is tested in timeline.test.ts
 
 describe("cron helpers", () => {
   it("validates and describes", () => {

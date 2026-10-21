@@ -277,7 +277,7 @@ def _one_line(value: Any, limit: int = 240) -> str:
             f"{k}: {v if isinstance(v, str | int | float | bool) else json.dumps(v, ensure_ascii=False)}"
             for k, v in value.items()
         ]
-        return _clip(" · ".join(parts), limit)
+        return _clip(", ".join(parts), limit)
     return _clip(json.dumps(value, ensure_ascii=False, default=str), limit)
 
 
@@ -560,7 +560,7 @@ class TurnRecorder:
         if ev.type == "memory.recalled" and d.get("purpose") != "extraction":
             hits = d.get("hits") or []
             via = f" (über {d['via']})" if d.get("via") else ""
-            text = f"{len(hits)} Treffer · {d.get('duration_ms', '?')} ms" if hits else "keine passenden Einträge"
+            text = f"{len(hits)} Treffer in {d.get('duration_ms', '?')} ms" if hits else "keine passenden Einträge"
             await self.process(
                 "memory",
                 f"Gedächtnis durchsucht{via}",
@@ -633,7 +633,7 @@ class TurnRecorder:
             if tools:
                 parts.append(
                     f"{len(tools)} Werkzeug{'e' if len(tools) != 1 else ''}"
-                    + (f", {failed} fehlgeschlagen" if failed else "")
+                    + (f" (davon {failed} fehlgeschlagen)" if failed else "")
                 )
             recalls = sum(
                 1
@@ -646,7 +646,7 @@ class TurnRecorder:
                 parts.append(f"Modell {model_label}")
             if not self.turn.data.get("reasoning"):
                 parts.append("keine Modellgedanken übermittelt")
-            await self.process("summary", "Ablauf", source="summary", text=" · ".join(parts))
+            await self.process("summary", "Ablauf", source="summary", text="; ".join(parts))
             self.turn.data.update(
                 {
                     "status": "cancelled" if cancelled else "failed" if error else "done",

@@ -14,8 +14,16 @@ export interface MdSpan {
   href?: string;
 }
 
-/** `checked[i]` is the task-list state of item i (`- [x]` / `- [ ]`), null for a normal item. */
-export type MdList = { type: "list"; ordered: boolean; start: number; items: MdBlock[][]; checked: (boolean | null)[] };
+/** `checked[i]` is the task-list state of item i (`- [x]` / `- [ ]`), null for a normal item. `tasks[i]` numbers the
+ * task items of the whole document in reading order – the key under which a toggled state is stored. */
+export type MdList = {
+  type: "list";
+  ordered: boolean;
+  start: number;
+  items: MdBlock[][];
+  checked: (boolean | null)[];
+  tasks: (number | null)[];
+};
 export type MdBlock =
   | { type: "heading"; level: number; spans: MdSpan[] }
   | { type: "paragraph"; spans: MdSpan[] }
@@ -39,7 +47,20 @@ const ch = (s: string, i: number): string => s.charAt(i);
 const grp = (m: RegExpExecArray, k: number): string => m[k] ?? "";
 
 export function parseMarkdown(src: string): MdBlock[] {
-  return blocks(src.replace(/\r\n?/g, "\n").split("\n"));
+  const out = blocks(src.replace(/\r\n?/g, "\n").split("\n"));
+  numberTasks(out, { n: 0 });
+  return out;
+}
+
+function numberTasks(list: MdBlock[], counter: { n: number }): void {
+  for (const b of list) {
+    if (b.type === "list") {
+      b.items.forEach((item, i) => {
+        if (b.checked[i] != null) b.tasks[i] = counter.n++;
+        numberTasks(item, counter);
+      });
+    } else if (b.type === "quote") numberTasks(b.blocks, counter);
+  }
 }
 
 const isOrdered = (marker: string) => marker >= "0" && marker <= "9";
@@ -205,7 +226,7 @@ function parseList(lines: string[], start: number): [MdList, number] {
       if (n && grp(n, 1).length === base && isOrdered(grp(n, 2)) === ordered) i = k;
     }
   }
-  return [{ type: "list", ordered, start: startNo, items, checked }, i];
+  return [{ type: "list", ordered, start: startNo, items, checked, tasks: checked.map(() => null) }, i];
 }
 
 // ------------------------------------------------------------------ inline
