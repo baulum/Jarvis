@@ -117,7 +117,7 @@ class KieCreativeConnector(Connector):
         if r.status_code >= 400 or code != 200:
             msg = str(data.get("msg", "")) if isinstance(data, dict) else ""
             raise ToolUserError(f"KIE.ai-Fehler {code}: {msg[:200]}")
-        return data
+        return data if isinstance(data, dict) else {}
 
     async def health(self) -> Health:
         try:
@@ -227,7 +227,9 @@ class KieCreativeConnector(Connector):
                         "aspect_ratio": {"type": "string", "enum": ASPECT_RATIOS, "default": "1:1"},
                         "reference_image_path": {
                             "type": "string",
-                            "description": "Optionaler Pfad eines Referenzbilds (generierte Bilder, Workspaces, Projekte)",
+                            "description": (
+                                "Optionaler Pfad eines Referenzbilds (generierte Bilder, Workspaces, Projekte)"
+                            ),
                         },
                     },
                     ["prompt"],

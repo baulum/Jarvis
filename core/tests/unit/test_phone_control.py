@@ -81,7 +81,7 @@ async def test_phone_not_connected_without_firebase() -> None:
 
 async def test_push_not_delivered_names_the_reason() -> None:
     pc = _phone(FakePush(results=[PushResult(str(DEV), False, "UNREGISTERED")]))
-    with pytest.raises(PhoneError, match="nicht zugestellt.*UNREGISTERED"):
+    with pytest.raises(PhoneError, match=r"nicht zugestellt.*UNREGISTERED"):
         await pc.run("ui_tree")
 
 
@@ -102,7 +102,7 @@ async def test_password_field_error_and_phone_detail() -> None:
     push = FakePush()
     pc = _phone(push)
     push.on_send = _answer(pc, {"ok": False, "error": "password_field", "message": "(Feld „PIN“)"})
-    with pytest.raises(PhoneError, match="Passwortfeld.*PIN"):
+    with pytest.raises(PhoneError, match=r"Passwortfeld.*PIN"):
         await pc.run("type_text", {"text": "x"})
 
 
