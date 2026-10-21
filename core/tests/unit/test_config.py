@@ -9,6 +9,12 @@ def test_shipped_configs_validate() -> None:
     assert load_personality().owner_title == "Sir"
 
 
+def test_shell_allowlist_contains_flutter_as_bare_name() -> None:
+    allow = load_permissions().shell_allowlist
+    assert "flutter" in allow
+    assert all("/" not in exe for exe in allow)
+
+
 def test_env_override_parses_yaml_scalars() -> None:
     data = _apply_env_overrides(
         {"server": {"port": 1}}, {"JARVIS__SERVER__PORT": "9000", "JARVIS__VOICE__ENABLED": "false"}

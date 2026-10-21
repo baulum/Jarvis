@@ -94,6 +94,7 @@ shell_allowlist:
   - node
   - python3
   - uv
+  - flutter
   - brew
   - df
   - du
