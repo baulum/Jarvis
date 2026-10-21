@@ -87,6 +87,12 @@ async def test_auth_status_reports_missing(tmp_path: Path, monkeypatch: pytest.M
     assert st["ok"] is False and "claudeb nicht gefunden" in st["error"]
 
 
+def test_env_appends_extra_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    r = _runner(tmp_path, extra_path=["~/fl-sdk/bin"])
+    assert r._env()["PATH"] == f"/usr/bin:/bin:{Path('~/fl-sdk/bin').expanduser()}:/opt/homebrew/bin:/usr/local/bin"
+
+
 def test_env_applies_claude_env_and_refuses_api_keys(tmp_path: Path) -> None:
     r = _runner(tmp_path, claude_env={"CLAUDE_CONFIG_DIR": "~/.claude-b"})
     env = r._env()
@@ -169,6 +175,8 @@ def test_shipped_yaml_allows_read_commands_only() -> None:
     assert "Bash(git branch)" in tools and "Bash(git branch:*)" not in tools  # no `git branch -D`
     assert "/Users/paul/Downloads" in cfg["extra_read_dirs"] and cfg["claude_command"] == "claudeb"
     assert "Bash(git push:*)" not in tools
+    assert "Bash(flutter:*)" in tools and "Bash(dart:*)" in tools
+    assert cfg["extra_path"] == ["/Users/paul/Documents/flutter/bin"]
 
 
 # ------------------------------------------------------------------ transient errors / retry

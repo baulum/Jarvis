@@ -204,6 +204,9 @@ class CodingCfg(_Strict):
     restricted: bool = True
     # Extra environment for the CLI (e.g. CLAUDE_CONFIG_DIR); "~" is expanded. API-key variables are refused.
     claude_env: dict[str, str] = Field(default_factory=dict)
+    # Directories appended to PATH for the CLI and its shell tools (e.g. a Flutter SDK's bin/). The core runs under
+    # launchd with a minimal PATH, so tools from the shell profile are missing otherwise. "~" is expanded.
+    extra_path: list[str] = Field(default_factory=list)
     # haiku | sonnet | opus (or a full model id); empty = the model currently chosen in the chat.
     default_model: str = ""
     max_parallel_jobs: int = 1
