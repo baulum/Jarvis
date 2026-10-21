@@ -1,9 +1,12 @@
-"""Standard flow after a coding job: green → push, PR, merge, Supabase deploy; red / error → nothing leaves the branch.
+"""Standard flow after a coding job: green → push, PR, merge, Supabase deploy, then the job branch (remote and local)
+and the worktree are removed; red / error / cancelled → open work is committed (WIP) and the job branch pushed, but
+nothing reaches main or Supabase and the worktree stays.
 
 Real git (a bare "origin" whose path contains github.com/acme/app), a fake GitHub connector that merges into that
 origin, and a fake ``supabase`` executable that logs its arguments.
 """
 
+import asyncio
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
@@ -41,19 +44,30 @@ class FakeGitHub:
         self.origin = origin
         self.created: list[dict[str, Any]] = []
         self.merged: list[dict[str, Any]] = []
-        self.merge_error: Exception | None = None
+        self.merge_attempts = 0
+        self.merge_error: Exception | None = None  # every attempt fails with it
+        self.merge_errors: list[Exception] = []  # the next attempts fail with these, one each
+        self.create_error: Exception | None = None
+        self.delete_branch_on_merge = False  # GitHub's "Automatically delete head branches"
 
     async def create_pr(
         self, repo: str, head: str, base: str, title: str, body: str, draft: bool = True
     ) -> dict[str, Any]:
+        if self.create_error is not None:
+            raise self.create_error
         self.created.append({"repo": repo, "head": head, "base": base, "title": title, "draft": draft})
         return {"number": 7, "html_url": f"https://github.com/{repo}/pull/7"}
 
     async def merge_pr(self, repo: str, number: int, *, sha: str | None = None, method: str = "squash") -> Any:
+        self.merge_attempts += 1
+        if self.merge_errors:
+            raise self.merge_errors.pop(0)
         if self.merge_error is not None:
             raise self.merge_error
         self.merged.append({"repo": repo, "number": number, "sha": sha, "method": method})
         _git(self.origin, "update-ref", "refs/heads/main", sha or "")  # what the merge does on GitHub
+        if self.delete_branch_on_merge:
+            _git(self.origin, "update-ref", "-d", f"refs/heads/{BRANCH}")
         return {"merged": True, "sha": sha}
 
 
@@ -108,8 +122,10 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         connectors=SimpleNamespace(connectors={"github": gh}),
         kill_switch=SimpleNamespace(engaged=False),
     )
+    runner = CodingRunner(state)  # type: ignore[arg-type]
+    runner.merge_retry_delays = (0, 0)
     return SimpleNamespace(
-        runner=CodingRunner(state),  # type: ignore[arg-type]
+        runner=runner,
         gh=gh,
         cfg=cfg,
         store=store,
@@ -168,6 +184,20 @@ def _origin_branches(env: SimpleNamespace) -> list[str]:
     return _git(env.origin, "branch", "--format=%(refname:short)").split()
 
 
+def _local_branches(env: SimpleNamespace) -> list[str]:
+    return _git(env.repo, "branch", "--format=%(refname:short)").split()
+
+
+def _assert_cleaned_up(env: SimpleNamespace, ship: dict[str, Any]) -> None:
+    """After the merge nothing of the job is left: remote branch, local branch and worktree are gone."""
+    assert ship["cleanup"] == {"remote_branch": True, "worktree": True, "local_branch": True, "errors": []}
+    assert BRANCH not in _origin_branches(env)
+    assert BRANCH not in _local_branches(env)
+    assert not env.wt.exists()
+    assert str(env.wt) not in _git(env.repo, "worktree", "list")
+    assert "Job-Branch (lokal und auf origin) und Worktree entfernt" in ship["message"]
+
+
 # ---------------------------------------------------------------- helpers
 def test_parse_github_repo() -> None:
     assert parse_github_repo("https://github.com/acme/app.git") == "acme/app"
@@ -206,8 +236,9 @@ async def test_green_pushes_creates_pr_merges_and_deploys(env: SimpleNamespace) 
         {"repo": "acme/app", "head": BRANCH, "base": "main", "title": "Jarvis: Feature", "draft": False}
     ]
     assert env.gh.merged == [{"repo": "acme/app", "number": 7, "sha": head, "method": "squash"}]
-    assert BRANCH in _origin_branches(env)
+    assert ship["pushed"] is True
     assert _origin_main(env) == head
+    _assert_cleaned_up(env, ship)
     assert ship["pr"] == {"number": 7, "url": "https://github.com/acme/app/pull/7"}
     # migrations first, then functions, both from the local checkout brought to the merged state
     lines = env.supabase_log.read_text().splitlines()
@@ -227,6 +258,33 @@ async def test_green_without_supabase_skips_deploy_and_says_so(env: SimpleNamesp
     assert ship["supabase"] == {"present": False, "note": "Supabase nicht im Projekt – übersprungen"}
     assert "Supabase nicht im Projekt" in ship["message"]
     assert not env.supabase_log.exists()
+    _assert_cleaned_up(env, ship)
+
+
+async def test_green_cleanup_when_github_already_deleted_the_branch(env: SimpleNamespace) -> None:
+    head = _commit(env, {"app.py": "print(1)\n"})
+    env.gh.delete_branch_on_merge = True
+    ship = await _flow(env)
+
+    assert ship["state"] == "shipped" and _origin_main(env) == head
+    _assert_cleaned_up(env, ship)
+
+
+async def test_green_cleanup_keeps_worktree_with_unmerged_changes(env: SimpleNamespace) -> None:
+    _commit(env, {"app.py": "print(1)\n"})
+    real_deploy = env.runner._ship_deploy
+
+    async def deploy_then_edit(ship: dict[str, Any], repo: Path) -> None:
+        await real_deploy(ship, repo)
+        (env.wt / "late.txt").write_text("nach dem Merge\n")  # must not be thrown away
+
+    env.runner._ship_deploy = deploy_then_edit
+    ship = await _flow(env)
+
+    assert ship["state"] == "shipped"
+    assert ship["cleanup"]["worktree"] is False and ship["cleanup"]["local_branch"] is False
+    assert (env.wt / "late.txt").exists() and BRANCH in _local_branches(env)
+    assert "Aufräumen unvollständig" in ship["message"]
 
 
 async def test_green_without_changes_ships_nothing(env: SimpleNamespace) -> None:
@@ -236,22 +294,84 @@ async def test_green_without_changes_ships_nothing(env: SimpleNamespace) -> None
     assert ship["state"] == "not_shipped" and "keine Änderungen" in ship["message"]
     assert env.gh.created == [] and env.gh.merged == []
     assert _origin_main(env) == before
+    _assert_cleaned_up(env, ship)  # main already has everything: nothing can get lost
 
 
-# ---------------------------------------------------------------- red / errors: nothing leaves the branch
-async def test_red_pushes_nothing(env: SimpleNamespace) -> None:
-    _commit(env, SUPABASE_FILES)
+async def test_merge_is_retried_while_github_is_not_ready(env: SimpleNamespace) -> None:
+    head = _commit(env, {"app.py": "print(1)\n"})
+    env.gh.merge_errors = [
+        ToolUserError("GitHub-Fehler 405: Pull Request is not mergeable"),
+        ToolUserError('GitHub-Fehler 405: Required status check "Core (ruff, mypy, unit tests)" is expected.'),
+    ]
+    ship = await _flow(env)
+
+    assert env.gh.merge_attempts == 3
+    assert ship["state"] == "shipped" and _origin_main(env) == head
+    _assert_cleaned_up(env, ship)
+
+
+async def test_merge_is_not_retried_when_a_review_is_required(env: SimpleNamespace) -> None:
+    _commit(env, {"app.py": "print(1)\n"})
+    env.gh.merge_error = ToolUserError("GitHub-Fehler 405: At least 1 approving review is required")
+    ship = await _flow(env)
+
+    assert env.gh.merge_attempts == 1
+    assert ship["state"] == "failed" and ship["stage"] == "merge" and "review" in ship["message"]
+    assert env.wt.exists() and BRANCH in _local_branches(env)
+
+
+async def test_unexpected_github_error_is_reported_not_raised(env: SimpleNamespace) -> None:
+    _commit(env, {"app.py": "print(1)\n"})
+    env.gh.create_error = OSError("Network is unreachable")
+    ship = await _flow(env)
+
+    assert ship["state"] == "failed" and ship["stage"] == "pr"
+    assert "Network is unreachable" in ship["message"]
+    assert env.wt.exists() and BRANCH in _origin_branches(env)  # pushed before the PR: nothing lost
+
+
+# ---------------------------------------------------------------- red / errors: branch backed up, never main
+async def test_red_backs_up_the_branch_but_never_main(env: SimpleNamespace) -> None:
+    head = _commit(env, SUPABASE_FILES)
     _fake_supabase(env)
     before = _origin_main(env)
     ship = await _flow(env, green=False)
 
-    assert ship["state"] == "not_shipped" and ship["merged"] is False
-    assert "Tests sind rot" in ship["message"] and BRANCH in ship["message"]
+    assert ship["state"] == "not_shipped" and ship["merged"] is False and ship["pushed"] is True
+    assert "Tests sind rot" in ship["message"] and "Nichts in main gemergt oder deployt" in ship["message"]
+    assert f"Job-Branch {BRANCH} auf origin gesichert" in ship["message"]
     assert env.gh.created == [] and env.gh.merged == []
-    assert _origin_branches(env) == ["main"]
+    assert sorted(_origin_branches(env)) == sorted([BRANCH, "main"])
+    assert _git(env.origin, "rev-parse", BRANCH) == head
     assert _origin_main(env) == before
     assert not env.supabase_log.exists()
-    assert BRANCH in _git(env.repo, "branch", "--list", BRANCH)  # job branch stays
+    assert BRANCH in _local_branches(env) and env.wt.exists()  # job branch and worktree stay
+    assert "cleanup" not in ship
+
+
+async def test_red_without_changes_pushes_nothing(env: SimpleNamespace) -> None:
+    ship = await _flow(env, green=False)
+
+    assert ship["pushed"] is False and "nichts zu sichern" in ship["message"]
+    assert _origin_branches(env) == ["main"]
+
+
+async def test_red_backup_failure_is_named(env: SimpleNamespace) -> None:
+    _commit(env, {"app.py": "print(1)\n"})
+    _git(env.wt, "remote", "remove", "origin")
+    ship = await _flow(env, green=False)
+
+    assert ship["pushed"] is False and "kein 'origin'-Remote" in ship["backup_error"]
+    assert "Sichern des Job-Branch fehlgeschlagen" in ship["message"] and env.wt.exists()
+
+
+async def test_red_with_kill_switch_stays_local(env: SimpleNamespace) -> None:
+    _commit(env, {"app.py": "print(1)\n"})
+    env.runner.state.kill_switch.engaged = True
+    ship = await _flow(env, green=False)
+
+    assert ship["pushed"] is False and "Not-Aus" in ship["message"]
+    assert _origin_branches(env) == ["main"]
 
 
 async def test_missing_merge_permission_merges_and_deploys_nothing(env: SimpleNamespace) -> None:
@@ -263,8 +383,10 @@ async def test_missing_merge_permission_merges_and_deploys_nothing(env: SimpleNa
 
     assert ship["state"] == "failed" and ship["stage"] == "merge" and ship["merged"] is False
     assert "403" in ship["message"] and "https://github.com/acme/app/pull/7" in ship["message"]
+    assert env.gh.merge_attempts == 1  # missing permission is not waited for
     assert _origin_main(env) == before
     assert not env.supabase_log.exists()
+    assert "cleanup" not in ship and env.wt.exists() and BRANCH in _origin_branches(env)
 
 
 async def test_push_failure_creates_no_pr(env: SimpleNamespace) -> None:
@@ -395,19 +517,25 @@ async def test_ship_tool_registered_with_high_risk(env: SimpleNamespace) -> None
 
 
 # ---------------------------------------------------------------- through _run (job status → ship)
-async def _run_job(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, *, tests_pass: bool) -> uuid.UUID:
+async def _write_app(env: SimpleNamespace) -> dict[str, Any]:
+    (env.wt / "app.py").write_text("print(1)\n")
+    return {"is_error": False, "result": "Fertig", "session_id": "s"}
+
+
+def _prepare_job(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, *, tests_pass: bool, agent: Any = None
+) -> uuid.UUID:
     async def auth() -> dict[str, Any]:
         return {"ok": True}
 
-    async def agent(*a: Any, **k: Any) -> dict[str, Any]:
-        (env.wt / "app.py").write_text("print(1)\n")
-        return {"is_error": False, "result": "Fertig", "session_id": "s"}
+    async def run_agent(*a: Any, **k: Any) -> dict[str, Any]:
+        return await (agent or _write_app)(env)
 
     async def tests(cwd: Path, command: str) -> dict[str, Any]:
-        return {"passed": tests_pass, "exit_code": 0 if tests_pass else 1, "output": "out"}
+        return {"passed": tests_pass, "exit_code": 0 if tests_pass else 1, "output": "433 passed" if tests_pass else "1 failed"}
 
     monkeypatch.setattr(env.runner, "auth_status", auth)
-    monkeypatch.setattr(env.runner, "_claude_retrying", agent)
+    monkeypatch.setattr(env.runner, "_claude_retrying", run_agent)
     monkeypatch.setattr(env.runner, "_run_tests", tests)
     jid = uuid.uuid4()
     env.store[jid] = SimpleNamespace(
@@ -426,8 +554,19 @@ async def _run_job(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, *, tes
         result=None,
         finished_at=None,
     )
+    return jid
+
+
+async def _run_job(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, *, tests_pass: bool, agent: Any = None
+) -> uuid.UUID:
+    jid = _prepare_job(env, monkeypatch, tests_pass=tests_pass, agent=agent)
     await env.runner._run(jid)
     return jid
+
+
+def _finished(env: SimpleNamespace) -> dict[str, Any]:
+    return next(d for t, d in env.events if t == "coding.finished")
 
 
 async def test_run_green_job_is_shipped(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -436,23 +575,117 @@ async def test_run_green_job_is_shipped(env: SimpleNamespace, monkeypatch: pytes
 
     assert job.status == "completed"
     assert job.result["ship"]["state"] == "shipped"
-    assert _origin_main(env) == _git(env.wt, "rev-parse", "HEAD")
-    finished = next(d for t, d in env.events if t == "coding.finished")
-    assert "gemergt" in finished["summary"]
+    assert job.result["commit"] and job.result["commits"] == 1 and "app.py" in job.result["diffstat"]
+    assert _git(env.origin, "rev-parse", "--short", "main") == job.result["commit"]
+    assert job.result["delivery_error"] is None
+    _assert_cleaned_up(env, job.result["ship"])
+    assert "gemergt" in _finished(env)["summary"]
 
 
-async def test_run_red_job_pushes_nothing(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_green_job_committed_by_the_agent_is_detected_and_shipped(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Job dd167cb9: the agent committed itself, the runner had nothing left to commit → ``commit`` was null."""
+
+    async def agent_commits(env: SimpleNamespace) -> dict[str, Any]:
+        _commit(env, {"tests/test_dirs.py": "def test_ok(): pass\n"})
+        return {"is_error": False, "result": "Fertig. Nichts gepusht oder gemergt.", "session_id": "s"}
+
+    jid = await _run_job(env, monkeypatch, tests_pass=True, agent=agent_commits)
+    job = env.store[jid]
+
+    assert job.status == "completed"
+    assert job.result["commit"] is not None and job.result["commits"] == 1
+    assert "tests/test_dirs.py" in job.result["diffstat"]
+    assert job.result["ship"]["state"] == "shipped" and env.gh.merged
+    assert _git(env.origin, "rev-parse", "--short", "main") == job.result["commit"]
+    _assert_cleaned_up(env, job.result["ship"])
+
+
+async def test_run_red_job_commits_wip_and_pushes_branch_not_main(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
     before = _origin_main(env)
     jid = await _run_job(env, monkeypatch, tests_pass=False)
     job = env.store[jid]
 
     assert job.status == "failed"
-    assert job.result["ship"]["state"] == "not_shipped"
+    assert job.result["ship"]["state"] == "not_shipped" and job.result["ship"]["pushed"] is True
     assert env.gh.created == [] and env.gh.merged == []
-    assert _origin_branches(env) == ["main"] and _origin_main(env) == before
-    finished = next(d for t, d in env.events if t == "coding.finished")
-    assert "Nichts gepusht, gemergt oder deployt" in finished["summary"]
-    assert BRANCH in _git(env.repo, "branch", "--list", BRANCH)
+    assert _origin_main(env) == before
+    assert _git(env.origin, "rev-parse", BRANCH) == _git(env.wt, "rev-parse", "HEAD")
+    assert _git(env.wt, "log", "-1", "--format=%s").startswith("Jarvis (WIP): Feature")
+    assert _git(env.wt, "status", "--porcelain") == ""
+    assert job.result["commit"] == _git(env.wt, "rev-parse", "--short", "HEAD")
+    summary = _finished(env)["summary"]
+    assert "Nichts in main gemergt oder deployt" in summary and "auf origin gesichert" in summary
+    assert BRANCH in _local_branches(env) and env.wt.exists()
+
+
+async def test_run_aborted_job_commits_and_pushes_its_work(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Job 341f33f5: the run ended with an exception – the changes were never committed and got lost."""
+
+    async def agent_times_out(env: SimpleNamespace) -> dict[str, Any]:
+        (env.wt / "half.py").write_text("x = 1\n")
+        raise runner_mod.CodingError("Zeitlimit von 1 Minuten überschritten")
+
+    before = _origin_main(env)
+    jid = await _run_job(env, monkeypatch, tests_pass=True, agent=agent_times_out)
+    job = env.store[jid]
+
+    assert job.status == "failed" and "Zeitlimit" in job.result["error"]
+    assert job.result["ship"]["pushed"] is True and "Der Job ist abgebrochen" in job.result["ship"]["message"]
+    assert _git(env.origin, "show", f"{BRANCH}:half.py") == "x = 1"
+    assert _origin_main(env) == before and env.gh.created == []
+    assert env.wt.exists()
+
+
+async def test_run_red_job_names_a_failed_backup(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    _git(env.repo, "remote", "set-url", "origin", str(env.tmp / "github.com" / "acme" / "gone.git"))
+    jid = await _run_job(env, monkeypatch, tests_pass=False)
+    job = env.store[jid]
+
+    assert job.status == "failed"
+    assert "Sichern des Job-Branch fehlgeschlagen" in job.result["delivery_error"]
+    assert _git(env.wt, "log", "-1", "--format=%s").startswith("Jarvis (WIP)")  # committed locally at least
+
+
+async def test_run_green_job_with_ship_error_keeps_the_result(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.gh.create_error = OSError("Network is unreachable")
+    jid = await _run_job(env, monkeypatch, tests_pass=True)
+    job = env.store[jid]
+
+    assert job.status == "completed" and job.result["summary"] == "Fertig" and job.result["tests"]["passed"]
+    assert job.result["ship"]["state"] == "failed"
+    assert "Network is unreachable" in job.result["delivery_error"]
+
+
+async def test_cancelled_job_commits_and_pushes_its_work(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    started = asyncio.Event()
+
+    async def agent_hangs(env: SimpleNamespace) -> dict[str, Any]:
+        (env.wt / "wip.py").write_text("y = 2\n")
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("not reached")
+
+    jid = _prepare_job(env, monkeypatch, tests_pass=True, agent=agent_hangs)
+    before = _origin_main(env)
+    env.runner._start(jid)
+    task = env.runner._tasks[jid]
+    await asyncio.wait_for(started.wait(), 10)
+    assert await env.runner.cancel(jid, "test") is True
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    job = env.store[jid]
+
+    assert job.status == "cancelled"
+    assert job.result["ship"]["pushed"] is True and "abgebrochen" in job.result["ship"]["message"]
+    assert _git(env.origin, "show", f"{BRANCH}:wip.py") == "y = 2"
+    assert _origin_main(env) == before and env.gh.created == []
+    assert env.wt.exists()
 
 
 async def test_run_with_auto_ship_off_does_not_touch_remote(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -461,3 +694,4 @@ async def test_run_with_auto_ship_off_does_not_touch_remote(env: SimpleNamespace
 
     assert env.store[jid].status == "completed" and "ship" not in env.store[jid].result
     assert env.gh.created == [] and _origin_branches(env) == ["main"]
+    assert env.store[jid].result["commit"] == _git(env.wt, "rev-parse", "--short", "HEAD")

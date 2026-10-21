@@ -221,8 +221,9 @@ class CodingCfg(_Strict):
     # Read dirs are added with --add-dir and Edit/Write there are denied ("~" is expanded, missing dirs are skipped).
     extra_read_dirs: list[Path] = Field(default_factory=list)
     extra_write_dirs: list[Path] = Field(default_factory=list)
-    # Standard-Ablauf nach einem grünen Job: Job-Branch pushen → PR (kein Draft) → PR mergen → Supabase deployen.
-    # Rotes Ergebnis oder Fehler: nichts gepusht/gemergt/deployt, der Job-Branch bleibt. False = nur committen.
+    # Standard-Ablauf nach einem grünen Job: Job-Branch pushen → PR (kein Draft) → PR mergen → Supabase deployen →
+    # Job-Branch (origin und lokal) und Worktree löschen. Rot, Fehler oder Abbruch: WIP-Commit, Job-Branch wird
+    # gepusht, aber nichts gemergt/deployt, der Worktree bleibt. False = nur committen.
     auto_ship: bool = True
     ship_base_branch: str = "main"
     ship_merge_method: Literal["squash", "merge", "rebase"] = "squash"

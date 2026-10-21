@@ -157,9 +157,11 @@ class CodingConnector(Connector):
                 "Übergibt einen Entwicklungsauftrag an Claude Code (eigener Git-Worktree, "
                 "Worktree). Auch zum Reparieren eigener Werkzeuge und Anbindungen (z. B. Lead-Tool-MCP, Export, "
                 "Mailversand) nutzbar. project_path = Pfad des Projekts. Optional test_command, z. B. "
-                "'npm run build'. Standard-Ablauf nach dem Job: nur bei grünem Ergebnis wird der Job-Branch gepusht, "
-                "per PR nach main gemergt und Supabase (Functions/Migrationen, falls vorhanden) deployt; bei rotem "
-                "Ergebnis oder Fehler passiert nichts davon (Ergebnis unter result.ship). "
+                "'npm run build'. Standard-Ablauf nach dem Job (automatisch, nicht selbst pushen/mergen): nur bei "
+                "grünem Ergebnis wird der Job-Branch gepusht, per PR nach main gemergt, Supabase (Functions/"
+                "Migrationen, falls vorhanden) deployt und danach Branch und Worktree gelöscht; bei rotem Ergebnis, "
+                "Fehler oder Abbruch wird die Arbeit committet und nur der Job-Branch gepusht, nie main (Ergebnis "
+                "unter result.ship, Probleme unter result.delivery_error). "
                 "Optional model (haiku|sonnet|opus|auto) und effort (low|medium|high|xhigh|max): nennt Sir im Auftrag "
                 "ein Modell (z. B. 'Opus 5.5'), hier übergeben; ohne Angabe gilt das Standardmodell bzw. das im Chat "
                 "gewählte.",
@@ -202,7 +204,7 @@ class CodingConnector(Connector):
                 "Entfernt einen fehlgeschlagenen oder abgebrochenen Coding-Job (Status failed/cancelled) aus der "
                 "Jobliste. Laufende und abgeschlossene Jobs werden abgelehnt. Git-Branch und Arbeitsordner bleiben "
                 "erhalten; nur mit delete_worktree=true wird der Worktree entfernt (nicht committete Änderungen "
-                "gehen dabei verloren).",
+                "werden vorher als WIP-Commit auf dem Branch gesichert).",
                 _obj(
                     {"job_id": {"type": "string"}, "delete_worktree": {"type": "boolean", "default": False}},
                     ["job_id"],

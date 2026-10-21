@@ -221,7 +221,8 @@ coding:
   extra_read_dirs: [/Users/paul/Downloads, /Users/paul/Developer/Jarvis-Workspaces/repos]
   extra_write_dirs: [/Users/paul/Developer/Projects/night-motion-graphics]
   # Standard-Ablauf nach einem GRÜNEN Job: Job-Branch pushen → PR (kein Draft) → PR mergen → Supabase deployen
-  # (db push / functions deploy, nur wenn supabase/ im Projekt liegt). Rot/Fehler/fehlende Rechte: nichts davon.
+  # (db push / functions deploy, nur wenn supabase/ im Projekt liegt) → Job-Branch und Worktree löschen.
+  # Rot/Fehler/Abbruch: WIP-Commit und Job-Branch pushen, aber kein Merge, kein Deploy; der Worktree bleibt.
   auto_ship: true
   ship_base_branch: main
   ship_merge_method: squash        # squash | merge | rebase
