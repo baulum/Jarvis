@@ -26,6 +26,8 @@ interface BrainState {
   overlay: Overlay;
   systemView: string;
   lastInteraction: number;
+  /** Pixels at the bottom of the window covered by the chat dock – the brain is framed in the space above. */
+  occludedBottom: number;
   /** Audio levels from the voice daemon (voice.level, ~12 Hz). */
   level: { input: number; output: number; ts: number };
   setGraph: (dto: GraphDTO) => void;
@@ -38,6 +40,7 @@ interface BrainState {
   overview: () => void;
   openOverlay: (o: Overlay, systemView?: string) => void;
   touch: () => void;
+  setOccludedBottom: (px: number) => void;
   onEvent: (ev: BusEvent) => void;
   tick: () => void;
 }
@@ -58,6 +61,7 @@ export const useBrain = create<BrainState>((set, get) => ({
   overlay: null,
   systemView: "tasks",
   lastInteraction: 0,
+  occludedBottom: 0,
   level: { input: 0, output: 0, ts: 0 },
 
   setGraph: (dto) => {
@@ -92,6 +96,10 @@ export const useBrain = create<BrainState>((set, get) => ({
   overview: () => set({ selected: null, focus: { kind: "overview", seq: ++seq } }),
   openOverlay: (overlay, systemView) => set((s) => ({ overlay, systemView: systemView ?? s.systemView })),
   touch: () => set({ lastInteraction: now() }),
+  setOccludedBottom: (px) => {
+    const v = Math.max(0, Math.round(px));
+    if (get().occludedBottom !== v) set({ occludedBottom: v });
+  },
   onEvent: (ev) => {
     if (ev.type === "voice.level") {
       const d = ev.data as { level?: number; output?: number };

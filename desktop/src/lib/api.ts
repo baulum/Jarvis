@@ -34,6 +34,8 @@ import type {
   SystemStatus,
   Task,
   ToolInfo,
+  WakeupResult,
+  WakeupSettings,
 } from "./types";
 import type { SlashCommand } from "./slash";
 import type { TimelineEvent } from "./timeline";
@@ -251,6 +253,11 @@ export function createApi(opts: ApiOptions) {
     // voice
     voiceCommand: (action: "mute" | "unmute" | "ptt_start" | "ptt_stop" | "interrupt") =>
       post<{ ok: boolean }>("/voice/command", { action }),
+    wakeup: () => get<WakeupSettings>("/voice/wakeup"),
+    setWakeup: (body: Partial<Pick<WakeupSettings, "enabled" | "sound" | "volume" | "apps">>) =>
+      put<WakeupSettings>("/voice/wakeup", body),
+    /** Runs the routine now (programs + MP3) – the "Testen" button. */
+    runWakeup: () => post<WakeupResult>("/voice/wakeup", { play_sound: true }),
 
     // coding
     codingJobs: () => get<CodingJob[]>("/coding/jobs"),

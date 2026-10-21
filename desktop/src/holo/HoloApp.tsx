@@ -2,7 +2,7 @@
 // and appear only when they have something to say.
 import { AnimatePresence, motion } from "framer-motion";
 import { Focus, LayoutGrid, Mic, MicOff, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { KillSwitch, KillSwitchBanner } from "../components/KillSwitch";
 import { Toasts } from "../components/Shell";
@@ -44,6 +44,21 @@ function useGraphSync() {
       clearTimeout(t);
     };
   }, [key, setGraph, setLoad]);
+}
+
+/** Publishes how much of the window bottom the chat dock covers, so the brain is framed above it. */
+function useDockInset(ref: RefObject<HTMLElement | null>) {
+  const setOccluded = useBrain((s) => s.setOccludedBottom);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setOccluded(el.offsetHeight));
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      setOccluded(0);
+    };
+  }, [ref, setOccluded]);
 }
 
 function FilterRail() {
@@ -179,6 +194,8 @@ export function HoloApp() {
   const selected = useBrain((s) => s.selected);
   const loadError = useBrain((s) => s.loadError);
   const model = useBrain((s) => s.model);
+  const footer = useRef<HTMLElement>(null);
+  useDockInset(footer);
   // follow the conversation that is happening right now (desktop or voice)
   useEffect(() => {
     return useApp.subscribe((s, prev) => {
@@ -218,7 +235,7 @@ export function HoloApp() {
         {loadError && !model && (
           <p className="pointer-events-auto mx-auto mb-4 text-xs text-alarm">Gedächtnis nicht erreichbar: {loadError}</p>
         )}
-        <footer className="relative flex items-end px-5 pb-5">
+        <footer ref={footer} className="relative flex items-end px-5 pb-5">
           <div className="absolute bottom-6 left-5">
             <FilterRail />
           </div>

@@ -66,6 +66,7 @@ from jarvis.tools.approval_mode import ApprovalPolicy
 from jarvis.tools.executor import ToolExecutor
 from jarvis.tools.registry import ToolRegistry
 from jarvis.voice.speech import STTService, TTSService
+from jarvis.voice.wakeup import WakeupStore
 
 logger = logging.getLogger(__name__)
 VERSION = "0.2.0"
@@ -94,6 +95,7 @@ class AppState:
         self.registry = ToolRegistry(self.permissions)
         self.approval_policy = ApprovalPolicy(settings.paths.data_dir / "approval-mode.json")
         self.executor = ToolExecutor(self.registry, self.permissions, self.kill_switch, self.approval_policy)
+        self.wakeup = WakeupStore(settings.paths.data_dir / "wakeup.json", settings.voice.wakeup)
         # Ollama is only used by the optional legacy Hermes provider; the default (Claude) never touches it.
         self.ollama: OllamaClient | None = (
             OllamaClient(settings.llm.ollama_url, settings.llm.keep_alive)

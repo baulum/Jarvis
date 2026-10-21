@@ -31,15 +31,26 @@ export function useStickToBottom<T extends HTMLElement>(signal: unknown) {
     } else if (stick.current) el.scrollTop = el.scrollHeight;
   }, [signal]);
 
+  // (re)attach whenever the container or its content element changes – e.g. a log that only mounts with the
+  // first message
+  const observed = useRef<{ content: Element | null; ro: ResizeObserver | null }>({ content: null, ro: null });
   useEffect(() => {
     const el = ref.current;
-    const content = el?.firstElementChild;
+    const content = el?.firstElementChild ?? null;
+    const o = observed.current;
+    if (o.content === content) return;
+    o.ro?.disconnect();
+    o.content = content;
+    o.ro = null;
     if (!el || !content || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => {
+    o.ro = new ResizeObserver(() => {
       if (stick.current) el.scrollTop = el.scrollHeight;
     });
-    ro.observe(content);
-    return () => ro.disconnect();
+    o.ro.observe(content);
+  });
+  useEffect(() => {
+    const o = observed.current;
+    return () => o.ro?.disconnect();
   }, []);
 
   const toBottom = useCallback((smooth = true) => {

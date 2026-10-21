@@ -84,8 +84,12 @@ Anrufe ein kostenloses Firebase-Projekt verbinden. Alles Weitere: [docs/MOBILE.m
 ## 7b. Sprachbefehle, Modellwahl, Kontingent, Backups
 - **„Jarvis, beende das Gespräch“** (auch „auflegen“, „Gespräch beenden“) beendet das Gespräch; Jarvis wartet wieder auf
   „Hey Jarvis“. Gilt am Mac, am Telefon und in App-Anrufen.
-- **„Jarvis, wach auf“** spielt einen Sound und holt Apps nach vorn (Show). In `config/jarvis.yaml` unter `voice.wakeup`:
-  `sound:` (eigene Datei, leer = eingebauter Sound), `say:` (Begrüßung), `apps:` (Namen, Bundle-IDs oder https-URLs).
+- **„Hey Jarvis, wake up“ / „Hey Jarvis, wach auf“** (nur macOS) spielt Ihre MP3 und öffnet Ihre Programme. Einstellen in
+  der Desktop-App unter Einstellungen → Weckroutine: an/aus, MP3 (Dateiauswahl, Lautstärke), Programme (App-Name oder
+  `.app`-Pfad, Reihenfolge per Pfeilen, Start mit `open -a`), „Testen“. Gespeichert in
+  `~/Library/Application Support/Jarvis/wakeup.json`; bis dahin gelten die Startwerte aus `voice.wakeup` in
+  `config/jarvis.yaml` (an, keine MP3 = eingebauter Ton, keine Programme). Fehlt die MP3 oder ist sie ungültig, bzw. ist
+  ein Programm nicht auffindbar, sagt Jarvis das und die App zeigt die Details; die übrigen Programme starten trotzdem.
 - **Modell:** „nimm Opus“, „Claude, nutze Haiku“, „nur diesmal Opus: …“, „wieder automatisch“ – oder Jarvis schaltet selbst
   (`agent_set_model`). Auswahl auch in der App (Chip unter dem Wortmarke / Einstellungen) und in der 3D-Ansicht (oben rechts).
 - **Kontingent:** echte Auslastung des 5-Stunden- und 7-Tage-Fensters laut Claude Code (App, 3D-Ansicht, `agent_usage`).

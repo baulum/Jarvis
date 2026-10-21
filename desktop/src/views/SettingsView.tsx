@@ -1,5 +1,6 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { WakeupCard } from "../components/WakeupCard";
 import { Button, CodeBlock, Dialog, EmptyState, ErrorState, Field, KeyValue, Section, Skeleton, Tag, Toggle } from "../components/ui";
 import { useAction, useQuery } from "../hooks/useQuery";
 import { formatRelative } from "../lib/format";
@@ -42,6 +43,7 @@ export function SettingsView() {
             </div>
           </Section>
         )}
+        <WakeupCard />
         {settings.loading && <Skeleton rows={6} />}
         {settings.error && <ErrorState message={settings.error} onRetry={settings.refetch} />}
         {s && (

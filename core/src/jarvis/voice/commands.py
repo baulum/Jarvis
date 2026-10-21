@@ -18,12 +18,24 @@ END_CONVERSATION = re.compile(
 # Single words only count in a very short utterance ("Stopp.", "Tschüss Jarvis") – not in "das Ende vom Lied".
 END_WORD = re.compile(r"\b(?:stopp|stop|ende|tschüss|tschüs|ciao|bye|auflegen|leg auf)\b", re.I)
 
-# "wach auf", "Jarvis wach auf", "aufwachen", "wake up" – the staged wake-up (sound + apps), see voice.wakeup.
-WAKE_UP = re.compile(
-    r"^\W*(?:(?:hey\s+)?jarvis\W+)?(?:wach(?:\s+mal)?\s+auf|aufwachen|werde\s+wach|wake\s+up|rise\s+and\s+shine|"
-    r"aufstehen)\b\W*(?:jarvis|sir|bitte)?\W*$",
-    re.I,
+# "Hey Jarvis, wake up", "Hey Jarvis, wach auf", "aufwachen" … – the wake-up routine (MP3 + programs), see
+# jarvis.voice.wakeup. Matched on a normalised transcript (lower case, no punctuation) and only as the whole
+# utterance, so "wach auf und mach den Kaffee" stays a normal request. The name and the verb tolerate the
+# usual whisper slips ("Hey Javis, Wake-up!", "Wachauf.", "Jarvis, wach mal auf").
+_NAME = r"(?:jarvis|javis|jarwis|jervis|jarviz|travis|dschawis|chavis|charvis)"
+_WAKE_UP_CORE = (
+    r"(?:wake|wakes|waik|weik|wäk|wek)\s?(?:up|app)|wakey\s+wakey|rise\s+and\s+shine|"
+    r"wach[et]?\s?(?:(?:mal|doch|endlich|jetzt|bitte)\s+)*auf|aufwachen|werde\s+wach|aufstehen"
 )
+WAKE_UP = re.compile(
+    rf"^(?:(?:hey|hi|he|hay|ey|hallo|okay|ok)\s+)?(?:{_NAME}\s+)?(?:{_WAKE_UP_CORE})"
+    rf"(?:\s+(?:{_NAME}|sir|bitte|please|jetzt))*$"
+)
+
+
+def _normalise(text: str) -> str:
+    text = text.lower().replace("'", "").replace("’", "").replace("`", "")
+    return " ".join(re.sub(r"[^\w\s]", " ", text).split())
 
 
 def is_end_conversation(text: str, max_len: int = 60) -> bool:
@@ -35,4 +47,4 @@ def is_end_conversation(text: str, max_len: int = 60) -> bool:
 
 
 def is_wake_up(text: str) -> bool:
-    return len(text) < 40 and WAKE_UP.match(text) is not None
+    return len(text) < 60 and WAKE_UP.match(_normalise(text)) is not None

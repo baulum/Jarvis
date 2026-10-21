@@ -36,12 +36,48 @@ def test_normal_sentences_do_not_end_the_conversation(text: str) -> None:
     assert not is_end_conversation(text)
 
 
-@pytest.mark.parametrize("text", ["wach auf", "Jarvis, wach auf!", "Hey Jarvis wach auf", "wake up", "aufwachen"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "wach auf",
+        "Jarvis, wach auf!",
+        "Hey Jarvis wach auf",
+        "wake up",
+        "aufwachen",
+        # the two documented commands, as whisper writes them
+        "Hey Jarvis, wake up.",
+        "Hey Jarvis, wach auf.",
+        "HEY JARVIS, WAKE UP!",
+        "hey jarvis wach auf",
+        # slight transcription deviations
+        "Hey Javis, Wake-up!",
+        "Hey, Jarvis. Wakeup.",
+        "Wake up, Jarvis.",
+        "Wachauf!",
+        "Jarvis, wach' auf.",
+        "Jarvis, wach mal auf",
+        "Hey Jervis, wacht auf",
+        "Wach auf, Sir.",
+        "Hey Jarvis … wake up?",
+    ],
+)
 def test_wake_up_phrases(text: str) -> None:
     assert is_wake_up(text)
 
 
-@pytest.mark.parametrize("text", ["wach auf und mach den Kaffee", "ich wache um sieben auf", "Wie spät ist es"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "wach auf und mach den Kaffee",
+        "ich wache um sieben auf",
+        "Wie spät ist es",
+        "Jarvis, mach auf",
+        "make up",
+        "Hey Jarvis",
+        "wake up call um sieben einrichten",
+        "Erinnere mich morgen ans Aufwachen",
+    ],
+)
 def test_wake_up_is_strict(text: str) -> None:
     assert not is_wake_up(text)
 

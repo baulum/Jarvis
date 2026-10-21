@@ -44,6 +44,7 @@ from jarvis.config import Settings, get_settings
 from jarvis.voice.audio import BargeInDetector, Endpointer, looks_complete, pcm_to_wav, rms
 from jarvis.voice.audio_io import AudioIO, open_audio
 from jarvis.voice.commands import is_end_conversation, is_wake_up
+from jarvis.voice.wakeup import WakeupSettings, play_sound, summary
 from jarvis.voice.wakeword import RATE, WakeWordDetector
 
 logger = logging.getLogger("jarvis.voice")
@@ -476,8 +477,10 @@ class VoiceDaemon:
             self.session_id = None  # the next "Hey Jarvis" starts a fresh conversation
             return False
         if is_wake_up(text):
-            await self.wake_up()
-            return True
+            settings = await self._wakeup_settings()
+            if settings.enabled:
+                return await self.wake_up(settings)
+            logger.info("Wake-up routine is switched off – handled as a normal request")
         r = Reply(self._next_tag())
         self._prepared = None
         self.reply = r
@@ -489,39 +492,56 @@ class VoiceDaemon:
         await self._report(r, marks, text, outcome)
         return outcome in ("done", "barge_in")
 
-    async def wake_up(self) -> None:
-        """"Jarvis, wach auf": custom sound, apps to the front (done by the core), then a line of text."""
-        cfg = self.cfg.wakeup
-        spawn_bg(self._open_wakeup_apps())
-        await self._play_wakeup_sound()
-        if cfg.say.strip():
-            await self.say_text(cfg.say)
-
-    async def _open_wakeup_apps(self) -> None:
-        if not self.cfg.wakeup.apps:
-            return
+    async def _wakeup_settings(self) -> WakeupSettings:
+        """Current settings from the core (Sir changes them in the app); the YAML start values if it is unreachable."""
         try:
-            await self.http.post("/api/voice/wakeup", timeout=60)
-        except httpx.HTTPError as e:
-            logger.warning("Wake-up apps could not be opened: %s", e)
-
-    async def _play_wakeup_sound(self) -> None:
-        from pathlib import Path
-
-        cfg = self.cfg.wakeup
-        path = Path(cfg.sound).expanduser() if cfg.sound else None
-        if path is not None and path.is_file():
-            proc = await asyncio.create_subprocess_exec(
-                "/usr/bin/afplay", "-v", str(cfg.volume), str(path), stdout=asyncio.subprocess.DEVNULL
+            r = await self.http.get("/api/voice/wakeup", timeout=5)
+            r.raise_for_status()
+            d = r.json()
+            return WakeupSettings(
+                enabled=bool(d.get("enabled", True)),
+                sound=str(d.get("sound") or ""),
+                volume=float(d.get("volume", 1.0)),
+                apps=[str(a) for a in d.get("apps") or []],
             )
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(proc.wait(), 60)
-            return
-        if path is not None:
-            logger.warning("Wake-up sound %s not found – using the built-in sound", path)
-        if self.audio is not None:
+        except (httpx.HTTPError, ValueError, TypeError) as e:
+            logger.warning("Wake-up settings unavailable (%s) – using config/jarvis.yaml", e)
+            return WakeupSettings.from_cfg(self.cfg.wakeup)
+
+    async def wake_up(self, settings: WakeupSettings) -> bool:
+        """ "Hey Jarvis, wake up": Sir's MP3 (or the built-in sound), his programs (opened by the core), the greeting
+        and – if something went wrong – one sentence about it. Returns whether the conversation stays open."""
+        apps = asyncio.create_task(self._open_wakeup_apps())
+        sound_error: str | None = None
+        if settings.sound:
+            sound_error = await play_sound(settings.sound, settings.volume, max_wait_s=60)
+            if sound_error:
+                logger.warning("Wake-up sound: %s", sound_error)
+        elif self.audio is not None:
             await self.audio.play(power_up())
             await self.audio.drained(5)
+        await self.say_text(self.cfg.wakeup.say)
+        try:
+            result = await asyncio.wait_for(apps, 90)
+        except Exception:
+            result = {}
+        problem = summary({**result, "sound_error": sound_error or result.get("sound_error")})
+        if problem:
+            await self.say_text(problem)
+        # a song may still be playing: back to the wake word instead of transcribing the music as a request
+        return not settings.sound or sound_error is not None
+
+    async def _open_wakeup_apps(self) -> dict[str, Any]:
+        try:
+            r = await self.http.post("/api/voice/wakeup", json={}, timeout=90)
+            r.raise_for_status()
+            result: dict[str, Any] = r.json()
+            if result.get("failed"):
+                logger.warning("Wake-up programs not opened: %s", result["failed"])
+            return result
+        except (httpx.HTTPError, ValueError) as e:
+            logger.warning("Wake-up programs could not be opened: %s", e)
+            return {}
 
     async def _report(self, r: Reply, marks: dict[str, float], text: str, outcome: str) -> None:
         end = marks.get("speech_end", r.started)
