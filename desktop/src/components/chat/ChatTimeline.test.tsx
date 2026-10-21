@@ -67,6 +67,19 @@ describe("Markdown", () => {
     fireEvent.click(boxes[0] as HTMLElement);
     expect(onToggle).toHaveBeenLastCalledWith(0, false);
   });
+
+  it("renders bold, lists, tables and line breaks of an answer instead of raw markup", () => {
+    const { container } = render(
+      <Markdown text={"**Arbeit und Projekte**\nZweite Zeile\n\n- Kunde A\n- Kunde B\n\n| Projekt | Status |\n|---|---|\n| Website | offen |"} />,
+    );
+    expect(container.querySelector("strong")?.textContent).toBe("Arbeit und Projekte");
+    expect(container.querySelector("p br")).toBeTruthy();
+    expect(container.querySelectorAll("ul li")).toHaveLength(2);
+    expect(container.querySelectorAll("th")).toHaveLength(2);
+    expect(container.querySelectorAll("tbody td")).toHaveLength(2);
+    expect(container.textContent).not.toContain("*");
+    expect(container.textContent).not.toContain("- Kunde");
+  });
 });
 
 describe("ChatTimeline", () => {
