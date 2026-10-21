@@ -24,6 +24,14 @@ from jarvis.agent.claude_agent import ClaudeUnavailable
 from jarvis.agent.llm import AgentEvent, HermesError
 from jarvis.agent.model_router import MODELS, parse_command
 from jarvis.agent.persona import turn_instructions
+from jarvis.agent.timeline import (
+    DbTimelineStore,
+    SeqAllocator,
+    TimelineStore,
+    TurnRecorder,
+    append_message,
+    load_timeline,
+)
 from jarvis.db import session_scope
 from jarvis.db.models import ChatMessage, ChatSession
 from jarvis.events import activity, bus, spawn
@@ -35,6 +43,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 EventCallback = Callable[[AgentEvent], Awaitable[None]]
+# logged actions of other components that become steps of the "Gedankenprozess" of the running turn
+TURN_WATCH = ("memory.recalled", "approval.requested", "task.created")
 
 
 @dataclass(slots=True)
@@ -63,6 +73,8 @@ class Orchestrator:
         self._run_lock = asyncio.Lock()
         self.active_run: RunContext | None = None
         self._cancel_pending: set[uuid.UUID] = set()
+        self.timeline_store: TimelineStore = DbTimelineStore()
+        self.seq = SeqAllocator(self.timeline_store)
 
     # ------------------------------------------------------------------ sessions
     async def get_or_create_session(
@@ -111,7 +123,51 @@ class Orchestrator:
 
     async def record_assistant(self, session_id: uuid.UUID, text: str, meta: dict[str, Any] | None = None) -> None:
         """Add a message Jarvis said outside a turn (e.g. the opening of a call) to the conversation context."""
-        await self._store(session_id, "assistant", text, meta)
+        item = await append_message(
+            self.timeline_store, self.seq, str(session_id), "assistant", text, publish=bus.publish
+        )
+        await self._store(session_id, "assistant", text, {**(meta or {}), "turn_id": item["turn_id"]})
+
+    # ------------------------------------------------------------------ timeline
+    async def timeline(
+        self, session_id: uuid.UUID, *, turns: int | None = 80, before_seq: int | None = None
+    ) -> dict[str, Any]:
+        """Chronological items of a conversation (sorted by ``seq``), newest ``turns`` exchanges."""
+        events, has_more = await self.timeline_store.list(str(session_id), turns=turns, before_seq=before_seq)
+        messages: list[ChatMessage] = []
+        if not has_more:  # all recorded turns are loaded: prepend what was stored before the timeline existed
+            async with session_scope() as s:
+                messages = list(
+                    (
+                        await s.execute(
+                            select(ChatMessage)
+                            .where(ChatMessage.session_id == session_id)
+                            .order_by(ChatMessage.created_at)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+        return {"events": load_timeline(str(session_id), events, messages), "has_more": has_more}
+
+    async def set_check(self, session_id: uuid.UUID, item_id: str, index: int, checked: bool) -> bool:
+        """Toggle a task-list item (``- [ ]``) of a message; the state lives in the message itself."""
+        if _is_uuid(item_id):  # a message stored before the timeline existed
+            async with session_scope() as s:
+                msg = await s.get(ChatMessage, uuid.UUID(item_id))
+                if msg is None or msg.session_id != session_id:
+                    return False
+                meta = dict(msg.meta or {})
+                meta["checks"] = {**(meta.get("checks") or {}), str(index): checked}
+                msg.meta = meta
+        else:
+            item = await self.timeline_store.get(item_id)
+            if item is None or item["session_id"] != str(session_id) or item["kind"] != "message":
+                return False
+            data = {**item["data"], "checks": {**(item["data"].get("checks") or {}), str(index): checked}}
+            await self.timeline_store.upsert({**item, "data": data})
+        await bus.publish("chat.check", session_id=str(session_id), event_id=item_id, index=index, checked=checked)
+        return True
 
     async def _store(
         self, session_id: uuid.UUID, role: str, content: str, meta: dict[str, Any] | None = None
@@ -154,41 +210,65 @@ class Orchestrator:
     ) -> TurnResult:
         t0 = time.perf_counter()
         timings: dict[str, float] = {}
-        # Memory recall runs while the user message is stored and the model is chosen (critical path for voice).
-        recall = asyncio.create_task(self._recall(text, principal, channel))
-        user_msg_id = await self._store(sess.id, "user", text, {"channel": channel})
-        await bus.publish("chat.user", session_id=str(sess.id), text=text, channel=channel)
-        model, model_reason, confirmation, agent_text = await self._model_for_turn(sess, principal, channel, text)
-        memory_context = await recall
-        timings["recall_ms"] = round((time.perf_counter() - t0) * 1000, 1)
-        instructions = turn_instructions(channel, memory_context=memory_context, tainted=sess.tainted)
-        t_agent = time.perf_counter()
+        turn = TurnRecorder(
+            self.timeline_store, self.seq, str(sess.id), publish=bus.publish, plan_steps=self._plan_steps
+        )
+        for pattern in TURN_WATCH:
+            bus.subscribe(pattern, turn.on_bus_event)
+        try:
+            # Memory recall runs while the user message is stored and the model is chosen (critical path for voice).
+            recall = asyncio.create_task(self._recall(text, principal, channel))
+            user_msg_id = await self._store(sess.id, "user", text, {"channel": channel, "turn_id": turn.turn_id})
+            user_item = await turn.start(text, channel)
+            await bus.publish(
+                "chat.user",
+                session_id=str(sess.id),
+                text=text,
+                channel=channel,
+                event_id=user_item.id if user_item else None,
+                turn_id=turn.turn_id,
+            )
+            model, model_reason, confirmation, agent_text = await self._model_for_turn(sess, principal, channel, text)
+            memory_context = await recall
+            timings["recall_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+            instructions = turn_instructions(channel, memory_context=memory_context, tainted=sess.tainted)
+            t_agent = time.perf_counter()
 
-        async def emit(ev: AgentEvent) -> None:
-            if ev.type == "delta" and "first_token_ms" not in timings:
-                timings["first_token_ms"] = round((time.perf_counter() - t_agent) * 1000, 1)
-            await bus.publish(f"chat.{ev.type}", session_id=str(sess.id), text=ev.text, data=_safe_event_data(ev.data))
-            if on_event:
-                await on_event(ev)
+            async def emit(ev: AgentEvent) -> None:
+                if ev.type == "delta" and "first_token_ms" not in timings:
+                    timings["first_token_ms"] = round((time.perf_counter() - t_agent) * 1000, 1)
+                ref = await turn.on_agent_event(ev)
+                await bus.publish(
+                    f"chat.{ev.type}", session_id=str(sess.id), text=ev.text, data=_safe_event_data(ev.data), **ref
+                )
+                if on_event:
+                    await on_event(ev)
 
-        if confirmation is not None:
-            await emit(AgentEvent("delta", text=confirmation))
-            result = TurnResult(sess.id, confirmation, [], provider="system")
-        elif self.state.kill_switch.engaged:
-            reply = "Der Not-Aus ist aktiv, Sir. Ich führe derzeit keine Aktionen aus."
-            await emit(AgentEvent("delta", text=reply))
-            result = TurnResult(sess.id, reply, [], provider="system")
-        elif self.state.agent is not None and self.state.agent.available():
-            await bus.publish("chat.model", session_id=str(sess.id), model=model, reason=model_reason)
-            result = await self._run_claude(sess, principal, agent_text, instructions, emit, model)
-            result.model = model
-        elif self.state.hermes is not None and await self._hermes_ready():
-            result = await self._run_hermes(sess, principal, text, instructions, emit, images)
-        else:
-            result = await self._run_fallback(sess, text, instructions, emit)
+            if confirmation is not None:
+                await emit(AgentEvent("delta", text=confirmation))
+                result = TurnResult(sess.id, confirmation, [], provider="system")
+            elif self.state.kill_switch.engaged:
+                reply = "Der Not-Aus ist aktiv, Sir. Ich führe derzeit keine Aktionen aus."
+                await emit(AgentEvent("delta", text=reply))
+                result = TurnResult(sess.id, reply, [], provider="system")
+            elif self.state.agent is not None and self.state.agent.available():
+                await bus.publish("chat.model", session_id=str(sess.id), model=model, reason=model_reason)
+                await turn.set_model(model, _model_label(model), model_reason)
+                result = await self._run_claude(sess, principal, agent_text, instructions, emit, model)
+                result.model = model
+            elif self.state.hermes is not None and await self._hermes_ready():
+                result = await self._run_hermes(sess, principal, text, instructions, emit, images)
+            else:
+                result = await self._run_fallback(sess, text, instructions, emit)
 
-        timings["agent_ms"] = round((time.perf_counter() - t_agent) * 1000, 1)
-        result.timings = timings
+            timings["agent_ms"] = round((time.perf_counter() - t_agent) * 1000, 1)
+            result.timings = timings
+            await turn.finish(error=result.error, model_label=_model_label(result.model) if result.model else None)
+        finally:
+            for pattern in TURN_WATCH:
+                bus.unsubscribe(pattern, turn.on_bus_event)
+            if not turn.finished:  # an exception escaped: close the turn honestly instead of leaving it "running"
+                await turn.finish(error="Unerwarteter Abbruch der Antwort")
         await self._store(
             sess.id,
             "assistant",
@@ -199,6 +279,7 @@ class Orchestrator:
                 "error": result.error,
                 "model": result.model,
                 "timings": timings,
+                "turn_id": turn.turn_id,
             },
         )
         await bus.publish(
@@ -209,11 +290,16 @@ class Orchestrator:
             provider=result.provider,
             model=result.model,
             timings=timings,
+            turn_id=turn.turn_id,
         )
         if result.text and not result.error and principal.role in OWNER_ROLES and not await self._is_tainted(sess.id):
             # a session that read untrusted content (web/mail) must not write "facts" into the long-term memory
             spawn(self._queue_extraction(sess.id, channel, text, result.text, user_msg_id), name="memory-extract")
         return result
+
+    async def _plan_steps(self, task_id: str) -> list[str]:
+        task = await self.state.tasks.get_task(uuid.UUID(task_id))
+        return [s.name for s in task.steps] if task is not None else []
 
     async def _is_tainted(self, session_id: uuid.UUID) -> bool:
         async with session_scope() as s:
@@ -463,6 +549,18 @@ class Orchestrator:
                 logger.warning("Hermes stop failed", exc_info=True)
         await bus.publish("chat.interrupted", session_id=str(run.session_id))
         return True
+
+
+def _model_label(model: str) -> str:
+    return str(MODELS.get(model, {}).get("label") or model)
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _safe_event_data(data: dict[str, Any]) -> dict[str, Any]:

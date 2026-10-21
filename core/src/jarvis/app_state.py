@@ -33,6 +33,7 @@ from jarvis.connectors.kie_creative import KieCreativeConnector
 from jarvis.connectors.lexware import LexwareConnector
 from jarvis.connectors.mac import BridgeClient, MacConnector
 from jarvis.connectors.memory_obsidian import ObsidianMemoryConnector
+from jarvis.connectors.routing import RoutingConnector
 from jarvis.connectors.system import SystemConnector
 from jarvis.connectors.telegram import TelegramConnector
 from jarvis.connectors.telephony import TelephonyConnector
@@ -163,6 +164,7 @@ class AppState:
             FishAudioConnector,
             KieCreativeConnector,
             TelephonyConnector,
+            RoutingConnector,
         ):
             self.connectors.add(conn_cls(self))
         self._register_phone_tool()

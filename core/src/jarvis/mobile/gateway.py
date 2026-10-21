@@ -36,7 +36,8 @@ MOBILE_ROUTES: list[tuple[frozenset[str], re.Pattern[str]]] = [
     (frozenset({"GET"}), re.compile(r"^/api/health$")),
     (frozenset({"GET", "POST", "PUT", "DELETE"}), re.compile(r"^/api/mobile/.*")),
     (frozenset({"POST"}), re.compile(r"^/api/chat(/interrupt)?$")),
-    (frozenset({"GET"}), re.compile(r"^/api/sessions(/[0-9a-f-]{36}/messages)?$")),
+    (frozenset({"GET"}), re.compile(r"^/api/sessions(/[0-9a-f-]{36}/(messages|events))?$")),
+    (frozenset({"POST"}), re.compile(r"^/api/sessions/[0-9a-f-]{36}/events/[A-Za-z0-9_-]{1,40}/check$")),
     (frozenset({"GET"}), re.compile(r"^/api/tasks(/[0-9a-f-]{36})?$")),
     (frozenset({"POST"}), re.compile(r"^/api/tasks/[0-9a-f-]{36}/(input|cancel|retry|pause|resume|message)$")),
     (frozenset({"GET"}), re.compile(r"^/api/approvals(/mode)?$")),  # deciding goes through /api/mobile (signed)

@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 
+from jarvis.agent.timeline import redact_for_mobile
 from jarvis.app_state import AppState
 from jarvis.events import Event, bus, spawn
 from jarvis.logging_setup import ring
@@ -62,6 +63,8 @@ async def events_ws(ws: WebSocket) -> None:
                     **{k: v for k, v in ev.data.items() if k not in ("hits", "query")},
                     "hits": [{"id": h.get("id"), "kind": h.get("kind")} for h in ev.data.get("hits") or []],
                 }
+            if principal.role == "mobile_owner" and ev.type == "chat.event" and isinstance(ev.data.get("event"), dict):
+                payload["data"] = {**ev.data, "event": redact_for_mobile(ev.data["event"])}
             await ws.send_text(json.dumps(payload, ensure_ascii=False, default=str))
 
     async def pump_logs() -> None:

@@ -84,6 +84,24 @@ class ChatMessage(Base):
     session: Mapped[ChatSession] = relationship(back_populates="messages")
 
 
+class ChatEvent(Base):
+    """One item of a conversation's timeline (message segment, tool call, process step, turn) in event order.
+
+    ``seq`` is gapless-ish and strictly increasing per session; the UI sorts by it. ``ts`` is the creation time in
+    milliseconds since the epoch. Items are upserted while they change (tool finished, segment closed)."""
+
+    __tablename__ = "chat_events"
+    __table_args__ = (UniqueConstraint("session_id", "seq"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_sessions.id", ondelete="CASCADE"), index=True)
+    turn_id: Mapped[uuid.UUID | None] = mapped_column()
+    seq: Mapped[int] = mapped_column(Integer)
+    ts: Mapped[int] = mapped_column(BigInteger)
+    kind: Mapped[str] = mapped_column(String(20))  # message | tool | process | turn
+    data: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 # --------------------------------------------------------------------------- tasks
 class Task(Base, TimestampMixin):
     __tablename__ = "tasks"
