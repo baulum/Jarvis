@@ -394,3 +394,5 @@ class CallSession(Base, TimestampMixin):
     transcript: Mapped[list[Any]] = mapped_column(default=list)
     session_id: Mapped[uuid.UUID | None] = mapped_column()
     metrics: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # why Jarvis rings: the open question and what it refers to (jarvis.mobile.call_context)
+    context: Mapped[dict[str, Any]] = mapped_column(default=dict)
