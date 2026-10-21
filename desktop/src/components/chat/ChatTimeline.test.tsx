@@ -113,6 +113,20 @@ describe("ChatTimeline", () => {
     expect(await screen.findByTestId("route-map")).toBeTruthy(); // the route as a map, not as text
   });
 
+  it("renders Markdown in the user's own message and in answers, without raw syntax", () => {
+    const md = [
+      item("u", 1, "message", { role: "user", text: "**test** und *kursiv*" }),
+      item("a", 2, "message", { role: "assistant", text: "**fett**" }),
+    ];
+    for (const compact of [false, true]) {
+      const { container } = render(<ChatTimeline thread={thread(md)} compact={compact} />);
+      expect([...container.querySelectorAll("strong")].map((s) => s.textContent)).toEqual(["test", "fett"]);
+      expect(container.querySelector("em")?.textContent).toBe("kursiv");
+      expect(container.textContent).not.toContain("*");
+      cleanup();
+    }
+  });
+
   it("expands a tool call with input, result and timing", () => {
     render(<ChatTimeline thread={thread(events)} />);
     const row = screen.getByTitle("route_plan: erfolgreich");
