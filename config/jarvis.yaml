@@ -196,6 +196,8 @@ coding:
     claudeb: [claude]
   restricted: true
   # claude_env:                # optionale Umgebung für den Befehl, z. B. CLAUDE_CONFIG_DIR: ~/.claude-b
+  # Zusätzliche PATH-Einträge für Coding-Jobs (der Core läuft unter launchd ohne Shell-Profil): Flutter-SDK.
+  extra_path: [/Users/paul/Documents/flutter/bin]
   # Modell für Coding-Jobs ohne Angabe: haiku | sonnet | opus; leer = aktuell im Chat gewähltes Modell.
   default_model: ""
   max_parallel_jobs: 1
@@ -204,7 +206,7 @@ coding:
                   "Bash(node:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git add:*)",
                   "Bash(git commit:*)", "Bash(ls:*)", "Bash(mkdir:*)", "Bash(python3:*)", "Bash(uv:*)",
                   "Bash(git rm:*)", "Bash(git mv:*)", "Bash(rm:*)", "Bash(mv:*)", "Bash(cp:*)", "Bash(cat:*)",
-                  "Bash(curl:*)", "Bash(lsof:*)", "Bash(open:*)",
+                  "Bash(curl:*)", "Bash(lsof:*)", "Bash(open:*)", "Bash(flutter:*)", "Bash(dart:*)",
                   # reine Lesebefehle (auch als Teil von && / Pipes nötig: jeder Teil wird einzeln geprüft)
                   "Bash(git log:*)", "Bash(git show:*)", "Bash(git worktree list:*)", "Bash(git branch)",
                   "Bash(git branch -a:*)", "Bash(git branch -r:*)", "Bash(git branch -v:*)",

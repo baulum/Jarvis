@@ -100,7 +100,20 @@ _STRIP_ENV = (
     "CLAUDE_CODE_USE_VERTEX",
     "CLAUDE_CODE_USE_FOUNDRY",
 )
-_TEST_EXECUTABLES = {"npm", "pnpm", "npx", "node", "python3", "uv", "pytest", "cargo", "swift", "make"}
+_TEST_EXECUTABLES = {
+    "npm",
+    "pnpm",
+    "npx",
+    "node",
+    "python3",
+    "uv",
+    "pytest",
+    "cargo",
+    "swift",
+    "make",
+    "flutter",
+    "dart",
+}
 NETWORK_ALLOWLIST = [
     "registry.npmjs.org",
     "*.npmjs.org",
@@ -153,7 +166,8 @@ class CodingRunner:
     # ------------------------------------------------------------------ environment
     def _env(self) -> dict[str, str]:
         env = {k: v for k, v in os.environ.items() if k not in _STRIP_ENV and not k.startswith("JARVIS_SECRET")}
-        env["PATH"] = os.environ.get("PATH", "") + ":/opt/homebrew/bin:/usr/local/bin"
+        extra = [os.path.expanduser(str(p)) for p in getattr(self.cfg, "extra_path", None) or []]
+        env["PATH"] = ":".join([os.environ.get("PATH", ""), *extra, "/opt/homebrew/bin", "/usr/local/bin"])
         for k, v in (getattr(self.cfg, "claude_env", None) or {}).items():
             if k in _STRIP_ENV:
                 raise CodingError(f"coding.claude_env darf {k} nicht setzen (nur Subscription-Login erlaubt)")
