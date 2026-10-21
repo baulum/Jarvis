@@ -170,7 +170,7 @@ function TopBar() {
 export function Toasts() {
   const toasts = useApp((s) => s.toasts);
   const dismiss = useApp((s) => s.dismissToast);
-  const setView = useApp((s) => s.setView);
+  const openTarget = useApp((s) => s.openTarget);
   const bar: Record<string, string> = { ok: "bg-arc", info: "bg-arc-dim", warn: "bg-ember", bad: "bg-alarm" };
   return (
     <div aria-live="polite" className="pointer-events-none fixed right-4 bottom-4 z-40 flex w-[22rem] flex-col gap-2">
@@ -194,7 +194,7 @@ export function Toasts() {
                   type="button"
                   className="mt-1.5 text-xs text-arc hover:underline"
                   onClick={() => {
-                    setView(t.action!.view);
+                    openTarget(t.action!);
                     dismiss(t.id);
                   }}
                 >

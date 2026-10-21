@@ -2,6 +2,7 @@ import { TerminalSquare } from "lucide-react";
 import { useState } from "react";
 import { AgentControls, JobMonitorPanel } from "../components/AgentMonitor";
 import { Dot, EmptyState, ErrorState, KeyValue, Section, Skeleton, StatusText, Tag } from "../components/ui";
+import { useFocusedSelection } from "../hooks/useFocusedSelection";
 import { useQuery } from "../hooks/useQuery";
 import { formatClock, formatMs, formatRelative, statusLabel, statusTone } from "../lib/format";
 import type { Task } from "../lib/types";
@@ -14,7 +15,7 @@ export function AgentsView() {
   const status = useApp((s) => s.status);
   const jobs = useQuery(() => api.codingJobs(), "coding-jobs", { topics: ["coding"] });
   const tasks = useQuery(() => api.tasks(), "agent-tasks", { topics: ["task"] });
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useFocusedSelection("job");
   const job = jobs.data?.find((j) => j.id === selected) ?? jobs.data?.[0];
   const activeTasks = (tasks.data ?? []).filter((t) => TASK_ACTIVE.includes(t.status));
 

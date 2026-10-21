@@ -13,6 +13,7 @@ import {
   type ChatThread,
   type LiveToolCall,
 } from "../lib/reducers";
+import { notificationTarget } from "../lib/targets";
 import type { Approval, BusEvent, CodingLogLine, LogEntry, SystemStatus, VoiceState } from "../lib/types";
 
 export type ViewId =
@@ -31,12 +32,19 @@ export type ViewId =
   | "permissions"
   | "system";
 
+/** A view, optionally with the job/task to select in it. */
+export interface ViewTarget {
+  view: ViewId;
+  job?: string;
+  task?: string;
+}
+
 export interface Toast {
   id: string;
   tone: "info" | "ok" | "warn" | "bad";
   title: string;
   body?: string;
-  action?: { label: string; view: ViewId };
+  action?: ViewTarget & { label: string };
 }
 
 /** Event families views can watch to refetch when something relevant changed. */
@@ -78,8 +86,11 @@ interface AppState {
   unread: number;
   /** session id -> model chosen for the latest turn (from chat.model events). */
   turnModels: Record<string, { model: string; reason: string }>;
+  /** Job/task a notification pointed at; the agents/tasks view selects it (seq: same target again → reselect). */
+  focus: { job?: string; task?: string; seq: number };
 
   setView: (v: ViewId) => void;
+  openTarget: (t: ViewTarget) => void;
   setToken: (t: string | null, err?: string | null) => void;
   setActiveSession: (sid: string | null) => void;
   setThread: (t: ChatThread) => void;
@@ -125,11 +136,16 @@ export const useApp = create<AppState>((set, get) => ({
   approvalSessions: {},
   unread: 0,
   turnModels: {},
+  focus: { seq: 0 },
 
   // The former views open in the system panel above the brain (toasts and buttons still call setView).
   setView: (view) => {
     set({ view });
     useBrain.getState().openOverlay(view === "chat" ? null : "system", view);
+  },
+  openTarget: ({ view, job, task }) => {
+    set((s) => ({ focus: { job, task, seq: s.focus.seq + 1 } }));
+    get().setView(view);
   },
   setToken: (token, err = null) => set({ token, tokenError: err }),
   setActiveSession: (activeSessionId) => set({ activeSessionId }),
@@ -303,7 +319,13 @@ export function handleBusEvent(ev: BusEvent): void {
     const level = String(d.level ?? "info");
     // approval toasts are raised by approval.requested already
     if (d.event !== "approval.requested") {
-      st.pushToast({ tone: level === "error" || level === "critical" ? "bad" : level === "warning" ? "warn" : "info", title, body });
+      const target = notificationTarget(String(d.event ?? ""), d.data as Record<string, unknown> | undefined);
+      st.pushToast({
+        tone: level === "error" || level === "critical" ? "bad" : level === "warning" ? "warn" : "info",
+        title,
+        body,
+        action: target ? { label: "Öffnen", ...target } : undefined,
+      });
     }
     void nativeNotify(title, body).catch(() => undefined);
     return;

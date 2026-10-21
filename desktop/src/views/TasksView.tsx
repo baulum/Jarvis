@@ -1,6 +1,7 @@
 import { Ban, ListChecks, Plus, RotateCcw, Send, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button, CodeBlock, EmptyState, ErrorState, KeyValue, Skeleton, StatusText } from "../components/ui";
+import { useFocusedSelection } from "../hooks/useFocusedSelection";
 import { useAction, useQuery } from "../hooks/useQuery";
 import { compactJson, formatClock, formatDateTime, formatRelative, statusLabel, statusTone } from "../lib/format";
 import { applyTaskEvent } from "../lib/reducers";
@@ -12,7 +13,7 @@ const ACTIVE = new Set(["queued", "running", "waiting_approval", "waiting_input"
 export function TasksView() {
   const tasks = useQuery(() => api.tasks(), "tasks", { topics: ["task"] });
   const playbooks = useQuery(() => api.playbooks(), "playbooks");
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useFocusedSelection("task");
   const [filter, setFilter] = useState<"active" | "all">("all");
 
   const list = useMemo(() => {
