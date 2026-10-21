@@ -54,6 +54,7 @@ class CallService:
         bus.subscribe("coding.finished", self._on_finished_event)
         bus.subscribe("task.completed", self._on_finished_event)
         bus.subscribe("task.failed", self._on_finished_event)
+        bus.subscribe("task.cancelled", self._on_finished_event)
         spawn(self._recover(), name="calls-recover")
 
     async def _recover(self) -> None:
@@ -496,9 +497,24 @@ class CallService:
         kind = "coding_job" if ev.type == "coding.finished" else "task"
         target = str(d.get("job_id") if kind == "coding_job" else (d.get("task_id") or ev.task_id or d.get("id")))
         hits = self._claim_watches(lambda w: w["type"] == kind and w["target"] == target)
+        cancelled = d.get("status") == "cancelled" or ev.type == "task.cancelled"
         for w in hits:
-            ok = d.get("status", "completed") == "completed" and ev.type != "task.failed"
             title = str(d.get("title") or "Auftrag")
+            if cancelled:  # stopped on purpose: no call claiming it failed, just a note that the watch is gone
+                await self.state.alerts.dispatch(
+                    Alert(
+                        "task",
+                        f"Abgebrochen: {title}",
+                        f"„{title}“ wurde abgebrochen – der vorgemerkte Anruf entfällt.",
+                        event_key=f"watch:{w['id']}",
+                        deep_link=f"jarvis://{'task' if kind == 'task' else 'job'}/{target}",
+                        data={"task_id": target} if kind == "task" else {"job_id": target},
+                        source="watch",
+                        allow_call=False,
+                    )
+                )
+                continue
+            ok = d.get("status", "completed") == "completed" and ev.type != "task.failed"
             detail = w["message"] if ok else f"Leider ist „{title}“ fehlgeschlagen. {str(d.get('error') or '')[:200]}"
             await self.state.alerts.dispatch(
                 Alert(

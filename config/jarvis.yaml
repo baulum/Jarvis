@@ -127,9 +127,13 @@ notifications:
       channels: [desktop, telegram, mobile]
     - event: task.failed
       channels: [desktop, telegram, mobile]
+    - event: task.input_required     # a task waits for Sir's answer: without this only the desktop knew
+      channels: [desktop, telegram, mobile]
     - event: approval.requested
       channels: [desktop, telegram, mobile]
     - event: coding.finished
+      channels: [desktop, telegram, mobile]
+    - event: coding.interrupted      # a restart ended a running coding job
       channels: [desktop, telegram, mobile]
     - event: agent.usage
       channels: [desktop, mobile]

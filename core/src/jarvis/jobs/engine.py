@@ -38,6 +38,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 LEASE = timedelta(seconds=90)
+# A step that met a tool call still running elsewhere ("in_progress", e.g. left over from a crash) has no event
+# that wakes it; it is looked at again after this long (the ledger then has the result or reports the stale run).
+IN_PROGRESS_RECHECK = timedelta(seconds=30)
 WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
 
 
@@ -226,10 +229,12 @@ class TaskEngine:
                 return False
             task.status = "cancelled"
             task.lease_until = None
+            title = task.title
         running = self._running.get(task_id)
         if running:
             running.cancel()
         await audit(actor, "task.cancel", target=str(task_id))
+        await bus.publish("task.cancelled", task_id=str(task_id), title=title, status="cancelled", error=None)
         await bus.publish("task.updated", task_id=str(task_id), status="cancelled")
         return True
 
@@ -268,6 +273,7 @@ class TaskEngine:
                     step.status = "pending"
                     step.error = None
         await audit(actor, "task.retry", target=str(task_id))
+        await bus.publish("task.updated", task_id=str(task_id), status="queued")
         self._wake.set()
         return True
 
@@ -277,6 +283,7 @@ class TaskEngine:
             try:
                 claimed = await self._claim()
                 if claimed is None:
+                    await self._recheck_in_progress()
                     self._wake.clear()
                     try:
                         await asyncio.wait_for(self._wake.wait(), timeout=15)
@@ -501,8 +508,35 @@ class TaskEngine:
                 step.error = "Von Sir abgelehnt"
                 task.status = "cancelled"
                 task.error = f"Schritt '{step.name}' wurde abgelehnt"
-        await bus.publish("task.updated", task_id=str(step.task_id), status=task.status)
+            task_id, status, title, error = step.task_id, task.status, task.title, task.error
+        if status in ("failed", "cancelled"):
+            # same end events as _finish: the failure is reported to Sir, watches on the task are resolved
+            await audit("task-engine", f"task.{status}", target=str(task_id), details={"error": error})
+            await bus.publish(f"task.{status}", task_id=str(task_id), title=title, status=status, error=error)
+        await bus.publish("task.updated", task_id=str(task_id), status=status)
         self._wake.set()
+
+    async def _recheck_in_progress(self) -> None:
+        """Give steps parked on a tool call that was still running (``tool_in_progress``) another try."""
+        cutoff = datetime.now(UTC) - IN_PROGRESS_RECHECK
+        woke = False
+        async with session_scope() as s:
+            steps = (
+                await s.execute(
+                    select(TaskStep).where(TaskStep.status == "waiting_external", TaskStep.updated_at < cutoff)
+                )
+            ).scalars().all()
+            for step in steps:
+                if ((step.output or {}).get("wait") or {}).get("reason") != "tool_in_progress":
+                    continue
+                task = await s.get(Task, step.task_id, with_for_update=True)
+                if task is None or task.status != "waiting_external":
+                    continue
+                step.status = "pending"
+                task.status = "queued"
+                woke = True
+        if woke:
+            self._wake.set()
 
     async def _on_external(self, ev: Event) -> None:
         async with session_scope() as s:

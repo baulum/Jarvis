@@ -93,6 +93,72 @@ async def test_resume_after_crash(stack) -> None:
         await eng.stop()
 
 
+async def test_step_parked_on_running_tool_call_continues(stack, monkeypatch) -> None:
+    """A write left 'running' in the ledger (core crashed mid-call) used to park the step for good."""
+    import jarvis.jobs.engine as engine_mod
+    from jarvis.db.models import ToolExecution
+
+    monkeypatch.setattr(engine_mod, "IN_PROGRESS_RECHECK", timedelta(0))
+    bus._handlers.clear()
+    eng = make_engine(stack)
+    task = await eng.create("demo", {"city": "Hamburg"}, OWNER)
+    key = f"task:{task.id}:0:1:t_low"
+    async with session_scope() as s:
+        s.add(ToolExecution(idempotency_key=key, tool="t_low", args_hash="x", status="running", actor="dead-worker"))
+    await eng.start()
+    try:
+        t = await wait_status(eng, task.id, {"waiting_external"})
+        assert (t.steps[0].output or {})["wait"]["reason"] == "tool_in_progress"
+        async with session_scope() as s:  # the interrupted call turns out to have gone through
+            row = await s.get(ToolExecution, key)
+            row.status = "succeeded"
+            row.result = {"data": {"n": 1}, "message": ""}
+        t = await wait_status(eng, task.id, {"waiting_approval"})
+        assert t.steps[0].status == "completed" and t.steps[0].output == {"low": {"n": 1}}
+        assert stack.counters["t_low"].calls == []  # taken from the ledger, not executed a second time
+    finally:
+        await eng.stop()
+
+
+async def test_failed_execution_after_approval_reports_task_failed(stack) -> None:
+    from jarvis.tools.registry import ToolSpec
+
+    async def broken(ctx, a):  # type: ignore[no-untyped-def]
+        raise RuntimeError("Lexware antwortet nicht")
+
+    stack.registry.register(
+        ToolSpec("t_broken", "t_broken", {"type": "object"}, broken, "medium", "test", writes=True)
+    )
+    bus._handlers.clear()
+    failed: list[dict] = []
+
+    async def on_failed(ev) -> None:  # type: ignore[no-untyped-def]
+        failed.append(ev.data)
+
+    bus.subscribe("task.failed", on_failed)
+    eng = TaskEngine(SimpleNamespace(executor=stack.executor, kill_switch=stack.kill_switch))  # type: ignore[arg-type]
+
+    async def step(ctx: StepContext) -> dict:
+        return {"r": await ctx.tool("t_broken", {})}
+
+    eng.register(Playbook("broken", "Kaputt", "d", {"type": "object"}, [StepDef("write", step)]))
+    await eng.start()
+    try:
+        task = await eng.create("broken", {}, OWNER)
+        t = await wait_status(eng, task.id, {"waiting_approval"})
+        owner = Principal(id="desk", role="owner", channel="device", device_id=__import__("uuid").uuid4())
+        await stack.executor.decide(t.steps[0].approval_id, True, owner)
+        t = await wait_status(eng, task.id, {"failed"})
+        assert "Lexware antwortet nicht" in (t.error or "")
+        for _ in range(20):
+            if failed:
+                break
+            await asyncio.sleep(0.05)
+        assert failed and failed[0]["task_id"] == str(task.id) and failed[0]["title"] == "Kaputt"
+    finally:
+        await eng.stop()
+
+
 async def test_schema_defaults_applied_for_title(stack) -> None:
     from jarvis.jobs.playbooks import NEW_CUSTOMER_PROJECT
 

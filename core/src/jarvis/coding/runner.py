@@ -15,6 +15,7 @@ Isolation & policy (see SECURITY.md):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -144,6 +145,7 @@ class CodingRunner:
         self.retry_delays: tuple[float, ...] = RETRY_DELAYS
         self._paused: dict[uuid.UUID, float] = {}  # job id -> monotonic time the pause began
         self._timeouts: dict[uuid.UUID, asyncio.Timeout] = {}  # so a pause does not eat the job's time budget
+        self._budget_left: dict[uuid.UUID, float] = {}  # seconds of the run's time budget left when it was paused
         self._inbox: dict[uuid.UUID, list[str]] = {}  # messages for the agent, delivered between two runs
         self._interrupted: set[uuid.UUID] = set()  # current run was stopped on purpose to deliver a message
         self._closing: set[uuid.UUID] = set()  # job is past its last agent run: no more messages
@@ -184,7 +186,12 @@ class CodingRunner:
         proc = await asyncio.create_subprocess_exec(
             *cmd, "auth", "status", env=self._env(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=30)
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            return {"ok": False, "error": f"{self.cfg.claude_command} auth status antwortet nicht (30 s)"}
         try:
             data = json.loads(out.decode())
         except json.JSONDecodeError:
@@ -318,13 +325,27 @@ class CodingRunner:
             details={"title": title, "repo": str(repo), "model": model_full, "effort": effort_value},
         )
         await bus.publish("coding.updated", job_id=str(job.id), status="queued", title=title)
-        self._tasks[job.id] = asyncio.create_task(self._run(job.id))
+        self._start(job.id)
         return job
 
-    async def resume_interrupted(self) -> None:
-        """Jobs that were running when the core stopped are marked and can be retried."""
+    def _start(self, job_id: uuid.UUID, resume: bool = False) -> None:
+        task = asyncio.create_task(self._run(job_id, resume=resume))
+        self._tasks[job_id] = task
+
+        def forget(t: asyncio.Task[None]) -> None:
+            if self._tasks.get(job_id) is t:
+                self._tasks.pop(job_id, None)
+
+        task.add_done_callback(forget)
+
+    async def resume_interrupted(self) -> list[tuple[uuid.UUID, str]]:
+        """Jobs that were running (or paused) when the core stopped are marked and can be retried.
+        Returns (id, title) of these jobs so Sir can be told – nothing else would ever mention them."""
+        interrupted: list[tuple[uuid.UUID, str]] = []
         async with session_scope() as s:
-            rows = (await s.execute(select(CodingJob).where(CodingJob.status.in_(["running", "queued"])))).scalars()
+            rows = (
+                await s.execute(select(CodingJob).where(CodingJob.status.in_(["running", "queued", "paused"])))
+            ).scalars()
             for job in rows:
                 job.status = "failed"
                 job.result = {
@@ -332,6 +353,8 @@ class CodingRunner:
                     "error": "Unterbrochen durch Neustart – mit 'Wiederholen' "
                     "fortsetzen (Claude-Session wird fortgeführt).",
                 }
+                interrupted.append((job.id, job.title))
+        return interrupted
 
     async def retry(self, job_id: uuid.UUID) -> None:
         async with session_scope() as s:
@@ -339,7 +362,22 @@ class CodingRunner:
             if job is None or job.status not in ("failed", "cancelled"):
                 raise CodingError("Job kann nicht wiederholt werden")
             job.status = "queued"
-        self._tasks[job_id] = asyncio.create_task(self._run(job_id, resume=True))
+            title = job.title
+        await bus.publish("coding.updated", job_id=str(job_id), status="queued", title=title)
+        self._start(job_id, resume=True)
+
+    async def shutdown(self) -> None:
+        """The core is stopping: end the agent processes. Left running they would keep editing a worktree nobody
+        commits, and 'Wiederholen' after the restart would start a second agent on the same files. The jobs are
+        marked as interrupted at the next start (``resume_interrupted``)."""
+        for job_id, proc in list(self._procs.items()):
+            if proc.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    if job_id in self._paused:
+                        os.killpg(proc.pid, signal.SIGCONT)
+                    os.killpg(proc.pid, signal.SIGTERM)
+        for task in list(self._tasks.values()):
+            task.cancel()
 
     async def cancel(self, job_id: uuid.UUID, actor: str) -> bool:
         proc = self._procs.get(job_id)
@@ -351,6 +389,7 @@ class CodingRunner:
             except ProcessLookupError:
                 pass
         self._paused.pop(job_id, None)
+        self._budget_left.pop(job_id, None)
         self._inbox.pop(job_id, None)
         self._interrupted.discard(job_id)
         self._closing.discard(job_id)
@@ -363,8 +402,19 @@ class CodingRunner:
                 return False
             job.status = "cancelled"
             job.finished_at = datetime.now(UTC)
+            title, task_id = job.title, job.task_id
         await audit(actor, "coding.cancel", target=str(job_id))
         await bus.publish("coding.updated", job_id=str(job_id), status="cancelled")
+        # the cancelled run never reaches _finish: without this a task step waiting for the job (and a
+        # "ruf mich an, sobald …" watch) would wait forever
+        await bus.publish(
+            "coding.finished",
+            job_id=str(job_id),
+            status="cancelled",
+            title=title,
+            summary="Abgebrochen",
+            task_id=str(task_id) if task_id else None,
+        )
         return True
 
     # ------------------------------------------------------------------ monitor / control
@@ -415,6 +465,13 @@ class CodingRunner:
             await self._update(job_id, status="running")
             raise CodingError("Agent-Prozess läuft nicht mehr") from e
         self._paused[job_id] = time.monotonic()
+        cm = self._timeouts.get(job_id)
+        when = cm.when() if cm is not None else None
+        if cm is not None and when is not None:
+            # the time budget stands still while paused: firing now would SIGTERM a stopped process
+            # (delivered only after SIGCONT) and fail a job Sir merely paused
+            self._budget_left[job_id] = max(0.0, when - asyncio.get_running_loop().time())
+            cm.reschedule(None)
         await audit(actor, "coding.pause", target=str(job_id))
         await self._log_entry(job_id, {"type": "control", "action": "paused", "actor": actor})
         await bus.publish("coding.updated", job_id=str(job_id), status="paused")
@@ -429,14 +486,19 @@ class CodingRunner:
             os.killpg(proc.pid, signal.SIGCONT)
         except ProcessLookupError as e:
             raise CodingError("Agent-Prozess läuft nicht mehr") from e
-        cm = self._timeouts.get(job_id)
-        if cm is not None and cm.when() is not None:  # the pause does not count against the job timeout
-            cm.reschedule(cm.when() + (time.monotonic() - began))  # type: ignore[operator]
+        self._restore_budget(job_id)
         await self._update(job_id, status="running")
         await audit(actor, "coding.resume", target=str(job_id))
         await self._log_entry(job_id, {"type": "control", "action": "resumed", "actor": actor})
         await bus.publish("coding.updated", job_id=str(job_id), status="running")
         return True
+
+    def _restore_budget(self, job_id: uuid.UUID) -> None:
+        """Re-arm the run's time budget with what was left when it was paused."""
+        left = self._budget_left.pop(job_id, None)
+        cm = self._timeouts.get(job_id)
+        if cm is not None and left is not None:
+            cm.reschedule(asyncio.get_running_loop().time() + left)
 
     async def send_message(self, job_id: uuid.UUID, text: str, actor: str, immediate: bool = False) -> dict[str, Any]:
         """Queues a message for the agent. The CLI takes its prompt on start, so the text reaches the agent as a
@@ -465,6 +527,7 @@ class CodingRunner:
                 if job_id in self._paused:
                     os.killpg(proc.pid, signal.SIGCONT)
                     self._paused.pop(job_id, None)
+                    self._restore_budget(job_id)
                     await self._update(job_id, status="running")
                 os.killpg(proc.pid, signal.SIGTERM)
                 interrupted = True
@@ -884,11 +947,12 @@ class CodingRunner:
                                 await bus.publish("coding.progress", job_id=str(job_id), **compact)
                 await proc.wait()
         except TimeoutError:
-            os.killpg(proc.pid, signal.SIGTERM)
+            await self._stop_process(proc)
             raise CodingError(f"Zeitlimit von {self.cfg.job_timeout_minutes} Minuten überschritten") from None
         finally:
             self._procs.pop(job_id, None)
             self._timeouts.pop(job_id, None)
+            self._budget_left.pop(job_id, None)
         if not result and job_id in self._interrupted:
             # stopped on purpose to hand over a message: the session continues with it (see _drain_inbox)
             self._interrupted.discard(job_id)
@@ -913,13 +977,25 @@ class CodingRunner:
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=900)
         except TimeoutError:
-            os.killpg(proc.pid, signal.SIGTERM)
+            await self._stop_process(proc)
             return {"passed": False, "exit_code": None, "output": "Timeout nach 15 Minuten"}
         return {
             "passed": proc.returncode == 0,
             "exit_code": proc.returncode,
             "output": out.decode(errors="replace")[-8000:],
         }
+
+    @staticmethod
+    async def _stop_process(proc: asyncio.subprocess.Process, grace_s: float = 10) -> None:
+        """SIGTERM to the process group; SIGKILL if it is still there after ``grace_s`` (never leave it behind)."""
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGCONT)  # a paused (SIGSTOPped) group only acts on SIGTERM once continued
+            os.killpg(proc.pid, signal.SIGTERM)
+        try:
+            await asyncio.wait_for(proc.wait(), grace_s)
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
 
     async def _commit(self, cwd: Path, title: str) -> str | None:
         if not await self._git(cwd, "status", "--porcelain"):
@@ -942,6 +1018,7 @@ class CodingRunner:
             bucket.discard(job_id)
         self._inbox.pop(job_id, None)
         self._paused.pop(job_id, None)
+        self._budget_left.pop(job_id, None)
         async with session_scope() as s:
             job = await s.get(CodingJob, job_id)
             if job is None:
