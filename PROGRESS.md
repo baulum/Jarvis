@@ -3,6 +3,22 @@
 > Wiedereinstiegspunkt für neue Sessions. Nach jeder größeren Änderung aktualisieren.
 > Doku: ARCHITECTURE.md (Aufbau), SETUP.md (Installation/Betrieb), SECURITY.md (Sicherheitsmodell).
 
+## Stand: 2026-10-21 – Zuverlässigkeit (Jobs, Benachrichtigungen, Anruf-Anrede)
+
+- **Hänger behoben:** abgebrochene Coding-Jobs melden `coding.finished` (wartende Playbook-Schritte und Rückruf-
+  Vormerkungen hingen sonst für immer); Task-Schritte, die nach einem Absturz auf einen noch „laufenden“ Ledger-Eintrag
+  treffen, werden alle 30 s neu versucht (vorher: ewig `waiting_external`); Pause hält das Job-Zeitbudget an; Timeouts
+  eskalieren SIGTERM → SIGKILL; nach Neustart werden auch pausierte Jobs als unterbrochen markiert und Sir bekommt je
+  Job eine Benachrichtigung (`coding.interrupted`); Core-Stopp beendet laufende Agent-Prozesse
+- **Benachrichtigungen:** wiederholte Jobs/Aufgaben wurden 24 h als Duplikat verschluckt (Schlüssel je Benachrichtigung);
+  `task.input_required` geht jetzt auch ans Handy; fehlgeschlagene Ausführung nach Freigabe meldet `task.failed`;
+  Desktop-Toasts und -Liste öffnen Job/Aufgabe/Freigabe direkt; Android öffnet alte Links nicht erneut (Drehen/Recents)
+- **Anruf:** „Hallo Sir, der Build ist fertig.“ verlor die Nachricht (Regex bis Satzende); „Sir, …“ nach der Begrüßung
+  wird nicht doppelt gesagt; eine erneute Begrüßung am Anfang der ersten Antwort wird beim Streamen entfernt
+- Tests: Core 299 Unit (+18), Task-Engine-Integration 5 (+2); Desktop 54 (+3); ruff/mypy/tsc/eslint 0 Fehler.
+  Nicht ausgeführt: Flutter/Kotlin (kein SDK in der Coding-Umgebung). `test_graph_sync` braucht `alembic upgrade head`
+  auf `jarvis_test` (Spalte `coding_jobs.model` fehlt dort)
+
 ## Stand: 2026-10-17 – J.A.R.V.I.S. Mobile (Android)
 
 Neue Android-App `apps/jarvis_mobile` (Flutter 3.41 + Kotlin) und Mobile-Schicht im Core (`core/src/jarvis/mobile/`).
