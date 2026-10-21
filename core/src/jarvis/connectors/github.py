@@ -77,6 +77,13 @@ class GitHubConnector(Connector):
             json={"title": title, "head": head, "base": base, "body": body, "draft": draft},
         )
 
+    async def merge_pr(self, repo: str, number: int, *, sha: str | None = None, method: str = "squash") -> Any:
+        """Merges a PR. ``sha`` = expected head commit: GitHub refuses (409) if the branch moved since."""
+        body: dict[str, Any] = {"merge_method": method}
+        if sha:
+            body["sha"] = sha
+        return await self._api("PUT", f"/repos/{repo}/pulls/{number}/merge", json=body)
+
     def tools(self) -> list[ToolSpec]:
         S = "github"
         repo_prop = {"repo": {"type": "string", "pattern": _REPO_RE.pattern, "description": "owner/name"}}

@@ -125,6 +125,12 @@ class CodingConnector(Connector):
             except CodingError as e:
                 raise ToolUserError(str(e)) from e
 
+        async def ship_job(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            try:
+                return await runner().ship(_uuid(a["job_id"]), ctx.principal.label)
+            except CodingError as e:
+                raise ToolUserError(str(e)) from e
+
         return [
             ToolSpec(
                 "project_create",
@@ -151,7 +157,9 @@ class CodingConnector(Connector):
                 "Übergibt einen Entwicklungsauftrag an Claude Code (eigener Git-Worktree, "
                 "Worktree). Auch zum Reparieren eigener Werkzeuge und Anbindungen (z. B. Lead-Tool-MCP, Export, "
                 "Mailversand) nutzbar. project_path = Pfad des Projekts. Optional test_command, z. B. "
-                "'npm run build'. "
+                "'npm run build'. Standard-Ablauf nach dem Job: nur bei grünem Ergebnis wird der Job-Branch gepusht, "
+                "per PR nach main gemergt und Supabase (Functions/Migrationen, falls vorhanden) deployt; bei rotem "
+                "Ergebnis oder Fehler passiert nichts davon (Ergebnis unter result.ship). "
                 "Optional model (haiku|sonnet|opus|auto) und effort (low|medium|high|xhigh|max): nennt Sir im Auftrag "
                 "ein Modell (z. B. 'Opus 5.5'), hier übergeben; ohne Angabe gilt das Standardmodell bzw. das im Chat "
                 "gewählte.",
@@ -209,8 +217,23 @@ class CodingConnector(Connector):
                 ),
             ),
             ToolSpec(
+                "coding_ship_job",
+                "Liefert einen grünen Coding-Job erneut aus, wenn die automatische Auslieferung nicht durchlief "
+                "(Ergebnis unter result.ship): Job-Branch pushen, Pull Request erstellen und mergen, danach "
+                "Supabase deployen (falls im Projekt). Setzt nach bereits erfolgtem PR/Merge dort fort.",
+                _obj({"job_id": {"type": "string"}}, ["job_id"]),
+                ship_job,
+                "high",
+                S,
+                writes=True,
+                timeout_s=1800,
+                summarize=lambda a: f"Job {a['job_id'][:8]} ausliefern: PR mergen und Supabase deployen",
+            ),
+            ToolSpec(
                 "coding_prepare_pr",
-                "Pusht den Job-Branch und erstellt einen Draft-Pull-Request auf GitHub.",
+                "Nur auf ausdrücklichen Wunsch (kein Standard – grüne Jobs werden automatisch gepusht, per PR "
+                "gemergt und deployt): pusht den Job-Branch und erstellt einen Draft-Pull-Request auf GitHub, "
+                "ohne zu mergen oder zu deployen.",
                 _obj(
                     {"job_id": {"type": "string"}, "repo": {"type": "string"}, "base": {"type": "string"}},
                     ["job_id", "repo"],

@@ -110,7 +110,11 @@ oder Kosinus ≥ 0,93 → Ergänzung statt neuer Notiz. Korrektur → alte Notiz
 
 **Coding.** `CodingRunner` → eigener Git-Worktree je Job → `claude -p --restricted --strict-mcp-config --permission-mode acceptEdits
 --permission-prompts none --allowedTools … --settings {sandbox}` → Stream-JSON-Log → Testbefehl → bei Fehlschlag automatische
-Fehleranalyse (zweiter Lauf mit Testausgabe, `--resume`) → Commit auf `jarvis/*`-Branch → optional Draft-PR.
+Fehleranalyse (zweiter Lauf mit Testausgabe, `--resume`) → Commit auf `jarvis/*`-Branch → Auslieferung (`CodingRunner._ship_flow`,
+`coding.auto_ship`): nur bei grünem Ergebnis Branch pushen → PR (kein Draft) → PR mergen → Supabase deployen (`db push`,
+`functions deploy`, falls `supabase/` im Projekt; sonst übersprungen und vermerkt). Rot, Fehler oder fehlende Rechte:
+nichts auf `main`, kein Merge, kein Deploy, der Job-Branch bleibt; das Ergebnis steht in `result.ship`. Erneuter Versuch:
+`coding_ship_job`; Draft-PR nur noch auf Wunsch über `coding_prepare_pr`.
 
 **Agent-Monitor.** Das Coding-Log (`coding-logs/<job>.jsonl`) hält je Werkzeugaufruf Argument-Kurzfassung, Ergebnis-Kurzfassung und
 Token-Nutzung (`coding/monitor.py`); `GET /api/coding/jobs/{id}/monitor` macht daraus den Schnappschuss (aktueller Schritt, Schritte,
