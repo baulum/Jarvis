@@ -84,6 +84,7 @@ class Alert:
     call_message: str = ""  # what Jarvis says when Sir picks up
     source: str = "system"
     allow_call: bool = True  # False for follow-ups of a call (a missed call must never ring again)
+    origin_session_id: str = ""  # the chat session the alert came from (kept with a call for reference)
 
 
 _TARGET_KEYS: tuple[tuple[str, str], ...] = (
@@ -220,6 +221,8 @@ class AlertEngine:
                     reason=f"alert:{alert.category}",
                     event_key=alert.event_key,
                     alert_id=row_id,
+                    origin_session_id=alert.origin_session_id or str(alert.data.get("session_id") or "") or None,
+                    refs={k: alert.data[k] for k in ("task_id", "job_id", "approval_id") if alert.data.get(k)},
                 )
                 await self._finish(row_id, "call_ringing", call_id=uuid.UUID(call["call_id"]))
                 return {"decision": "call", "id": str(row_id), "call_id": call["call_id"], "reason": decision.reason}

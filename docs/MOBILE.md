@@ -159,6 +159,10 @@ Gedächtnis und denselben Werkzeugen; echte Werkzeug-/Gedächtnis-Ereignisse ers
 Kalender …“). Unterbrechen per Stimme funktioniert (das Telefon entfernt Jarvis' Stimme per Echounterdrückung).
 „Tschüss“/„leg auf“ beendet das Gespräch. Max. 30 Minuten. Transkripte: App › Aktivität, `GET /api/mobile/calls`.
 
+Worauf Sir antwortet: Die Frage, mit der Jarvis angerufen hat (Nachricht, Auslöser, Task-/Job-/Freigabe-ID), wird mit
+dem Anruf gespeichert (`CallSession.context`, `core/src/jarvis/mobile/call_context.py`) und jeder Gesprächsrunde als
+Kontext mitgegeben. Ein bloßes „ja“ ohne offene Frage führt keine Aktion aus; Jarvis fragt dann konkret nach.
+
 Anrufsignalisierung: FCM-Push `call` → `CallService` registriert den Anruf über **Jetpack Core-Telecom
 (`CallsManager.addCall`)** → System-Klingeln, CallStyle-Benachrichtigung (Annehmen/Ablehnen), Vollbild auf dem
 Sperrbildschirm, Steuerung durch Bluetooth-Headset/Uhr/Auto (Telecom-Callbacks), Audio-Routing über Telecom

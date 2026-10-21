@@ -47,7 +47,12 @@ def mobile_tools(state: AppState) -> list[ToolSpec]:
             raise ToolUserError(f"Anruf nicht möglich: {blocker}")
         await state.calls.end_active_calls()
         try:
-            return await state.calls.ring_owner(message=a["message"], reason="agent", explicit=True)
+            return await state.calls.ring_owner(
+                message=a["message"],
+                reason="agent",
+                explicit=True,
+                origin_session_id=str(ctx.session_id) if ctx.session_id else None,
+            )
         except RuntimeError as e:
             raise ToolUserError(f"Anruf nicht möglich: {e}") from e
 

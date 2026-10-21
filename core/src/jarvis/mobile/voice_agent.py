@@ -28,6 +28,7 @@ import numpy.typing as npt
 
 from jarvis.agent.llm import AgentEvent
 from jarvis.events import Event, bus, spawn
+from jarvis.mobile.call_context import call_context_block, is_vague_confirmation, load_call_context, open_question
 from jarvis.security.auth import Principal
 from jarvis.voice.audio import Endpointer, looks_complete, pcm_to_wav, rms
 from jarvis.voice.pipeline import SpeechTurn
@@ -94,6 +95,7 @@ class CallVoiceAgent:
         self.join_timeout_s = join_timeout_s
         self.principal: Principal | None = None
         self.session_id: uuid.UUID | None = None
+        self.call_context: dict[str, Any] = {}  # the open question of this call (empty for a call Sir placed)
         self.transcript: list[dict[str, Any]] = []
         self.metrics: dict[str, Any] = {"turns": 0, "barge_ins": 0}
         self._room: Any = None
@@ -236,8 +238,14 @@ class CallVoiceAgent:
             )
 
     # ------------------------------------------------------------------ conversation
+    async def _load_call_context(self) -> None:
+        """The question this call is about, stored when the call was placed. The session starts knowing it."""
+        self.call_context = await load_call_context(self.call_id)
+        self.metrics["open_question"] = open_question(self.call_context) is not None
+
     async def _conversation(self) -> None:
         assert self.principal is not None
+        await self._load_call_context()
         orch = self.state.orchestrator
         sess = await orch.get_or_create_session(self.principal, "phone", None)
         self.session_id = sess.id
@@ -371,6 +379,11 @@ class CallVoiceAgent:
             self._end_reason = "owner_goodbye"
             self._owner_left.set()
             return
+        if open_question(self.call_context) is None and is_vague_confirmation(text):
+            # "ja" with nothing it could refer to: ask, and do not start an agent turn that could act on it
+            await self._answer_vague_confirmation(text)
+            await self.set_state("listening")
+            return
         self.metrics["turns"] += 1
         speech = self._prepared
         self._prepared = None
@@ -414,7 +427,12 @@ class CallVoiceAgent:
 
         try:
             result = await self.state.orchestrator.handle(
-                self.principal, "phone", text, session_id=self.session_id, on_event=on_event
+                self.principal,
+                "phone",
+                text,
+                session_id=self.session_id,
+                on_event=on_event,
+                call_context=call_context_block(self.call_context),
             )
             if result.error and not reply_parts:
                 speech.say("Das hat leider nicht funktioniert, Sir.")
@@ -463,6 +481,17 @@ class CallVoiceAgent:
         await self._transcript("jarvis", text)  # recorded when it starts – it is being said
         await self._on_audio(pcm)
         await self._drain()
+
+    async def _answer_vague_confirmation(self, text: str) -> None:
+        """Sir said yes without saying to what, and the call has no open question: ask instead of acting."""
+        assert self.session_id is not None
+        reply = (
+            "Worauf beziehen Sie sich, Sir? Ich habe in diesem Gespräch keine offene Frage an Sie. "
+            "Was soll ich konkret tun?"
+        )
+        meta = {"channel": "phone", "call_id": str(self.call_id), "guard": "vague_confirmation"}
+        await self.state.orchestrator.record_turn(self.session_id, text, reply, meta)
+        await self._speak_fixed(reply)
 
     async def _speak_fixed(self, text: str) -> None:
         speech = self._new_speech()

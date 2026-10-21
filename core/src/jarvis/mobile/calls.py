@@ -29,6 +29,7 @@ from jarvis.db import session_scope
 from jarvis.db.models import CallSession, CodingJob, Task
 from jarvis.events import Event, bus, spawn
 from jarvis.mobile.alerts import Alert
+from jarvis.mobile.call_context import build_call_context
 from jarvis.mobile.voice_agent import CallVoiceAgent
 from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
@@ -195,13 +196,28 @@ class CallService:
         alert_id: uuid.UUID | None = None,
         skip_push: bool = False,
         explicit: bool = False,
+        origin_session_id: str | None = None,
+        refs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """``skip_push`` only for the owner's local device test (the phone is triggered over adb instead of FCM)."""
+        """``skip_push`` only for the owner's local device test (the phone is triggered over adb instead of FCM).
+
+        ``origin_session_id`` and ``refs`` (task, job, approval …) say what the question is about. They are stored with
+        the call, so the call session knows which question Sir answers (see ``jarvis.mobile.call_context``)."""
         blocker = None if skip_push else await self.call_blocker(event_key, explicit=explicit)
         if blocker:
             raise RuntimeError(blocker)
         call_id = uuid.uuid4()
         room = f"jarvis-{call_id.hex[:12]}"
+        call_context = build_call_context(
+            message,
+            reason=reason,
+            refs={
+                **(refs or {}),
+                "event_key": event_key,
+                "alert_id": alert_id,
+                "origin_session_id": origin_session_id,
+            },
+        )
         async with session_scope() as s:
             s.add(
                 CallSession(
@@ -212,6 +228,7 @@ class CallService:
                     reason=reason[:60],
                     message=message[:2000],
                     event_key=event_key,
+                    context=call_context,
                 )
             )
         greeting = call_opening(self.state.personality, message)  # said once, a greeting in the message is not doubled
@@ -512,6 +529,7 @@ class CallService:
                     call_message=detail,
                     data={"task_id": target} if kind == "task" else {"job_id": target},
                     source="watch",
+                    origin_session_id=str(w.get("session_id") or ""),
                 )
             )
 
@@ -527,6 +545,7 @@ class CallService:
                     call_requested=True,
                     call_message=w["message"],
                     source="watch",
+                    origin_session_id=str(w.get("session_id") or ""),
                 )
             )
 

@@ -113,6 +113,13 @@ class Orchestrator:
         """Add a message Jarvis said outside a turn (e.g. the opening of a call) to the conversation context."""
         await self._store(session_id, "assistant", text, meta)
 
+    async def record_turn(
+        self, session_id: uuid.UUID, text: str, reply: str, meta: dict[str, Any] | None = None
+    ) -> None:
+        """Keep a turn that was answered without the agent (a fixed reply) in the transcript, both sides."""
+        await self._store(session_id, "user", text, meta)
+        await self._store(session_id, "assistant", reply, meta)
+
     async def _store(
         self, session_id: uuid.UUID, role: str, content: str, meta: dict[str, Any] | None = None
     ) -> uuid.UUID:
@@ -138,10 +145,11 @@ class Orchestrator:
         session_id: uuid.UUID | None = None,
         on_event: EventCallback | None = None,
         images: list[str] | None = None,
+        call_context: str = "",
     ) -> TurnResult:
         sess = await self.get_or_create_session(principal, channel, session_id)
         with activity(session_id=str(sess.id)):
-            return await self._handle_turn(sess, principal, channel, text, on_event, images)
+            return await self._handle_turn(sess, principal, channel, text, on_event, images, call_context)
 
     async def _handle_turn(
         self,
@@ -151,6 +159,7 @@ class Orchestrator:
         text: str,
         on_event: EventCallback | None,
         images: list[str] | None,
+        call_context: str = "",
     ) -> TurnResult:
         t0 = time.perf_counter()
         timings: dict[str, float] = {}
@@ -161,7 +170,9 @@ class Orchestrator:
         model, model_reason, confirmation, agent_text = await self._model_for_turn(sess, principal, channel, text)
         memory_context = await recall
         timings["recall_ms"] = round((time.perf_counter() - t0) * 1000, 1)
-        instructions = turn_instructions(channel, memory_context=memory_context, tainted=sess.tainted)
+        instructions = turn_instructions(
+            channel, memory_context=memory_context, tainted=sess.tainted, call_context=call_context
+        )
         t_agent = time.perf_counter()
 
         async def emit(ev: AgentEvent) -> None:
