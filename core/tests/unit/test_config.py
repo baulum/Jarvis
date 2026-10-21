@@ -25,3 +25,8 @@ def test_env_override_parses_yaml_scalars() -> None:
 
 def test_risk_order_is_total() -> None:
     assert sorted(RISK_ORDER, key=RISK_ORDER.get) == ["read", "low", "medium", "high", "critical"]
+
+
+def test_shell_allowlist_contains_dev_tools() -> None:
+    allow = load_permissions().shell_allowlist
+    assert {"gh", "supabase", "dart", "npx", "adb", "docker"} <= set(allow)

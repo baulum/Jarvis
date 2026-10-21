@@ -40,8 +40,15 @@ class ShellConnector(Connector):
 
     async def health(self) -> Health:
         allow = self.state.permissions.shell_allowlist
-        missing = [b for b in allow if shutil.which(b) is None]
+        missing = [b for b in allow if shutil.which(b, path=self._search_path()) is None]
         return Health("ok", f"{len(allow) - len(missing)} Programme erlaubt", details={"not_installed": missing})
+
+    def _search_path(self) -> str:
+        """PATH for allowlisted programs: the core runs under launchd without a shell profile, so Flutter, Homebrew and
+        the Android SDK are added (``coding.extra_path`` is shared with the coding runner)."""
+        extra = [os.path.expanduser(str(p)) for p in getattr(self.state.settings.coding, "extra_path", None) or []]
+        fixed = ["/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/Library/Android/sdk/platform-tools")]
+        return ":".join([os.environ.get("PATH", ""), *extra, *fixed])
 
     def tools(self) -> list[ToolSpec]:
         async def run(ctx: ToolContext, a: dict[str, Any]) -> Any:
@@ -53,7 +60,8 @@ class ShellConnector(Connector):
                 raise ToolUserError(f"'{exe}' ist nicht in der Shell-Allowlist")
             if any(set(arg) & _FORBIDDEN_ARG_CHARS for arg in argv[1:]):
                 raise ToolUserError("Argumente mit Shell-Sonderzeichen sind nicht erlaubt")
-            path = shutil.which(exe)
+            search_path = self._search_path()
+            path = shutil.which(exe, path=search_path)
             if path is None:
                 raise ToolUserError(f"{exe} ist nicht installiert")
             cwd = Path(os.path.expanduser(a.get("cwd") or "~")).resolve()
@@ -61,6 +69,7 @@ class ShellConnector(Connector):
             if not cwd.is_relative_to(home):
                 raise ToolUserError("Arbeitsverzeichnis muss im Benutzerordner liegen")
             env = {k: v for k, v in os.environ.items() if not k.startswith(("JARVIS_SECRET", "AWS_", "GITHUB_TOKEN"))}
+            env["PATH"] = search_path
             proc = await asyncio.create_subprocess_exec(
                 path,
                 *argv[1:],

@@ -95,6 +95,12 @@ shell_allowlist:
   - python3
   - uv
   - flutter
+  - dart
+  - gh
+  - supabase
+  - npx
+  - adb
+  - docker
   - brew
   - df
   - du
