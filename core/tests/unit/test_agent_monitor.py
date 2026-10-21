@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import signal
@@ -162,7 +163,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     )
     runner = CodingRunner(SimpleNamespace(settings=settings))  # type: ignore[arg-type]
     jid = uuid.uuid4()
-    job = SimpleNamespace(id=jid, status="running", title="T", model=None, effort=None, branch="b", result={}, created_at=T0, finished_at=None)
+    job = SimpleNamespace(id=jid, status="running", title="T", model=None, effort=None, branch="b", result={}, created_at=T0, finished_at=None, task_id=None)
     store[jid] = job
     runner._procs[jid] = SimpleNamespace(pid=4242, returncode=None)  # type: ignore[assignment]
     return SimpleNamespace(runner=runner, job=job, jid=jid, events=events, signals=signals)
@@ -188,6 +189,33 @@ async def test_cancel_of_paused_job_continues_before_terminating(env: SimpleName
     await env.runner.cancel(env.jid, "sir")
     assert [s for _, s in env.signals] == [signal.SIGCONT, signal.SIGTERM]
     assert env.job.status == "cancelled"
+
+
+async def test_cancel_reports_finished_so_waiting_steps_wake(env: SimpleNamespace) -> None:
+    tid = uuid.uuid4()
+    env.job.task_id = tid
+    await env.runner.cancel(env.jid, "sir")
+    finished = [d for t, d in env.events if t == "coding.finished"]
+    assert finished == [
+        {"job_id": str(env.jid), "status": "cancelled", "title": "T", "summary": "Abgebrochen", "task_id": str(tid)}
+    ]
+    assert await env.runner.cancel(env.jid, "sir") is False  # already cancelled: no second event
+    assert len([t for t, _ in env.events if t == "coding.finished"]) == 1
+
+
+async def test_pause_stops_the_time_budget_and_resume_restores_it(env: SimpleNamespace) -> None:
+    r = env.runner
+    loop = asyncio.get_running_loop()
+    async with asyncio.timeout(600) as budget:
+        r._timeouts[env.jid] = budget
+        left_before = budget.when() - loop.time()  # type: ignore[operator]
+        await r.pause(env.jid, "sir")
+        assert budget.when() is None  # cannot fire while the process is stopped
+        await asyncio.sleep(0.05)
+        await r.resume(env.jid, "sir")
+        left_after = budget.when() - loop.time()  # type: ignore[operator]
+        assert left_before - 1 < left_after <= left_before  # the pause did not count
+    assert env.jid not in r._budget_left
 
 
 async def test_send_message_queues_and_interrupts_on_request(env: SimpleNamespace) -> None:

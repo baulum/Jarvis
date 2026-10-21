@@ -30,6 +30,7 @@ _CATEGORY = {
     "task.input_required": "task",
     "approval.requested": "approval",
     "coding.finished": "task",
+    "coding.interrupted": "error",
     "memory.pending": "system",
     "system.critical": "error",
 }
@@ -55,7 +56,9 @@ def _alert_for(event: str, title: str, body: str, level: str, data: dict[str, An
         title,
         body,
         "critical" if level == "critical" else "warning" if level == "warning" else "info",
-        event_key=f"{event}:{key_id}",
+        # one key per notification: a retried job/task that finishes again must notify again (the push dedupe
+        # would otherwise drop it for 24 h because the job id alone is the same)
+        event_key=f"{event}:{key_id}:{nid}",
         deep_link=link,
         data={**{k: data[k] for k in ("task_id", "job_id") if data.get(k)}, **extra},
         source=event,
@@ -158,9 +161,12 @@ class Notifier:
         elif ev.type == "approval.requested":
             await self.notify(ev.type, "Freigabe erforderlich", str(d.get("summary")), level="warning", data=d)
         elif ev.type == "coding.finished":
+            if d.get("status") == "cancelled":
+                return  # Sir (or the kill switch) stopped it – no message about his own action
+            label = {"completed": "fertig", "failed": "fehlgeschlagen"}.get(str(d.get("status")), str(d.get("status")))
             await self.notify(
                 ev.type,
-                f"Coding-Job {d.get('status')}: {d.get('title')}",
+                f"Coding-Job {label}: {d.get('title')}",
                 str(d.get("summary", ""))[:500],
                 level="info" if d.get("status") == "completed" else "warning",
                 data=d,

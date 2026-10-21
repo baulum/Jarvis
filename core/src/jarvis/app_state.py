@@ -6,6 +6,7 @@ import asyncio
 import logging
 import shutil
 import time
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -53,8 +54,8 @@ from jarvis.mobile.calls import CallService
 from jarvis.mobile.gateway import GatewayServer
 from jarvis.mobile.livekit_server import LiveKitServer
 from jarvis.mobile.location import LocationStore
-from jarvis.mobile.phone_control import PhoneControl
 from jarvis.mobile.pairing import PairingService
+from jarvis.mobile.phone_control import PhoneControl
 from jarvis.mobile.push import PushService
 from jarvis.secrets import secret_store
 from jarvis.security.audit import audit
@@ -206,9 +207,8 @@ class AppState:
         )
 
     def _register_mobile_tools(self) -> None:
-        from jarvis.mobile.tools import mobile_tools
-
         from jarvis.mobile.phone_tools import phone_tools
+        from jarvis.mobile.tools import mobile_tools
 
         for spec in (*mobile_tools(self), *phone_tools(self)):
             self.registry.register(spec)
@@ -225,7 +225,7 @@ class AppState:
             await self.memory.start(self.settings.paths.data_dir / "memory-embedding-model")
         except Exception:
             logger.exception("Memory engine failed to start (embeddings?)")
-        await self.coding.resume_interrupted()
+        interrupted_jobs = await self.coding.resume_interrupted()
         await self.tasks.start()
         await self.scheduler.start()
         await self.backup.start()
@@ -247,8 +247,9 @@ class AppState:
                 logger.warning("Hermes not provisioned yet – run `jarvisctl setup-hermes`")
         bus.subscribe("system.killswitch", self._on_killswitch)
         await audit("system", "core.start", details={"version": VERSION})
+        if interrupted_jobs:
+            spawn(self._report_interrupted_jobs(interrupted_jobs), name="coding-interrupted")
         if self.settings.mobile.enabled:
-            from jarvis.events import spawn
             from jarvis.mobile.alerts import Alert
 
             spawn(
@@ -263,6 +264,17 @@ class AppState:
                     )
                 ),
                 name="mobile-online",
+            )
+
+    async def _report_interrupted_jobs(self, jobs: list[tuple[uuid.UUID, str]]) -> None:
+        """A restart ends running coding jobs; without a notification they would just sit there as 'failed'."""
+        for job_id, title in jobs:
+            await self.notifier.notify(
+                "coding.interrupted",
+                f"Coding-Job unterbrochen: {title}",
+                "Jarvis wurde neu gestartet. Mit „Wiederholen“ setzt Claude Code die Arbeit an derselben Stelle fort.",
+                level="warning",
+                data={"job_id": str(job_id), "status": "interrupted", "title": title},
             )
 
     async def _start_claude_agent(self) -> None:
@@ -289,6 +301,7 @@ class AppState:
         if self.agent is not None:
             await self.agent.stop()
         await self.hermes_supervisor.stop()
+        await self.coding.shutdown()
         await self.tasks.stop()
         await self.scheduler.stop()
         await self.backup.stop()
