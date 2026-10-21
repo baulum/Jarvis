@@ -115,6 +115,7 @@ def call_agent(question: str | None) -> tuple[Any, FakeOrchestrator, list[str]]:
 
     agent.state = SimpleNamespace(orchestrator=orch, personality=SimpleNamespace(owner_title="Sir"))
     agent.call_id = uuid.uuid4()
+    agent.greeting = ""
     agent.principal = SimpleNamespace()
     agent.session_id = uuid.uuid4()
     agent.call_context = build_call_context(question, reason="agent") if question else {}
