@@ -217,6 +217,12 @@ coding:
   # Zusätzlich zum Job-Worktree (exakte Pfade, keine Wildcards). Lesen: Edit/Write dort werden verweigert.
   extra_read_dirs: [/Users/paul/Downloads, /Users/paul/Developer/Jarvis-Workspaces/repos]
   extra_write_dirs: [/Users/paul/Developer/Projects/night-motion-graphics]
+  # Standard-Ablauf nach einem GRÜNEN Job: Job-Branch pushen → PR (kein Draft) → PR mergen → Supabase deployen
+  # (db push / functions deploy, nur wenn supabase/ im Projekt liegt). Rot/Fehler/fehlende Rechte: nichts davon.
+  auto_ship: true
+  ship_base_branch: main
+  ship_merge_method: squash        # squash | merge | rebase
+  supabase_command: supabase       # Programmname im PATH oder absoluter Pfad
 
 browser:
   headless: true

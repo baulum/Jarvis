@@ -61,7 +61,10 @@ Overrides in `permissions.yaml` können Risiken nur **erhöhen**.
   `claude auth status`. Es werden keine OAuth-Tokens gelesen oder weitergegeben.
 
 ## Isolierte Coding-Jobs
-- Eigener Git-Worktree je Job, nur auf `jarvis/*`-Branches; Push/PR nur nach Freigabe (`high`).
+- Eigener Git-Worktree je Job, nur auf `jarvis/*`-Branches. Die Auslieferung nach einem **grünen** Job (Push des Job-Branches,
+  PR, Merge nach `main`, Supabase-Deploy) läuft als Standard automatisch im Runner (`coding.auto_ship`, abschaltbar) –
+  ohne Einzelfreigabe, aber nie bei rotem Ergebnis oder Fehler, nie per Direkt-Push auf `main`, und jeder Lauf wird als
+  `coding.ship` auditiert. Manuelles Nachholen (`coding_ship_job`) und Draft-PR (`coding_prepare_pr`) bleiben `high`.
 - `claude --restricted` ignoriert Projekt-/Benutzer-Settings und Hooks fremder Repos, Datei-Tools auf den Worktree beschränkt.
 - `--strict-mcp-config` (keine MCP-Server aus dem Repo), Tool-Allowlist, `--permission-prompts none`.
 - macOS-Seatbelt-Sandbox für Bash mit `failIfUnavailable`, Netzwerk-Allowlist (npm, PyPI, GitHub, Fonts-CDNs).

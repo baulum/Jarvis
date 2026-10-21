@@ -37,6 +37,7 @@ from jarvis.db import session_scope
 from jarvis.db.models import CodingJob
 from jarvis.events import bus
 from jarvis.security.audit import audit
+from jarvis.tools.executor import ToolUserError
 
 if TYPE_CHECKING:
     from jarvis.app_state import AppState
@@ -128,6 +129,38 @@ NETWORK_ALLOWLIST = [
     "cdn.jsdelivr.net",
     "unpkg.com",
 ]
+
+
+_GITHUB_REMOTE_RE = re.compile(r"github\.com[:/]+([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
+_SUPABASE_PATH_RE = re.compile(r"^(?:(?P<root>.+)/)?supabase/(?P<kind>functions|migrations)/(?P<rest>.+)$")
+
+
+def parse_github_repo(url: str) -> str | None:
+    """``owner/name`` of a github.com remote URL (https, ssh or scp style), else None."""
+    m = _GITHUB_REMOTE_RE.search(url.strip())
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
+def supabase_projects(paths: list[str]) -> dict[str, dict[str, Any]]:
+    """Supabase parts found in a file listing: ``{project dir: {"functions": [...], "migrations": n}}``.
+    The project dir is "" for ``supabase/`` at the repo root. Shared code (``_shared``) is not a function."""
+    found: dict[str, dict[str, Any]] = {}
+    for path in paths:
+        m = _SUPABASE_PATH_RE.match(path)
+        if m is None:
+            continue
+        info = found.setdefault(m["root"] or "", {"functions": set(), "migrations": 0})
+        first, _, tail = m["rest"].partition("/")
+        if m["kind"] == "migrations":
+            if not tail and first.endswith(".sql"):
+                info["migrations"] += 1
+        elif tail and not first.startswith(("_", ".")):
+            info["functions"].add(first)
+    return {
+        root: {"functions": sorted(info["functions"]), "migrations": info["migrations"]}
+        for root, info in sorted(found.items())
+        if info["functions"] or info["migrations"]
+    }
 
 
 def slug(text: str, n: int = 40) -> str:
@@ -721,30 +754,38 @@ class CodingRunner:
                     await self._git(Path(worktree), "diff", "--stat", "HEAD~1", "HEAD", check=False) if commit else ""
                 )
                 status = "completed" if not result.get("is_error") and (tests is None or tests["passed"]) else "failed"
-                await self._finish(
-                    job_id,
-                    title,
-                    status,
-                    {
-                        "summary": str(result.get("result", ""))[:4000],
-                        "num_turns": result.get("num_turns"),
-                        "duration_ms": result.get("duration_ms"),
-                        "tests": tests,
-                        "commit": commit,
-                        "diffstat": diffstat[-3000:],
-                        "branch": branch,
-                        "worktree": worktree,
-                        "permission_denials": result.get("permission_denials", [])[:20],
-                        "model": job_model,
-                        "effort": job_effort,
-                        "retries": result.get("_retries", 0),
-                        "error": (
-                            ("; ".join(result.get("errors") or []) or str(result.get("result", "")))[:1000]
-                            if result.get("is_error")
-                            else None
-                        ),
-                    },
-                )
+                payload: dict[str, Any] = {
+                    "summary": str(result.get("result", ""))[:4000],
+                    "num_turns": result.get("num_turns"),
+                    "duration_ms": result.get("duration_ms"),
+                    "tests": tests,
+                    "commit": commit,
+                    "diffstat": diffstat[-3000:],
+                    "branch": branch,
+                    "worktree": worktree,
+                    "permission_denials": result.get("permission_denials", [])[:20],
+                    "model": job_model,
+                    "effort": job_effort,
+                    "retries": result.get("_retries", 0),
+                    "error": (
+                        ("; ".join(result.get("errors") or []) or str(result.get("result", "")))[:1000]
+                        if result.get("is_error")
+                        else None
+                    ),
+                }
+                if self.cfg.auto_ship:
+                    # Standard-Ablauf: nur ein grünes Ergebnis wird gepusht, per PR gemergt und deployt.
+                    payload["ship"] = await self._ship_flow(
+                        job_id,
+                        repo=repo,
+                        worktree=wt_path,
+                        branch=branch,
+                        title=title,
+                        body=self._pr_body(payload),
+                        green=status == "completed",
+                        reason="Der Job ist fehlgeschlagen" if result.get("is_error") else "Die Tests sind rot",
+                    )
+                await self._finish(job_id, title, status, payload)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -1045,28 +1086,222 @@ class CodingRunner:
             task_id = job.task_id
         await audit("coding-runner", f"coding.{status}", target=str(job_id), details={"title": title})
         await bus.publish("coding.updated", job_id=str(job_id), status=status, title=title)
+        summary = str(result.get("summary") or result.get("error") or "")
+        ship_note = str((result.get("ship") or {}).get("message") or "")
+        if ship_note:  # the notification must say what happened to main and Supabase
+            summary = f"{summary[:500]}\n{ship_note}"
         await bus.publish(
             "coding.finished",
             job_id=str(job_id),
             status=status,
             title=title,
-            summary=str(result.get("summary") or result.get("error") or "")[:800],
+            summary=summary[:800],
             task_id=str(task_id) if task_id else None,
         )
 
+    # ------------------------------------------------------------------ ship (standard flow after a green job)
+    @staticmethod
+    def _pr_body(res: dict[str, Any]) -> str:
+        tests = res.get("tests")
+        verdict = "nicht konfiguriert" if tests is None else ("bestanden" if tests.get("passed") else "fehlgeschlagen")
+        return f"{res.get('summary', '')}\n\n---\nTests: {verdict}\nErstellt von Jarvis mit Claude Code."
+
+    def _github(self) -> Any:
+        gh = self.state.connectors.connectors.get("github")
+        if gh is None or not gh.active:
+            raise CodingError("GitHub-Connector ist nicht eingerichtet")
+        return gh
+
+    async def _exec(self, cwd: Path, argv: list[str], timeout_s: float) -> tuple[int | None, str]:
+        """Runs a command (no shell); returns (exit code, combined output tail). Exit code None = timeout."""
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=cwd,
+            env=self._env(),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
+        )
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+        except TimeoutError:
+            await self._stop_process(proc)
+            return None, f"Timeout nach {timeout_s / 60:g} Minuten"
+        return proc.returncode, out.decode(errors="replace")[-600:]
+
+    async def ship(self, job_id: uuid.UUID, actor: str) -> dict[str, Any]:
+        """Runs the ship flow again for a finished green job whose delivery did not complete (e.g. missing
+        permission, Supabase CLI not installed). Continues after a PR / merge that already happened."""
+        async with session_scope() as s:
+            job = await s.get(CodingJob, job_id)
+            if job is None or job.status != "completed":
+                raise CodingError("Nur abgeschlossene (grüne) Jobs können ausgeliefert werden")
+            repo, wt, branch, title, res = (
+                Path(job.repo_path),
+                Path(job.worktree_path),
+                job.branch,
+                job.title,
+                dict(job.result or {}),
+            )
+        prior = res.get("ship") or {}
+        if prior.get("state") == "shipped":
+            raise CodingError("Job ist bereits ausgeliefert")
+        tests = res.get("tests")
+        ship = await self._ship_flow(
+            job_id,
+            repo=repo,
+            worktree=wt,
+            branch=branch,
+            title=title,
+            body=self._pr_body(res),
+            green=tests is None or bool(tests.get("passed")),
+            reason="Die Tests sind rot",
+            prior=prior,
+            actor=actor,
+        )
+        await self._update(job_id, result={**res, "ship": ship})
+        await bus.publish("coding.updated", job_id=str(job_id), status="completed", title=title)
+        return ship
+
+    async def _ship_flow(
+        self,
+        job_id: uuid.UUID,
+        *,
+        repo: Path,
+        worktree: Path,
+        branch: str,
+        title: str,
+        body: str,
+        green: bool,
+        reason: str,
+        prior: dict[str, Any] | None = None,
+        actor: str = "coding-runner",
+    ) -> dict[str, Any]:
+        """Green: push the job branch, open a (non-draft) PR, merge it, deploy Supabase. Red / error / missing
+        permission: nothing reaches main or Supabase, the job branch stays. Never raises (except cancellation);
+        the outcome is the returned dict, stored as ``result["ship"]``."""
+        base = self.cfg.ship_base_branch
+        prior = prior or {}
+        ship: dict[str, Any] = {
+            "state": "not_shipped",
+            "stage": None,
+            "message": "",
+            "branch": branch,
+            "base": base,
+            "pr": prior.get("pr"),
+            "merged": bool(prior.get("merged")),
+            "supabase": None,
+        }
+        if not green:
+            ship["message"] = (
+                f"Nicht ausgeliefert: {reason}. Nichts gepusht, gemergt oder deployt; "
+                f"Job-Branch {branch} bleibt bestehen."
+            )
+        elif getattr(getattr(self.state, "kill_switch", None), "engaged", False):
+            ship["message"] = f"Nicht ausgeliefert: Not-Aus aktiv. Job-Branch {branch} bleibt bestehen."
+        else:
+            try:
+                if not ship["merged"]:
+                    await self._ship_merge(ship, worktree, branch, title, body)
+                if ship["merged"]:
+                    await self._ship_deploy(ship, repo)
+            except (CodingError, ToolUserError) as e:
+                pr = ship["pr"]
+                ship["state"] = "failed"
+                aftermath = (
+                    f"Der Merge ist bereits erfolgt (PR #{pr['number']}), nur der Deploy fehlt."
+                    if ship["merged"] and pr
+                    else f"Nichts gemergt oder deployt; Job-Branch {branch} bleibt bestehen"
+                    + (f", PR: {pr['url']}." if pr else ".")
+                )
+                ship["message"] = f"Auslieferung fehlgeschlagen ({ship['stage']}): {e}. {aftermath}"[:900]
+        await audit(
+            actor,
+            "coding.ship",
+            target=str(job_id),
+            details={k: ship[k] for k in ("state", "stage", "pr", "merged", "supabase", "message")},
+        )
+        return ship
+
+    async def _ship_merge(self, ship: dict[str, Any], wt: Path, branch: str, title: str, body: str) -> None:
+        base = ship["base"]
+        ship["stage"] = "push"
+        if await self._git(wt, "status", "--porcelain"):
+            raise CodingError("Worktree enthält nicht committete Änderungen")
+        origin = await self._git(wt, "remote", "get-url", "origin", check=False)
+        if not origin:
+            raise CodingError("Repository hat kein 'origin'-Remote")
+        repo_name = parse_github_repo(origin)
+        if repo_name is None:
+            raise CodingError(f"origin ist kein GitHub-Repository: {origin}")
+        gh = self._github()
+        await self._git(wt, "fetch", "origin", base)
+        if await self._git(wt, "rev-list", "--count", f"origin/{base}..HEAD") == "0":
+            ship["message"] = f"Nichts auszuliefern: keine Änderungen gegenüber {base}."
+            return
+        head = await self._git(wt, "rev-parse", "HEAD")
+        await self._git(wt, "push", "-u", "origin", branch)
+        if not ship["pr"]:
+            ship["stage"] = "pr"
+            pr = await gh.create_pr(repo_name, branch, base, f"Jarvis: {title}", body[:60000], draft=False)
+            ship["pr"] = {"number": pr.get("number"), "url": pr.get("html_url")}
+        ship["stage"] = "merge"
+        merged = await gh.merge_pr(repo_name, ship["pr"]["number"], sha=head, method=self.cfg.ship_merge_method)
+        if not merged.get("merged", True):
+            raise CodingError(str(merged.get("message") or "GitHub hat den Merge abgelehnt"))
+        ship["merged"] = True
+        ship["merge_sha"] = merged.get("sha")
+
+    async def _ship_deploy(self, ship: dict[str, Any], repo: Path) -> None:
+        """After the merge: deploy Supabase migrations / edge functions found on the merged base branch."""
+        base, pr = ship["base"], ship["pr"]
+        ship["stage"] = "deploy"
+        await self._git(repo, "fetch", "origin", base)
+        listing = await self._git(repo, "ls-tree", "-r", "--name-only", f"origin/{base}")
+        projects = supabase_projects(listing.splitlines())
+        merged_note = f"PR #{pr['number']} in {base} gemergt ({pr['url']})."
+        if not projects:
+            ship["supabase"] = {"present": False, "note": "Supabase nicht im Projekt – übersprungen"}
+            ship["state"] = "shipped"
+            ship["message"] = f"Ausgeliefert: {merged_note} Supabase nicht im Projekt – Deploy übersprungen."
+            return
+        ship["supabase"] = {"present": True, "projects": projects, "deployed": []}
+        cli = _which(self.cfg.supabase_command, None)
+        if cli is None:
+            raise CodingError(f"Supabase CLI '{self.cfg.supabase_command}' nicht gefunden")
+        # The CLI works on the local checkout (project link lives there): bring it to the merged state first.
+        if await self._git(repo, "rev-parse", "--abbrev-ref", "HEAD") != base:
+            raise CodingError(f"Repository ist nicht auf {base} ausgecheckt – lokaler Stand nicht aktualisierbar")
+        if await self._git(repo, "status", "--porcelain", "--untracked-files=no"):
+            raise CodingError("Repository hat nicht committete Änderungen – lokaler Stand nicht aktualisierbar")
+        await self._git(repo, "merge", "--ff-only", f"origin/{base}")
+        timeout_s = self.cfg.supabase_timeout_minutes * 60
+        for root, info in projects.items():
+            steps = []
+            if info["migrations"]:
+                steps.append(("db push", [cli, "db", "push", "--yes"]))
+            if info["functions"]:
+                steps.append(("functions deploy", [cli, "functions", "deploy"]))
+            for name, argv in steps:
+                code, out = await self._exec(repo / root, argv, timeout_s)
+                if code != 0:
+                    raise CodingError(f"supabase {name} in '{root or '.'}' fehlgeschlagen (Exit {code}): {out.strip()}")
+                ship["supabase"]["deployed"].append(f"{root + ': ' if root else ''}{name}")
+        ship["state"] = "shipped"
+        ship["message"] = f"Ausgeliefert: {merged_note} Supabase deployt ({', '.join(ship['supabase']['deployed'])})."
+
     async def prepare_pr(self, job_id: uuid.UUID, repo_full_name: str, base: str = "main") -> dict[str, Any]:
+        """Manual opt-in: push the job branch and open a *draft* PR (not merged, nothing deployed)."""
         async with session_scope() as s:
             job = await s.get(CodingJob, job_id)
             if job is None or job.status != "completed":
                 raise CodingError("Nur abgeschlossene Jobs können als PR vorbereitet werden")
             wt, branch, title, res = Path(job.worktree_path), job.branch, job.title, dict(job.result or {})
-        gh = self.state.connectors.connectors.get("github")
-        if gh is None or not gh.active:
-            raise CodingError("GitHub-Connector ist nicht eingerichtet")
+        gh = self._github()
         remotes = await self._git(wt, "remote")
         if "origin" not in remotes.split():
             raise CodingError("Repository hat kein 'origin'-Remote")
         await self._git(wt, "push", "-u", "origin", branch)
-        body = f"{res.get('summary', '')}\n\n---\nTests: {res.get('tests')}\nErstellt von Jarvis mit Claude Code."
-        pr = await gh.create_pr(repo_full_name, branch, base, f"Jarvis: {title}", body[:60000])  # type: ignore[attr-defined]
+        pr = await gh.create_pr(repo_full_name, branch, base, f"Jarvis: {title}", self._pr_body(res)[:60000])
         return {"number": pr.get("number"), "url": pr.get("html_url")}

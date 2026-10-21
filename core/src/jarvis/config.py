@@ -217,6 +217,15 @@ class CodingCfg(_Strict):
     # Read dirs are added with --add-dir and Edit/Write there are denied ("~" is expanded, missing dirs are skipped).
     extra_read_dirs: list[Path] = Field(default_factory=list)
     extra_write_dirs: list[Path] = Field(default_factory=list)
+    # Standard-Ablauf nach einem grünen Job: Job-Branch pushen → PR (kein Draft) → PR mergen → Supabase deployen.
+    # Rotes Ergebnis oder Fehler: nichts gepusht/gemergt/deployt, der Job-Branch bleibt. False = nur committen.
+    auto_ship: bool = True
+    ship_base_branch: str = "main"
+    ship_merge_method: Literal["squash", "merge", "rebase"] = "squash"
+    # Supabase CLI (Programmname oder absoluter Pfad); nur nötig, wenn das Projekt supabase/functions oder
+    # supabase/migrations enthält.
+    supabase_command: str = "supabase"
+    supabase_timeout_minutes: int = 10
 
 
 class BrowserCfg(_Strict):
