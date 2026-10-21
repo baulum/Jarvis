@@ -53,6 +53,19 @@ void main() {
     expect(spansText(p.spans), 'mobile_call_owner und 2 * 3 und **offen');
   });
 
+  test('emphasis nested in bold closes at a shared marker run', () {
+    final p = (parseMarkdown('**Fett *mit kursiv***').single as MdParagraph).spans;
+    expect(spansText(p), 'Fett mit kursiv');
+    expect(p.where((s) => s.bold && s.italic).single.text, 'mit kursiv');
+    expect(spansText((parseMarkdown('**fett***').single as MdParagraph).spans), 'fett*');
+  });
+
+  test('list indentation with tabs counts like spaces', () {
+    final l = parseMarkdown('\t- eins\n\t- zwei\n\t\t- unter').single as MdList;
+    expect(l.items.length, 2);
+    expect(l.items[1][1], isA<MdList>());
+  });
+
   test('headings, paragraphs and rules', () {
     final b = parseMarkdown('# Titel\n\nErster Absatz\nzweite Zeile\n\n---\n\n### Klein');
     expect(b.map((x) => x.runtimeType), [MdHeading, MdParagraph, MdRule, MdHeading]);

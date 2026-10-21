@@ -186,7 +186,7 @@ function blocks(lines: string[]): MdBlock[] {
 
 function parseList(lines: string[], start: number): [MdList, number] {
   const first = LIST.exec(at(lines, start));
-  const base = first ? grp(first, 1).length : 0;
+  const base = first ? indentOf(grp(first, 1)) : 0;
   const marker = first ? grp(first, 2) : "-";
   const ordered = isOrdered(marker);
   const startNo = ordered ? parseInt(marker, 10) || 1 : 1;
@@ -195,7 +195,7 @@ function parseList(lines: string[], start: number): [MdList, number] {
   let i = start;
   while (i < lines.length) {
     const m = LIST.exec(at(lines, i));
-    if (!m || grp(m, 1).length !== base || isOrdered(grp(m, 2)) !== ordered) break;
+    if (!m || indentOf(grp(m, 1)) !== base || isOrdered(grp(m, 2)) !== ordered) break;
     const task = TASK.exec(grp(m, 3));
     checked.push(task ? grp(task, 1) !== " " : null);
     const item = [task ? grp(m, 3).slice(task[0].length) : grp(m, 3)];
@@ -223,7 +223,7 @@ function parseList(lines: string[], start: number): [MdList, number] {
     while (k < lines.length && at(lines, k).trim() === "") k++;
     if (k > i && k < lines.length) {
       const n = LIST.exec(at(lines, k));
-      if (n && grp(n, 1).length === base && isOrdered(grp(n, 2)) === ordered) i = k;
+      if (n && indentOf(grp(n, 1)) === base && isOrdered(grp(n, 2)) === ordered) i = k;
     }
   }
   return [{ type: "list", ordered, start: startNo, items, checked, tasks: checked.map(() => null) }, i];
@@ -259,6 +259,16 @@ function closeStrong(s: string, marker: string, from: number): number {
     j = s.indexOf(marker, j + 1);
   }
   return -1;
+}
+
+/** Closing `**` / `__`. In `**a *b***` the closing run also ends the inner emphasis: strong is its last two markers. */
+function closeDouble(s: string, c: string, from: number): number {
+  const j = closeStrong(s, c + c, from);
+  if (j === -1) return j;
+  let end = j;
+  while (ch(s, end) === c) end++;
+  const open = [...s.slice(from, j)].filter((x) => x === c).length % 2 === 1;
+  return end - j > 2 && open ? end - 2 : j;
 }
 
 function closeEm(s: string, c: string, from: number): number {
@@ -330,7 +340,7 @@ function inline(s: string, st: Style, href: string | undefined, out: MdSpan[]): 
           }
         }
         if (s.startsWith(c.repeat(2), i) && i + 2 < s.length && !isSpace(ch(s, i + 2))) {
-          const j = closeStrong(s, c.repeat(2), i + 2);
+          const j = closeDouble(s, c, i + 2);
           if (j !== -1) {
             flush();
             inline(s.slice(i + 2, j), { ...st, bold: true }, href, out);

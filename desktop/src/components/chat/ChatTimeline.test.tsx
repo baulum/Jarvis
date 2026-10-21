@@ -3,12 +3,19 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { toggleCheck } = vi.hoisted(() => ({ toggleCheck: vi.fn(async () => undefined) }));
+const { toggleCheck, pushToast, openExternal, copyText } = vi.hoisted(() => ({
+  toggleCheck: vi.fn(async () => undefined),
+  pushToast: vi.fn(),
+  openExternal: vi.fn(async (_url: string) => undefined),
+  copyText: vi.fn(async (_text: string) => true),
+}));
 vi.mock("../../store/app", async () => {
   const { create } = await import("zustand");
-  const useApp = create(() => ({ toggleCheck }));
+  const useApp = create(() => ({ toggleCheck, pushToast }));
   return { useApp, api: {} };
 });
+vi.mock("../../lib/native", () => ({ openExternal }));
+vi.mock("../../lib/clipboard", () => ({ copyText }));
 vi.mock("./RouteMap", () => ({
   default: ({ display }: { display: { routes: unknown[]; start: { label: string } } }) => (
     <div data-testid="route-map">
@@ -23,7 +30,7 @@ import { ChatTimeline } from "./ChatTimeline";
 
 afterEach(() => {
   cleanup();
-  toggleCheck.mockClear();
+  vi.clearAllMocks();
 });
 
 const item = (id: string, seq: number, kind: TimelineEvent["kind"], data: Record<string, unknown>, turn = "t1"): TimelineEvent =>
@@ -66,6 +73,19 @@ describe("Markdown", () => {
     expect(onToggle).toHaveBeenCalledWith(2, true);
     fireEvent.click(boxes[0] as HTMLElement);
     expect(onToggle).toHaveBeenLastCalledWith(0, false);
+  });
+
+  it("renders bold, lists, tables and line breaks of an answer instead of raw markup", () => {
+    const { container } = render(
+      <Markdown text={"**Arbeit und Projekte**\nZweite Zeile\n\n- Kunde A\n- Kunde B\n\n| Projekt | Status |\n|---|---|\n| Website | offen |"} />,
+    );
+    expect(container.querySelector("strong")?.textContent).toBe("Arbeit und Projekte");
+    expect(container.querySelector("p br")).toBeTruthy();
+    expect(container.querySelectorAll("ul li")).toHaveLength(2);
+    expect(container.querySelectorAll("th")).toHaveLength(2);
+    expect(container.querySelectorAll("tbody td")).toHaveLength(2);
+    expect(container.textContent).not.toContain("*");
+    expect(container.textContent).not.toContain("- Kunde");
   });
 });
 
@@ -125,6 +145,67 @@ describe("ChatTimeline", () => {
       expect(container.textContent).not.toContain("*");
       cleanup();
     }
+  });
+
+  it("renders a Jarvis answer as HTML: bold, lists, table, heading, quote, code, strike, task list, link", () => {
+    const text = [
+      "## Tagesplan",
+      "",
+      "Heute ist **viel** los, ~~nichts~~ abgesagt:",
+      "",
+      "- **09:00** Standup",
+      "- Kunde *Müller*",
+      "  1. Agenda",
+      "",
+      "| Projekt | Status |",
+      "| --- | :---: |",
+      "| Website | **fertig** |",
+      "",
+      "> **Hinweis:** bestätigt",
+      "",
+      "- [x] E-Mails",
+      "- [ ] Rechnung",
+      "",
+      "```ts",
+      "const a = **1**;",
+      "```",
+      "",
+      "Mehr unter [Doku](https://example.com/doku).",
+    ].join("\n");
+    for (const compact of [false, true]) {
+      const { container } = render(<ChatTimeline thread={thread([item("a", 1, "message", { role: "assistant", text, status: "done" })])} compact={compact} />);
+      expect(screen.getByRole("heading", { level: 2, name: "Tagesplan" })).toBeTruthy();
+      expect([...container.querySelectorAll("p strong, li strong")].map((s) => s.textContent)).toEqual(["viel", "09:00", "Hinweis:"]);
+      expect(container.querySelector("del")?.textContent).toBe("nichts");
+      const list = container.querySelector("ul") as HTMLElement;
+      expect([...list.children].map((li) => li.tagName)).toEqual(["LI", "LI"]);
+      expect(list.querySelector("ol li")?.textContent).toBe("Agenda");
+      const table = screen.getByRole("table");
+      expect(within(table).getAllByRole("columnheader").map((c) => c.textContent)).toEqual(["Projekt", "Status"]);
+      expect(within(table).getByRole("cell", { name: "fertig" }).querySelector("strong")).toBeTruthy();
+      expect(container.querySelector("blockquote strong")?.textContent).toBe("Hinweis:");
+      expect(screen.getAllByRole("checkbox").map((b) => b.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+      expect(container.querySelector("pre code")?.textContent).toBe("const a = **1**;"); // code stays verbatim
+      expect(screen.getByRole("link", { name: "Doku" }).getAttribute("href")).toBe("https://example.com/doku");
+      // no Markdown syntax left outside the code block
+      const prose = container.cloneNode(true) as HTMLElement;
+      prose.querySelectorAll("pre").forEach((p) => p.remove());
+      expect(prose.textContent).not.toMatch(/\*|#|~~|\||\[[ x]\]|```|^>/m);
+      cleanup();
+    }
+  });
+
+  it("opens links in the system browser, never in the app, and copies them if that fails", async () => {
+    render(<ChatTimeline thread={thread([item("a", 1, "message", { role: "assistant", text: "[Doku](https://example.com/doku)" })])} />);
+    const link = screen.getByRole("link", { name: "Doku" });
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    link.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true); // the webview itself does not navigate
+    expect(openExternal).toHaveBeenCalledWith("https://example.com/doku");
+    openExternal.mockRejectedValueOnce(new Error("blocked"));
+    fireEvent.click(link);
+    await vi.waitFor(() => expect(pushToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Link kopiert" })));
+    expect(copyText).toHaveBeenCalledWith("https://example.com/doku");
   });
 
   it("expands a tool call with input, result and timing", () => {
