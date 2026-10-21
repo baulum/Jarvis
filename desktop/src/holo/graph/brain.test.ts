@@ -1,7 +1,8 @@
 // Graph model, live activity from real events, interface state, camera math and layout.
 import { describe, expect, it } from "vitest";
 import type { BusEvent } from "../../lib/types";
-import { boundingSphere, fitDistance, focusPose, pickNearest } from "./camera";
+import * as THREE from "three";
+import { boundingSphere, fitDistance, focusPose, freeFraction, pickNearest, viewShift } from "./camera";
 import { createLayout } from "./layout";
 import { applyLiveEvent, deriveJarvisState, emptyLive, expireLive } from "./live";
 import { buildModel, mergeDTO, searchLocal, seedPosition } from "./model";
@@ -149,6 +150,37 @@ describe("camera math", () => {
     expect(pickNearest(p, 2, vp, 200, 200, 150, 50, () => 8)).toBe(1);
     expect(pickNearest(p, 2, vp, 200, 200, 10, 190, () => 8)).toBe(-1);
     expect(pickNearest(p, 2, vp, 200, 200, 100, 100, () => 8, (i) => i !== 0)).toBe(-1); // filtered out
+  });
+
+  it("frames the brain in the space the chat dock leaves free", () => {
+    expect(freeFraction(0, 800)).toBe(1);
+    expect(freeFraction(200, 800)).toBe(0.75);
+    expect(freeFraction(790, 800)).toBeCloseTo(0.4); // never squeezed below 40 % of the window
+    expect(freeFraction(-5, 800)).toBe(1);
+    expect(viewShift(0, 800)).toBe(0);
+    expect(viewShift(300, 800)).toBe(150);
+    expect(viewShift(100, 0)).toBe(0);
+  });
+
+  it("puts the look-at point in the middle of the free area above the dock (real three.js projection)", () => {
+    const [w, h, dock] = [1200, 800, 320];
+    const cam = new THREE.PerspectiveCamera(42, w / h, 1, 6000);
+    cam.position.set(0, 0, 900);
+    cam.lookAt(0, 0, 0);
+    cam.updateMatrixWorld();
+    cam.setViewOffset(w, h, 0, viewShift(dock, h), w, h);
+    const v = new THREE.Vector3(0, 0, 0).project(cam);
+    const screenY = (-v.y * 0.5 + 0.5) * h;
+    expect(screenY).toBeCloseTo((h - dock) / 2, 3); // centre of the free strip, not of the window
+    expect((v.x * 0.5 + 0.5) * w).toBeCloseTo(w / 2, 3);
+    // a sphere fitted with the free fraction stays inside the free strip
+    const r = 100;
+    cam.position.set(0, 0, fitDistance(r, 42, freeFraction(dock, h)));
+    cam.updateMatrixWorld();
+    const top = new THREE.Vector3(0, r, 0).project(cam);
+    const bottom = new THREE.Vector3(0, -r, 0).project(cam);
+    expect((-top.y * 0.5 + 0.5) * h).toBeGreaterThanOrEqual(-1);
+    expect((-bottom.y * 0.5 + 0.5) * h).toBeLessThanOrEqual(h - dock + 1);
   });
 });
 

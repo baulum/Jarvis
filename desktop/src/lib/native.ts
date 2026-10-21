@@ -68,6 +68,28 @@ export async function saveBytes(defaultName: string, bytes: Uint8Array): Promise
   return path;
 }
 
+/** True when the app runs on macOS (features that drive the Mac itself are hidden elsewhere). */
+export function isMac(): boolean {
+  return typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+}
+
+/**
+ * Asks for an existing file – on macOS an .app bundle counts as a file. Returns the absolute path, or null when
+ * cancelled or outside the desktop app (a browser cannot reveal real paths).
+ */
+export async function pickPath(opts: { title: string; filterName: string; extensions: string[]; defaultPath?: string }): Promise<string | null> {
+  if (!inTauri()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({
+    title: opts.title,
+    multiple: false,
+    directory: false,
+    defaultPath: opts.defaultPath,
+    filters: [{ name: opts.filterName, extensions: opts.extensions }],
+  });
+  return typeof picked === "string" ? picked : null;
+}
+
 export async function autostartEnabled(): Promise<boolean | null> {
   if (!inTauri()) return null;
   const a = await import("@tauri-apps/plugin-autostart");

@@ -121,12 +121,16 @@ class TtsCfg(_Strict):
 
 
 class WakeupCfg(_Strict):
-    """"Jarvis, wach auf": a staged start-up show – sound, optional line and apps brought to the front."""
+    """"Jarvis, wach auf": a staged start-up show – sound, optional line and apps brought to the front.
 
-    sound: str = ""  # path to a custom sound (wav/mp3/aiff/m4a); empty = built-in power-up sound
+    Start values only: once Sir changes the routine in the desktop app, ``wakeup.json`` in the data dir
+    holds enabled/sound/volume/apps (see ``jarvis.voice.wakeup``)."""
+
+    enabled: bool = True
+    sound: str = ""  # path to an MP3 file; empty = built-in power-up sound
     volume: float = Field(default=1.0, ge=0.0, le=1.0)
     say: str = "Zu Ihren Diensten, Sir. Alle Systeme sind online."  # spoken after the sound ("" = silent)
-    apps: list[str] = Field(default_factory=list)  # app names / bundle ids / https URLs, opened in this order
+    apps: list[str] = Field(default_factory=list)  # app names / .app paths / bundle ids / https URLs, in this order
     app_delay_s: float = Field(default=0.8, ge=0.0, le=10.0)
 
 

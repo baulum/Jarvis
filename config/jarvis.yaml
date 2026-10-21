@@ -100,12 +100,15 @@ voice:
   conversation_window_s: 15      # nach einer Antwort hört Jarvis so lange weiter zu – ohne „Hey Jarvis“
   max_utterance_s: 30
   followup_window_s: 6         # keep listening after a reply without wake word
-  # "Jarvis, wach auf" – staged start-up show. "Jarvis, beende das Gespräch" ends the conversation (back to wake word).
+  # "Hey Jarvis, wake up" / "wach auf" (macOS) – MP3 + programs. "Jarvis, beende das Gespräch" ends the conversation.
+  # enabled/sound/volume/apps are start values only: the desktop app (Einstellungen → Weckroutine) stores Sir's
+  # choice in ~/Library/Application Support/Jarvis/wakeup.json, which then takes precedence.
   wakeup:
-    sound: ""                  # path to your own sound (wav/mp3/aiff/m4a); empty = built-in power-up sound
+    enabled: true
+    sound: ""                  # path to an MP3; empty = built-in power-up sound
     volume: 1.0
     say: "Zu Ihren Diensten, Sir. Alle Systeme sind online."   # "" = only the sound
-    apps: []                   # opened/brought to the front in this order, e.g. ["Visual Studio Code", "Safari", "https://github.com"]
+    apps: []                   # opened in this order (open -a), e.g. ["Visual Studio Code", "/Applications/Safari.app"]
     app_delay_s: 0.8
 
 telephony:

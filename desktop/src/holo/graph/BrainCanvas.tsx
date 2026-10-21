@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { useApp } from "../../store/app";
 import { useBrain } from "../store";
-import { boundingSphere, fitDistance, focusPose, pickNearest, type Vec3 } from "./camera";
+import { boundingSphere, fitDistance, focusPose, freeFraction, pickNearest, viewShift, type Vec3 } from "./camera";
 import { buildIconAtlas, iconIndex } from "./icons";
 import { deriveJarvisState, type JarvisState } from "./live";
 import type { LayoutRequest, LayoutResponse } from "./layout";
@@ -392,13 +392,23 @@ function Core() {
 }
 
 // ------------------------------------------------------------------ camera: focus requests, idle drift, picking
+/** Distance that frames the whole brain in the part of the window the chat dock leaves free. */
+function overviewDistance(model: GraphModel, camera: THREE.Camera, height: number) {
+  const sphere = boundingSphere(brainHandle.positions, model.nodes.map((n) => n.index), 0.85);
+  const free = freeFraction(useBrain.getState().occludedBottom, height);
+  return { sphere, distance: fitDistance(sphere.radius, (camera as THREE.PerspectiveCamera).fov, 1.05 * free) };
+}
+
 function CameraRig({ model, panelOpen }: { model: GraphModel; panelOpen: boolean }) {
   const controls = useRef<CameraControls>(null);
   const { camera, size, gl } = useThree();
   const lastFocus = useRef(0);
   const lastRecall = useRef(0);
+  /** when the last overview was framed – a later touch means Sir navigates himself and the zoom stays his */
+  const overviewAt = useRef(-1);
   brainHandle.camera = camera as THREE.PerspectiveCamera;
   brainHandle.size = { width: size.width, height: size.height };
+  const height = size.height;
 
   // frame the whole brain once the first layout has settled a little
   useEffect(() => {
@@ -417,24 +427,46 @@ function CameraRig({ model, panelOpen }: { model: GraphModel; panelOpen: boolean
       const fov = (camera as THREE.PerspectiveCamera).fov;
       const p = brainHandle.positions;
       if (s.focus.kind === "overview") {
-        const all = model.nodes.map((n) => n.index);
-        const sphere = boundingSphere(p, all, 0.85);
-        const d = fitDistance(sphere.radius, fov, 1.05);
+        const { sphere, distance: d } = overviewDistance(model, camera, height);
+        overviewAt.current = performance.now();
         void c.setLookAt(sphere.center[0], sphere.center[1] + d * 0.18, sphere.center[2] + d, ...sphere.center, true);
         return;
       }
+      overviewAt.current = -1;
       const ids = s.focus.kind === "node" ? [s.focus.id] : s.focus.ids;
       const idx = ids.map((id) => model.byId.get(id)).filter((x): x is number => x !== undefined);
       if (!idx.length) return;
       const sphere = boundingSphere(p, idx);
       const single = idx.length === 1;
       const n = single ? model.nodes[idx[0]!] : undefined;
-      const dist = single ? Math.max(90, nodeSize(n!) * 16) : fitDistance(sphere.radius, fov, 0.75);
+      const free = freeFraction(s.occludedBottom, height);
+      const dist = single ? Math.max(90, nodeSize(n!) * 16) : fitDistance(sphere.radius, fov, 0.75 * free);
       const cam: Vec3 = [camera.position.x, camera.position.y, camera.position.z];
       const pose = focusPose(cam, sphere.center, dist, panelOpen ? 0.22 : 0);
       void c.setLookAt(...pose.position, ...pose.lookAt, true);
     });
-  }, [camera, model, panelOpen]);
+  }, [camera, model, panelOpen, height]);
+
+  // the chat dock grew or shrank: while the overview is untouched, re-fit its zoom to the new free space
+  // (direction and idle rotation stay – only the distance changes)
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsub = useBrain.subscribe((s, prev) => {
+      if (s.occludedBottom === prev.occludedBottom) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const c = controls.current;
+        const b = useBrain.getState();
+        if (!c || b.selected || overviewAt.current < 0 || b.lastInteraction > overviewAt.current) return;
+        const { distance } = overviewDistance(model, camera, height);
+        void c.dollyTo(distance * Math.hypot(1, 0.18), true);
+      }, 250);
+    });
+    return () => {
+      clearTimeout(timer);
+      unsub();
+    };
+  }, [camera, model, height]);
 
   // pointer: hover + click picking on the CPU (cheap for thousands of nodes, no raycast geometry needed)
   useEffect(() => {
@@ -542,6 +574,31 @@ function CameraRig({ model, panelOpen }: { model: GraphModel; panelOpen: boolean
   );
 }
 
+// ------------------------------------------------------------------ safe area above the chat dock
+/**
+ * The canvas always fills the window; the chat dock floats over its lower part. Instead of resizing the canvas
+ * (re-allocating the drawing buffer while the dock animates), the projection is shifted up by half the covered
+ * height – no distortion, and labels/picking follow because they use the same projection matrix. Eased, so the
+ * brain glides with the dock.
+ */
+function SafeArea() {
+  const shift = useRef(0);
+  const applied = useRef({ w: 0, h: 0, y: 0 });
+  useFrame(({ camera, size }, dt) => {
+    const target = viewShift(useBrain.getState().occludedBottom, size.height);
+    shift.current += (target - shift.current) * Math.min(1, dt * 6);
+    if (Math.abs(target - shift.current) < 0.5) shift.current = target;
+    const y = Math.round(shift.current * 2) / 2;
+    const a = applied.current;
+    if (a.y === y && a.w === size.width && a.h === size.height) return;
+    applied.current = { w: size.width, h: size.height, y };
+    const cam = camera as THREE.PerspectiveCamera;
+    if (y === 0) cam.clearViewOffset();
+    else cam.setViewOffset(size.width, size.height, 0, y, size.width, size.height);
+  });
+  return null;
+}
+
 // ------------------------------------------------------------------ frame budget
 /** Renders on demand at a rate that leaves the GPU to speech recognition when it matters. */
 function FrameLimiter() {
@@ -611,6 +668,7 @@ export function BrainCanvas({ panelOpen }: { panelOpen: boolean }) {
         }}
       />
       <FrameLimiter />
+      <SafeArea />
       <Dust count={dust} />
       {model && (
         <>

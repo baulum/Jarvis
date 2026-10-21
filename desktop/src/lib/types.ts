@@ -515,6 +515,28 @@ export type SettingsResponse = Record<string, unknown> & {
   llm?: Record<string, unknown>;
 };
 
+/** "Hey Jarvis, wake up" – GET/PUT /api/voice/wakeup (stored in wakeup.json on the Mac). */
+export interface WakeupSettings {
+  enabled: boolean;
+  /** absolute path to the MP3; "" = built-in sound */
+  sound: string;
+  volume: number;
+  /** app names or .app paths, opened in this order */
+  apps: string[];
+  /** set when the configured MP3 is missing or invalid */
+  sound_error: string | null;
+  /** false when the core does not run on macOS */
+  supported: boolean;
+}
+
+export interface WakeupResult {
+  enabled: boolean;
+  sound: string;
+  sound_error: string | null;
+  opened: string[];
+  failed: { app: string; reason: string }[];
+}
+
 /** Envelope of every bus event sent over the WebSocket. */
 /** Unified event envelope (core/src/jarvis/events.py): who, what, when, which graph nodes. */
 export interface BusEvent<T = Record<string, unknown>> {

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import html
 import uuid
 from datetime import UTC, datetime
@@ -27,6 +26,7 @@ from jarvis.logging_setup import ring
 from jarvis.security.audit import audit, verify_chain
 from jarvis.security.auth import Principal, create_device, list_devices, revoke_device
 from jarvis.security.guards import rate_limiter
+from jarvis.voice import wakeup
 from jarvis.voice.speech import speakable
 
 router = APIRouter(prefix="/api")
@@ -1017,28 +1017,68 @@ async def voice_command(body: VoiceCommand, p: Principal = Actor) -> dict[str, b
     return {"ok": True}
 
 
+class WakeupBody(BaseModel):
+    enabled: bool | None = None
+    sound: str | None = Field(default=None, max_length=1024)  # "" removes the MP3
+    volume: float | None = Field(default=None, ge=0.0, le=1.0)
+    apps: list[str] | None = Field(default=None, max_length=wakeup.MAX_APPS)
+
+
+class WakeupRunBody(BaseModel):
+    play_sound: bool = False  # desktop "Testen"; the voice daemon plays the sound itself
+
+
+def _require_mac() -> None:
+    if not wakeup.supported():
+        raise HTTPException(409, "Die Weckroutine gibt es nur auf macOS.")
+
+
+@router.get("/voice/wakeup")
+async def voice_wakeup_settings(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    """Wake-up routine settings plus ``sound_error`` (MP3 missing/invalid) and ``supported`` (macOS)."""
+    return st.wakeup.to_dict()
+
+
+@router.put("/voice/wakeup")
+async def set_voice_wakeup(body: WakeupBody, st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    _require_mac()
+    patch = body.model_dump(exclude_none=True)
+    try:
+        st.wakeup.update(patch)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    await audit(p.label, "voice.wakeup.settings", details=patch)
+    return st.wakeup.to_dict()
+
+
 @router.post("/voice/wakeup")
-async def voice_wakeup(st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
-    """ "Jarvis, wach auf": bring the configured apps to the front one after the other (show effect).
+async def voice_wakeup(
+    body: WakeupRunBody | None = None, st: AppState = StateDep, p: Principal = Actor
+) -> dict[str, Any]:
+    """ "Hey Jarvis, wake up": open the configured programs one after the other (``open -a``).
 
-    Every app goes through the normal tool executor (kill switch, role ceiling, audit)."""
-    from jarvis.tools.registry import ToolContext
-
-    cfg = st.settings.voice.wakeup
-    opened: list[str] = []
-    failed: list[str] = []
-    for entry in cfg.apps:
-        if entry.startswith(("http://", "https://")):
-            tool, args = "mac_open_url", {"url": entry}
-        else:
-            args = {"bundleId": entry} if entry.count(".") >= 2 and " " not in entry else {"name": entry}
-            tool = "mac_open_app"
-        res = await st.executor.execute(tool, args, ToolContext(principal=p))
-        (opened if res.status == "ok" else failed).append(entry)
-        if cfg.app_delay_s:
-            await asyncio.sleep(cfg.app_delay_s)
-    await audit(p.label, "voice.wakeup", details={"opened": opened, "failed": failed})
-    return {"opened": opened, "failed": failed}
+    Programs that cannot be found are skipped and reported, the others still start. The MP3 is checked (and
+    played for the desktop test); the result goes to the desktop as ``voice.wakeup``."""
+    _require_mac()
+    s = st.wakeup.settings
+    sound_error = wakeup.check_sound(s.sound) if s.sound else None
+    if body is not None and body.play_sound and s.sound and sound_error is None:
+        sound_error = await wakeup.play_sound(s.sound, s.volume, max_wait_s=0.6)
+    if st.kill_switch.engaged:
+        opened: list[str] = []
+        failed = [{"app": a, "reason": "Not-Aus aktiv – nicht gestartet"} for a in s.apps]
+    else:
+        opened, failed = await wakeup.open_apps(s.apps, delay_s=st.settings.voice.wakeup.app_delay_s)
+    result: dict[str, Any] = {
+        "enabled": s.enabled,
+        "sound": s.sound,
+        "sound_error": sound_error,
+        "opened": opened,
+        "failed": failed,
+    }
+    await audit(p.label, "voice.wakeup", details={"opened": opened, "failed": failed, "sound_error": sound_error})
+    await bus.publish("voice.wakeup", **result)
+    return result
 
 
 class VoiceStatus(BaseModel):
