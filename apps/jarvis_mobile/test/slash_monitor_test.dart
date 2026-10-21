@@ -50,7 +50,9 @@ void main() {
 
     test('reads the command payload of the core', () {
       final c = SlashCommand.fromJson({'name': 'modell', 'description': 'd', 'usage': '/modell auto|opus', 'action': 'model', 'choices': ['auto', 'opus'], 'confirm': false});
-      expect((c.choices, c.takesArgs, c.confirm), (['auto', 'opus'], true, false));
+      // records compare fields with ==, which is identity for lists, so the choices are matched on their own
+      expect(c.choices, ['auto', 'opus']);
+      expect((c.takesArgs, c.confirm), (true, false));
     });
   });
 
