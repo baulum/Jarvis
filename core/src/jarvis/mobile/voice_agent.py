@@ -27,6 +27,7 @@ import numpy as np
 import numpy.typing as npt
 
 from jarvis.agent.llm import AgentEvent
+from jarvis.agent.persona import LeadingGreetingFilter
 from jarvis.events import Event, bus, spawn
 from jarvis.security.auth import Principal
 from jarvis.voice.audio import Endpointer, looks_complete, pcm_to_wav, rms
@@ -380,13 +381,22 @@ class CallVoiceAgent:
         else:
             self._speech = speech
         reply_parts: list[str] = []
+        title = self.state.personality.owner_title
+        # the greeting was said when Sir picked up: the first answer must not open with another one
+        greet = LeadingGreetingFilter(title) if self.greeting and self.metrics["turns"] == 1 else None
+
+        def say(text: str) -> None:
+            if text:
+                speech.text(text)
 
         async def on_event(ev: AgentEvent) -> None:
             if ev.type == "delta" and ev.text:
                 reply_parts.append(ev.text)
-                speech.text(ev.text)
+                say(greet.feed(ev.text) if greet else ev.text)
             elif ev.type == "tool_started":
                 name = str(ev.data.get("name", ""))
+                if greet:
+                    say(greet.flush())  # keep the order of text and tool start (commitment guard)
                 speech.tool_started()
                 await self.set_state("tool", tool_label(name))
                 await self.send(
@@ -416,11 +426,16 @@ class CallVoiceAgent:
             result = await self.state.orchestrator.handle(
                 self.principal, "phone", text, session_id=self.session_id, on_event=on_event
             )
+            if greet:
+                say(greet.flush())
             if result.error and not reply_parts:
                 speech.say("Das hat leider nicht funktioniert, Sir.")
             metrics = await speech.finish()
             await self._drain()
             final = result.text or "".join(reply_parts)
+            if greet:  # the transcript shows what was said
+                clean = LeadingGreetingFilter(title)
+                final = (clean.feed(final) + clean.flush()).strip()
             if final:
                 await self._transcript("jarvis", final)
             metrics["stt_to_done_ms"] = round((time.perf_counter() - t0) * 1000, 1)
