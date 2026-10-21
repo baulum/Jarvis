@@ -110,11 +110,15 @@ oder Kosinus ≥ 0,93 → Ergänzung statt neuer Notiz. Korrektur → alte Notiz
 
 **Coding.** `CodingRunner` → eigener Git-Worktree je Job → `claude -p --restricted --strict-mcp-config --permission-mode acceptEdits
 --permission-prompts none --allowedTools … --settings {sandbox}` → Stream-JSON-Log → Testbefehl → bei Fehlschlag automatische
-Fehleranalyse (zweiter Lauf mit Testausgabe, `--resume`) → Commit auf `jarvis/*`-Branch → Auslieferung (`CodingRunner._ship_flow`,
-`coding.auto_ship`): nur bei grünem Ergebnis Branch pushen → PR (kein Draft) → PR mergen → Supabase deployen (`db push`,
-`functions deploy`, falls `supabase/` im Projekt; sonst übersprungen und vermerkt). Rot, Fehler oder fehlende Rechte:
-nichts auf `main`, kein Merge, kein Deploy, der Job-Branch bleibt; das Ergebnis steht in `result.ship`. Erneuter Versuch:
-`coding_ship_job`; Draft-PR nur noch auf Wunsch über `coding_prepare_pr`.
+Fehleranalyse (zweiter Lauf mit Testausgabe, `--resume`) → Abschluss (`CodingRunner._wrap_up`, nach jedem Job-Ende, auch
+nach Ausnahme oder Abbruch): offene Änderungen committen (WIP-Commit, wenn nicht grün), `result.commit` = Spitze des
+Job-Branches inkl. Commits des Agenten → Auslieferung (`CodingRunner._ship_flow`, `coding.auto_ship`): bei grünem Ergebnis
+Branch pushen → PR (kein Draft) → PR mergen (405 „noch nicht mergebar“ wird ~10 min wiederholt) → Supabase deployen
+(`db push`, `functions deploy`, falls `supabase/` im Projekt; sonst übersprungen und vermerkt) → Job-Branch auf origin und
+lokal sowie Worktree löschen (nur wenn nichts Ungemergtes darin ist). Rot, Fehler oder Abbruch: Job-Branch wird gepusht
+(Sicherung), aber nichts auf `main`, kein Merge, kein Deploy, der Worktree bleibt für „Wiederholen“. Ergebnis in
+`result.ship`, Probleme in `result.delivery_error`. Erneuter Versuch: `coding_ship_job`; Draft-PR nur noch auf Wunsch über
+`coding_prepare_pr`.
 
 **Agent-Monitor.** Das Coding-Log (`coding-logs/<job>.jsonl`) hält je Werkzeugaufruf Argument-Kurzfassung, Ergebnis-Kurzfassung und
 Token-Nutzung (`coding/monitor.py`); `GET /api/coding/jobs/{id}/monitor` macht daraus den Schnappschuss (aktueller Schritt, Schritte,

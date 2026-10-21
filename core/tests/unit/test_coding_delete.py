@@ -61,7 +61,9 @@ def _git(cwd: Path, *args: str) -> str:
 
 def _job(env: SimpleNamespace, status: str, worktree: str = "", branch: str = "", repo: str = "") -> uuid.UUID:
     jid = uuid.uuid4()
-    env.store[jid] = SimpleNamespace(id=jid, status=status, repo_path=repo, worktree_path=worktree, branch=branch)
+    env.store[jid] = SimpleNamespace(
+        id=jid, status=status, title="Job", repo_path=repo, worktree_path=worktree, branch=branch
+    )
     return jid
 
 
@@ -114,6 +116,7 @@ async def test_removes_worktree_only_on_request_branch_stays(env: SimpleNamespac
     assert res["worktree_removed"] is True
     assert not wt.exists()
     assert branch in _git(repo, "branch", "--list", branch)
+    assert _git(repo, "show", f"{branch}:dirty.txt") == "x"  # open changes kept as a WIP commit on the branch
     assert jid not in env.store
 
 

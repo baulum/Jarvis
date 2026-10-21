@@ -58,6 +58,10 @@ _TRANSIENT_RE = re.compile(
     r"gateway time-?out",
     re.IGNORECASE,
 )
+# Pauses between merge attempts while GitHub refuses with 405 because it is still computing the PR's mergeability or
+# required status checks are pending (about 10 minutes in total).
+MERGE_RETRY_DELAYS = (10, 20, 30, 60, 120, 180, 180)
+_MERGE_PENDING_RE = re.compile(r"GitHub-Fehler 405\b")
 SYSTEM_PROMPT_HINT = (
     "Führe Shell-Befehle einzeln aus: keine Verkettung mit &&, ; oder ||, möglichst keine Pipes und kein `cd x && …` "
     "(die Rechteprüfung bewertet jeden Teil eines zusammengesetzten Befehls einzeln; ein nicht freigegebener Teil "
@@ -210,6 +214,8 @@ class CodingRunner:
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._sessions: dict[uuid.UUID, str] = {}  # latest Claude session id per job (for automatic continuation)
         self.retry_delays: tuple[float, ...] = RETRY_DELAYS
+        self.merge_retry_delays: tuple[float, ...] = MERGE_RETRY_DELAYS
+        self._cancelled: set[uuid.UUID] = set()  # cancelled by Sir: the open work is committed and pushed
         self._paused: dict[uuid.UUID, float] = {}  # job id -> monotonic time the pause began
         self._timeouts: dict[uuid.UUID, asyncio.Timeout] = {}  # so a pause does not eat the job's time budget
         self._budget_left: dict[uuid.UUID, float] = {}  # seconds of the run's time budget left when it was paused
@@ -460,7 +466,8 @@ class CodingRunner:
         self._interrupted.discard(job_id)
         self._closing.discard(job_id)
         task = self._tasks.get(job_id)
-        if task:
+        if task and not task.done():
+            self._cancelled.add(job_id)  # _run commits and pushes the work so far (see _after_cancel)
             task.cancel()
         async with session_scope() as s:
             job = await s.get(CodingJob, job_id)
@@ -626,7 +633,7 @@ class CodingRunner:
 
     async def delete(self, job_id: uuid.UUID, actor: str, delete_worktree: bool = False) -> dict[str, Any]:
         """Removes a failed/cancelled job from the job list. The branch is always kept; the
-        worktree only when ``delete_worktree`` is set explicitly."""
+        worktree only when ``delete_worktree`` is set explicitly (open changes are committed to the branch first)."""
         async with session_scope() as s:
             job = await s.get(CodingJob, job_id)
             if job is None:
@@ -639,13 +646,14 @@ class CodingRunner:
             task = self._tasks.get(job_id)
             if task and not task.done():
                 raise CodingError("Job läuft noch und kann nicht entfernt werden")
-            repo, worktree, branch = job.repo_path, job.worktree_path, job.branch
+            repo, worktree, branch, title = job.repo_path, job.worktree_path, job.branch, job.title
         worktree_removed = False
         if delete_worktree and worktree:
             wt = Path(worktree).resolve()
             if not wt.is_relative_to(self.workspaces.resolve()):
                 raise CodingError("Worktree liegt außerhalb des Jarvis-Workspace und wird nicht entfernt")
             if wt.exists():
+                await self._commit(wt, title, wip=True)  # open changes stay on the (kept) branch
                 await self._git(Path(repo), "worktree", "remove", "--force", str(wt))
                 worktree_removed = True
         async with session_scope() as s:
@@ -768,18 +776,12 @@ class CodingRunner:
                         tests = await self._run_tests(wt_path, test_cmd)
                 self._closing.add(job_id)  # no await since the last inbox check: later messages are refused
                 self._inbox.pop(job_id, None)
-                commit = await self._commit(Path(worktree), title)
-                diffstat = (
-                    await self._git(Path(worktree), "diff", "--stat", "HEAD~1", "HEAD", check=False) if commit else ""
-                )
                 status = "completed" if not result.get("is_error") and (tests is None or tests["passed"]) else "failed"
                 payload: dict[str, Any] = {
                     "summary": str(result.get("result", ""))[:4000],
                     "num_turns": result.get("num_turns"),
                     "duration_ms": result.get("duration_ms"),
                     "tests": tests,
-                    "commit": commit,
-                    "diffstat": diffstat[-3000:],
                     "branch": branch,
                     "worktree": worktree,
                     "permission_denials": result.get("permission_denials", [])[:20],
@@ -792,29 +794,108 @@ class CodingRunner:
                         else None
                     ),
                 }
-                if self.cfg.auto_ship:
-                    # Standard-Ablauf: nur ein grünes Ergebnis wird gepusht, per PR gemergt und deployt.
-                    payload["ship"] = await self._ship_flow(
-                        job_id,
-                        repo=repo,
-                        worktree=wt_path,
-                        branch=branch,
-                        title=title,
-                        body=self._pr_body(payload),
-                        green=status == "completed",
-                        reason="Der Job ist fehlgeschlagen" if result.get("is_error") else "Die Tests sind rot",
-                    )
+                await self._wrap_up(
+                    job_id,
+                    payload,
+                    repo=repo,
+                    worktree=wt_path,
+                    branch=branch,
+                    title=title,
+                    green=status == "completed",
+                    reason="Der Job ist fehlgeschlagen" if result.get("is_error") else "Die Tests sind rot",
+                )
                 await self._finish(job_id, title, status, payload)
             except asyncio.CancelledError:
+                if job_id in self._cancelled and worktree and branch:
+                    await self._after_cancel(job_id, repo=repo, worktree=Path(worktree), branch=branch, title=title)
                 raise
             except Exception as e:
                 logger.exception("Coding job %s failed", job_id)
-                await self._finish(
-                    job_id,
-                    title,
-                    "failed",
-                    {"error": f"{type(e).__name__}: {e}"[:1000], "worktree": worktree, "branch": branch},
-                )
+                failed: dict[str, Any] = {
+                    "error": f"{type(e).__name__}: {e}"[:1000],
+                    "worktree": worktree,
+                    "branch": branch,
+                }
+                if worktree and branch and Path(worktree).is_dir():
+                    await self._wrap_up(
+                        job_id,
+                        failed,
+                        repo=repo,
+                        worktree=Path(worktree),
+                        branch=branch,
+                        title=title,
+                        green=False,
+                        reason=f"Der Job ist abgebrochen ({type(e).__name__})",
+                    )
+                await self._finish(job_id, title, "failed", failed)
+            finally:
+                self._cancelled.discard(job_id)
+
+    async def _wrap_up(
+        self,
+        job_id: uuid.UUID,
+        payload: dict[str, Any],
+        *,
+        repo: Path,
+        worktree: Path,
+        branch: str,
+        title: str,
+        green: bool,
+        reason: str,
+    ) -> None:
+        """After every job end: commit what is still open (a WIP commit unless green), record the branch's commits –
+        including the ones the agent made itself – and run the ship flow (green: merge, deploy, clean up; otherwise:
+        back up the job branch, never main). Never raises (except cancellation); problems end up in ``payload``."""
+        problems: list[str] = []
+        try:
+            await self._commit(worktree, title, wip=not green)
+        except Exception as e:
+            logger.exception("Coding job %s: commit failed", job_id)
+            problems.append(f"Commit fehlgeschlagen: {e}")
+        try:
+            payload.update(await self._branch_work(worktree))
+        except Exception as e:
+            problems.append(f"Commits des Job-Branch nicht lesbar: {e}")
+        if self.cfg.auto_ship:
+            ship = await self._ship_flow(
+                job_id,
+                repo=repo,
+                worktree=worktree,
+                branch=branch,
+                title=title,
+                body=self._pr_body(payload),
+                green=green,
+                reason=reason,
+            )
+            payload["ship"] = ship
+            if ship["state"] == "failed" or ship.get("backup_error") or (ship.get("cleanup") or {}).get("errors"):
+                problems.append(ship["message"])
+        payload["delivery_error"] = "; ".join(problems)[:1000] or None
+
+    async def _after_cancel(self, job_id: uuid.UUID, *, repo: Path, worktree: Path, branch: str, title: str) -> None:
+        """Sir cancelled the job: the work so far is committed and the job branch pushed (never main), the result
+        is added to the job (``cancel`` has already set the status)."""
+        if not worktree.is_dir():
+            return
+        payload: dict[str, Any] = {"worktree": str(worktree), "branch": branch}
+        try:
+            await self._wrap_up(
+                job_id,
+                payload,
+                repo=repo,
+                worktree=worktree,
+                branch=branch,
+                title=title,
+                green=False,
+                reason="Der Job wurde abgebrochen",
+            )
+            async with session_scope() as s:
+                job = await s.get(CodingJob, job_id)
+                if job is not None:
+                    job.result = json.loads(json.dumps({**(job.result or {}), **payload}, default=str))
+            await bus.publish("coding.updated", job_id=str(job_id), status="cancelled", title=title)
+        except Exception:
+            logger.exception("Coding job %s: securing the cancelled work failed", job_id)
 
     def _read_dirs(self) -> list[Path]:
         dirs = [Path(os.path.expanduser(d)).resolve() for d in getattr(self.cfg, "extra_read_dirs", None) or []]
@@ -1083,21 +1164,38 @@ class CodingRunner:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(proc.pid, signal.SIGKILL)
 
-    async def _commit(self, cwd: Path, title: str) -> str | None:
+    async def _commit(self, cwd: Path, title: str, wip: bool = False) -> str | None:
+        """Commits open changes; returns the new commit or None if there was nothing to commit. ``wip`` marks the
+        work of a red, failed or cancelled job (kept on its branch, never merged)."""
         if not await self._git(cwd, "status", "--porcelain"):
             return None
         await self._git(cwd, "add", "-A")
-        await self._git(
-            cwd,
-            "-c",
-            "user.name=Jarvis",
-            "-c",
-            "user.email=jarvis@localhost",
-            "commit",
-            "-m",
-            f"Jarvis: {title}\n\nErstellt mit Claude Code über den Jarvis Coding-Runner.",
+        message = (
+            f"Jarvis (WIP): {title}\n\nZwischenstand eines nicht grünen oder abgebrochenen Jobs, automatisch "
+            "gesichert vom Jarvis Coding-Runner."
+            if wip
+            else f"Jarvis: {title}\n\nErstellt mit Claude Code über den Jarvis Coding-Runner."
         )
+        await self._git(cwd, "-c", "user.name=Jarvis", "-c", "user.email=jarvis@localhost", "commit", "-m", message)
         return await self._git(cwd, "rev-parse", "--short", "HEAD")
+
+    async def _branch_work(self, wt: Path) -> dict[str, Any]:
+        """Commits on the job branch that are not on the base branch (local or origin) – no matter who made them:
+        the agent often commits itself, then the runner's own commit is empty. ``commit`` is the branch head."""
+        base = getattr(self.cfg, "ship_base_branch", "main")
+        refs = [
+            ref
+            for ref in (f"origin/{base}", base)
+            if await self._git(wt, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
+        ]
+        head = await self._git(wt, "rev-parse", "--short", "HEAD", check=False) or None
+        if not refs:  # no base branch to compare with
+            return {"commit": head, "commits": None, "diffstat": ""}
+        count = await self._git(wt, "rev-list", "--count", "HEAD", "--not", *refs, check=False)
+        commits = int(count) if count.isdigit() else 0
+        fork = await self._git(wt, "merge-base", "HEAD", *refs, check=False) if commits else ""
+        diffstat = await self._git(wt, "diff", "--stat", fork, "HEAD", check=False) if fork else ""
+        return {"commit": head if commits else None, "commits": commits, "diffstat": diffstat[-3000:]}
 
     async def _finish(self, job_id: uuid.UUID, title: str, status: str, result: dict[str, Any]) -> None:
         for bucket in (self._closing, self._interrupted):
@@ -1209,9 +1307,10 @@ class CodingRunner:
         prior: dict[str, Any] | None = None,
         actor: str = "coding-runner",
     ) -> dict[str, Any]:
-        """Green: push the job branch, open a (non-draft) PR, merge it, deploy Supabase. Red / error / missing
-        permission: nothing reaches main or Supabase, the job branch stays. Never raises (except cancellation);
-        the outcome is the returned dict, stored as ``result["ship"]``."""
+        """Green: push the job branch, open a (non-draft) PR, merge it, deploy Supabase, then delete the job branch
+        (remote and local) and the worktree. Red / error / cancelled: the job branch is pushed as a backup, but
+        nothing reaches main or Supabase and the worktree stays. Never raises (except cancellation); the outcome
+        is the returned dict, stored as ``result["ship"]``."""
         base = self.cfg.ship_base_branch
         prior = prior or {}
         ship: dict[str, Any] = {
@@ -1222,22 +1321,20 @@ class CodingRunner:
             "base": base,
             "pr": prior.get("pr"),
             "merged": bool(prior.get("merged")),
+            "pushed": bool(prior.get("pushed")),
             "supabase": None,
         }
         if not green:
-            ship["message"] = (
-                f"Nicht ausgeliefert: {reason}. Nichts gepusht, gemergt oder deployt; "
-                f"Job-Branch {branch} bleibt bestehen."
-            )
+            await self._ship_backup(ship, worktree, branch, reason)
         elif getattr(getattr(self.state, "kill_switch", None), "engaged", False):
-            ship["message"] = f"Nicht ausgeliefert: Not-Aus aktiv. Job-Branch {branch} bleibt bestehen."
+            ship["message"] = f"Nicht ausgeliefert: Not-Aus aktiv. Job-Branch {branch} bleibt lokal bestehen."
         else:
             try:
                 if not ship["merged"]:
                     await self._ship_merge(ship, worktree, branch, title, body)
                 if ship["merged"]:
                     await self._ship_deploy(ship, repo)
-            except (CodingError, ToolUserError) as e:
+            except Exception as e:  # any error (also network/HTTP) must end up in the result, not drop the job's
                 pr = ship["pr"]
                 ship["state"] = "failed"
                 aftermath = (
@@ -1246,14 +1343,51 @@ class CodingRunner:
                     else f"Nichts gemergt oder deployt; Job-Branch {branch} bleibt bestehen"
                     + (f", PR: {pr['url']}." if pr else ".")
                 )
-                ship["message"] = f"Auslieferung fehlgeschlagen ({ship['stage']}): {e}. {aftermath}"[:900]
+                ship["message"] = (
+                    f"Auslieferung fehlgeschlagen ({ship['stage']}): {str(e) or type(e).__name__}. {aftermath}"[:900]
+                )
+            if ship["merged"] or ship.get("nothing_to_ship"):
+                try:
+                    await self._ship_cleanup(ship, repo, worktree, branch)
+                except Exception as e:
+                    ship.setdefault("cleanup", {}).setdefault("errors", []).append(str(e) or type(e).__name__)
+                    ship["message"] = f"{ship['message']} Aufräumen fehlgeschlagen: {e}"[:900]
         await audit(
             actor,
             "coding.ship",
             target=str(job_id),
-            details={k: ship[k] for k in ("state", "stage", "pr", "merged", "supabase", "message")},
+            details={
+                k: ship.get(k)
+                for k in ("state", "stage", "pr", "merged", "pushed", "supabase", "cleanup", "message")
+            },
         )
         return ship
+
+    async def _ship_backup(self, ship: dict[str, Any], wt: Path, branch: str, reason: str) -> None:
+        """Not green: push the job branch (never main) so the work does not only exist in this worktree."""
+        note = f"Nicht ausgeliefert: {reason}. Nichts in {ship['base']} gemergt oder deployt"
+        if getattr(getattr(self.state, "kill_switch", None), "engaged", False):
+            ship["message"] = f"{note}; Not-Aus aktiv – Job-Branch {branch} nur lokal gesichert (Worktree {wt})."
+            return
+        ship["stage"] = "backup"
+        try:
+            if not (await self._branch_work(wt))["commits"]:
+                ship["message"] = f"{note}; keine Änderungen auf dem Job-Branch {branch}, nichts zu sichern."
+                return
+            if await self._git(wt, "status", "--porcelain"):
+                raise CodingError("Worktree enthält nicht committete Änderungen")
+            if not await self._git(wt, "remote", "get-url", "origin", check=False):
+                raise CodingError("Repository hat kein 'origin'-Remote")
+            await self._git(wt, "push", "-u", "origin", branch)
+        except Exception as e:
+            ship["backup_error"] = (str(e) or type(e).__name__)[:500]
+            ship["message"] = (
+                f"{note}; Sichern des Job-Branch fehlgeschlagen: {ship['backup_error']}. "
+                f"Branch {branch} nur lokal, Worktree {wt} bleibt."
+            )[:900]
+            return
+        ship["pushed"] = True
+        ship["message"] = f"{note}; Job-Branch {branch} auf origin gesichert, Worktree {wt} bleibt für 'Wiederholen'."
 
     async def _ship_merge(self, ship: dict[str, Any], wt: Path, branch: str, title: str, body: str) -> None:
         base = ship["base"]
@@ -1268,21 +1402,83 @@ class CodingRunner:
             raise CodingError(f"origin ist kein GitHub-Repository: {origin}")
         gh = self._github()
         await self._git(wt, "fetch", "origin", base)
+        head = await self._git(wt, "rev-parse", "HEAD")
+        ship["head"] = head
         if await self._git(wt, "rev-list", "--count", f"origin/{base}..HEAD") == "0":
+            ship["nothing_to_ship"] = True
             ship["message"] = f"Nichts auszuliefern: keine Änderungen gegenüber {base}."
             return
-        head = await self._git(wt, "rev-parse", "HEAD")
         await self._git(wt, "push", "-u", "origin", branch)
+        ship["pushed"] = True
         if not ship["pr"]:
             ship["stage"] = "pr"
             pr = await gh.create_pr(repo_name, branch, base, f"Jarvis: {title}", body[:60000], draft=False)
             ship["pr"] = {"number": pr.get("number"), "url": pr.get("html_url")}
         ship["stage"] = "merge"
-        merged = await gh.merge_pr(repo_name, ship["pr"]["number"], sha=head, method=self.cfg.ship_merge_method)
+        merged = await self._merge_when_ready(gh, repo_name, ship["pr"]["number"], head)
         if not merged.get("merged", True):
             raise CodingError(str(merged.get("message") or "GitHub hat den Merge abgelehnt"))
         ship["merged"] = True
         ship["merge_sha"] = merged.get("sha")
+
+    async def _merge_when_ready(self, gh: Any, repo_name: str, number: int, head: str) -> Any:
+        """Merges the PR. Right after it was opened GitHub may refuse with 405 (mergeability still being computed,
+        required checks pending): retried for a while. Missing reviews or permissions are not waited for."""
+        delays = list(self.merge_retry_delays)
+        while True:
+            try:
+                return await gh.merge_pr(repo_name, number, sha=head, method=self.cfg.ship_merge_method)
+            except ToolUserError as e:
+                pending = _MERGE_PENDING_RE.search(str(e)) and "review" not in str(e).lower()
+                if not pending or not delays or getattr(getattr(self.state, "kill_switch", None), "engaged", False):
+                    raise
+                delay = delays.pop(0)
+                logger.info("PR #%s noch nicht mergebar (%s), neuer Versuch in %g s", number, e, delay)
+                await asyncio.sleep(delay)
+
+    async def _ship_cleanup(self, ship: dict[str, Any], repo: Path, wt: Path, branch: str) -> None:
+        """Everything of the job is in the base branch: delete the job branch (origin and local) and the worktree.
+        Only what is provably merged goes – a worktree with changes or a branch that moved on stays."""
+        done: dict[str, Any] = {"remote_branch": False, "worktree": False, "local_branch": False, "errors": []}
+        ship["cleanup"] = done
+        errors: list[str] = done["errors"]
+        if not branch.startswith("jarvis/"):
+            errors.append(f"{branch} ist kein jarvis/*-Branch und bleibt")
+        else:
+            try:
+                await self._git(repo, "push", "origin", "--delete", branch)
+                done["remote_branch"] = True
+            except CodingError as e:
+                if "remote ref does not exist" in str(e):
+                    done["remote_branch"] = True  # never pushed, or GitHub deleted it after the merge
+                else:
+                    errors.append(f"Remote-Branch: {e}")
+            try:
+                if wt.exists():
+                    if not wt.resolve().is_relative_to(self.workspaces.resolve()):
+                        raise CodingError("liegt außerhalb des Jarvis-Workspace")
+                    if await self._git(wt, "status", "--porcelain"):
+                        raise CodingError("enthält Änderungen, die nicht gemergt sind")
+                    # --force only for ignored files (node_modules, .venv …); tracked and untracked work is clean
+                    await self._git(repo, "worktree", "remove", "--force", str(wt))
+                done["worktree"] = True
+            except CodingError as e:
+                errors.append(f"Worktree {wt}: {e}")
+            if done["worktree"]:
+                tip = await self._git(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False)
+                if tip and ship.get("head") and tip != ship["head"]:
+                    errors.append(f"Lokaler Branch {branch} hat Commits nach dem Merge und bleibt")
+                else:
+                    try:
+                        if tip:
+                            await self._git(repo, "branch", "-D", branch)
+                        done["local_branch"] = True
+                    except CodingError as e:
+                        errors.append(f"Lokaler Branch: {e}")
+        if errors:
+            ship["message"] = f"{ship['message']} Aufräumen unvollständig: {'; '.join(errors)}"[:900]
+        else:
+            ship["message"] = f"{ship['message']} Job-Branch (lokal und auf origin) und Worktree entfernt."
 
     async def _ship_deploy(self, ship: dict[str, Any], repo: Path) -> None:
         """After the merge: deploy Supabase migrations / edge functions found on the merged base branch."""
@@ -1329,6 +1525,8 @@ class CodingRunner:
             if job is None or job.status != "completed":
                 raise CodingError("Nur abgeschlossene Jobs können als PR vorbereitet werden")
             wt, branch, title, res = Path(job.worktree_path), job.branch, job.title, dict(job.result or {})
+        if not wt.is_dir():
+            raise CodingError("Worktree existiert nicht mehr (Job wurde bereits ausgeliefert und aufgeräumt)")
         gh = self._github()
         remotes = await self._git(wt, "remote")
         if "origin" not in remotes.split():
