@@ -335,6 +335,7 @@ Testsummen (2026-10-17): Core 108 Unit + 46 Integration + E2E (Sprache, Mobile-A
 | Jarvis ruft nicht an | Einstellungen › „Jarvis ruft an“ nennt den Grund (Push, Agent, LiveKit, Limit, Ruhezeit) |
 | Klingelt nicht auf dem Sperrbildschirm | Android 14+: Einstellungen › Apps › J.A.R.V.I.S. › Vollbild-Benachrichtigungen erlauben |
 | Pushes kommen verspätet | Akku-Optimierung für die App ausschalten (Herstellerabhängig) |
+| Chat-Antwort fehlt in der App, am Mac sichtbar | Seit 2026-10-21 behoben: Nach 2 h Pause (`session.idle_timeout_minutes`) antwortet der Core in einer neuen Sitzung – die App wechselt jetzt dorthin; ein still abgerissener `/ws` wird nach spätestens ~60 s (bzw. 5 s nach dem Öffnen der App) ersetzt und der Verlauf nachgeladen. Antworten auf eine Benachrichtigung kommen als Benachrichtigung „Antwort von Jarvis“ zurück (Tippen öffnet das Gespräch) |
 | Anruf ohne Ton in der Begrüßung | Fish Audio prüfen (`/api/system/status` › tts); Fallback ist die macOS-Stimme |
 | Gerät verloren | Mac: App-Einstellungen oder `DELETE /api/mobile/devices/<id>` – Tokens sofort ungültig |
 

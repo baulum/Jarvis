@@ -408,10 +408,36 @@ async def alert_reply(aid: str, body: ReplyBody, st: AppState = StateDep, p: Pri
     row = await st.alerts.get(_uuid(aid))
     if row is None:
         raise HTTPException(404, "not found")
-    sess = await st.orchestrator.get_or_create_session(p, "mobile", None)
+    # a notification about a conversation (e.g. Jarvis' answer to an earlier reply) continues that conversation
+    origin = (row.data or {}).get("session_id")
+    try:
+        origin_id = uuid.UUID(str(origin)) if origin else None
+    except ValueError:
+        origin_id = None
+    sess = await st.orchestrator.get_or_create_session(p, "mobile", origin_id)
     prompt = f"(Antwort auf die Benachrichtigung „{row.title}“: {row.body[:400]})\n{body.text}"
-    spawn(st.orchestrator.handle(p, "mobile", prompt, session_id=sess.id), name="mobile-reply")
+    spawn(_answer_reply(st, p, prompt, sess.id), name="mobile-reply")
     return {"session_id": str(sess.id), "accepted": True}
+
+
+async def _answer_reply(st: AppState, p: Principal, prompt: str, session_id: uuid.UUID) -> None:
+    """Sir replied from the notification shade, the app is not open: the answer comes back as a notification
+    that opens the conversation – otherwise it would only be visible on the Mac."""
+    res = await st.orchestrator.handle(p, "mobile", prompt, session_id=session_id)
+    if not res.text.strip() or res.error == "cancelled":
+        return
+    await st.alerts.dispatch(
+        Alert(
+            "task",
+            "Antwort von Jarvis",
+            res.text.strip(),
+            level="warning" if res.error else "info",
+            data={"session_id": str(res.session_id)},
+            source="reply",
+            allow_call=False,
+            origin_session_id=str(res.session_id),
+        )
+    )
 
 
 class NotifyTest(BaseModel):

@@ -101,6 +101,10 @@ Timeline addOptimisticUser(Timeline t, String sessionId, String text) {
   return t.copy(items: [...t.items, item], running: true);
 }
 
+/// The message went to another conversation than the one shown (new, or the old one had expired on the core):
+/// only the optimistic message comes along – `seq` is per conversation, the old items do not belong in this order.
+Timeline startSession(Timeline t) => Timeline(items: [for (final e in t.items) if (e.local) e], running: true);
+
 List<TItem> _insertSorted(List<TItem> items, TItem item) {
   var i = items.length;
   while (i > 0 && items[i - 1].seq > item.seq) {
