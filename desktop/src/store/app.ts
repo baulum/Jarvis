@@ -321,6 +321,17 @@ export function handleBusEvent(ev: BusEvent): void {
     useApp.setState((s) => ({ voice: applyVoiceStatus(s.voice, ev) }));
     return;
   }
+  if (type === "voice.wakeup") {
+    // the wake-up routine ran (voice or test): never let a missing MP3 or program fail silently
+    bump("system");
+    const failed = Array.isArray(d.failed) ? (d.failed as { app?: unknown; reason?: unknown }[]) : [];
+    const lines = [
+      ...(typeof d.sound_error === "string" && d.sound_error ? [d.sound_error] : []),
+      ...failed.map((f) => `${String(f.app ?? "?")}: ${String(f.reason ?? "nicht geöffnet")}`),
+    ];
+    if (lines.length) st.pushToast({ tone: "warn", title: "Weckroutine unvollständig", body: lines.join(" · ") });
+    return;
+  }
   if (type.startsWith("task.")) {
     if (type === "task.input_required" && typeof d.task_id === "string" && Array.isArray(d.fields)) {
       const fields = (d.fields as unknown[]).map(String);

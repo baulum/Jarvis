@@ -61,6 +61,8 @@ export function ChatDock() {
   const [focused, setFocused] = useState(false);
   const [sending, setSending] = useState(false);
   const [ptt, setPtt] = useState(false);
+  const [chatUsedAt, setChatUsedAt] = useState(0);
+  const brainUsedAt = useBrain((s) => s.lastInteraction);
   const input = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -71,7 +73,8 @@ export function ChatDock() {
   const slash = useSlash({ draft, setDraft, sessionId, sendText, onNew: () => setActive(null) });
   const rowCount = useMemo(() => (thread ? buildRows(thread.events).length : 0), [thread]);
   const running = Boolean(thread?.running);
-  const expanded = focused || rowCount > 2;
+  // a longer conversation stays open – until Sir turns to the brain; focusing the chat opens it again
+  const expanded = focused || (rowCount > 2 && brainUsedAt <= chatUsedAt);
   const sessionApprovals = pending.filter((a) => sessionId && approvalSessions[a.id] === sessionId);
   // growing on expand is followed by the hook's ResizeObserver; new events by the signal
   const { ref: scrollRef, onScroll, toBottom } = useStickToBottom<HTMLDivElement>(thread?.events);
@@ -132,7 +135,10 @@ export function ChatDock() {
       transition={{ type: "spring", stiffness: 380, damping: 38 }}
       className="holo-dock pointer-events-auto mx-auto flex w-[min(44rem,calc(100vw-2rem))] flex-col"
       aria-label="Gespräch mit J.A.R.V.I.S."
-      onFocus={() => setFocused(true)}
+      onFocus={() => {
+        setFocused(true);
+        setChatUsedAt(performance.now());
+      }}
       onBlur={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setFocused(false)}
     >
       <AnimatePresence initial={false}>

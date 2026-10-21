@@ -38,6 +38,23 @@ export function fitDistance(radius: number, fovDeg: number, fill = 0.7): number 
   return radius / Math.sin(half) / fill;
 }
 
+/** At most this share of the window counts as covered – the brain never gets squeezed into a sliver. */
+const MAX_OCCLUDED = 0.6;
+
+/** Share of the window height left free for the brain when ``occluded`` px at the bottom are covered (chat dock). */
+export function freeFraction(occluded: number, height: number): number {
+  if (height <= 0) return 1;
+  return 1 - Math.min(Math.max(occluded, 0), height * MAX_OCCLUDED) / height;
+}
+
+/**
+ * Vertical projection offset (px, for ``camera.setViewOffset``) that moves the centre of the view into the middle
+ * of the free part above the covered strip: the scene shifts up by half the covered height.
+ */
+export function viewShift(occluded: number, height: number): number {
+  return ((1 - freeFraction(occluded, height)) * Math.max(height, 0)) / 2;
+}
+
 /**
  * Camera position for focusing ``target``: keep the current viewing direction (no disorienting jumps),
  * move to ``distance`` and shift the look-at point sideways so the target sits left of a detail panel.

@@ -52,6 +52,7 @@ def test_gateway_allows_model_picker_and_quota_only_as_expected() -> None:
     assert not mobile_path_allowed("POST", "/api/agent/usage")
     assert not mobile_path_allowed("GET", "/api/backup") and not mobile_path_allowed("POST", "/api/backup/run")
     assert not mobile_path_allowed("POST", "/api/voice/wakeup")
+    assert not mobile_path_allowed("GET", "/api/voice/wakeup") and not mobile_path_allowed("PUT", "/api/voice/wakeup")
 
 
 class _LK:
