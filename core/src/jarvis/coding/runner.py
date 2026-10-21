@@ -115,6 +115,27 @@ _TEST_EXECUTABLES = {
     "flutter",
     "dart",
 }
+
+
+def split_test_command(command: str) -> list[list[str]]:
+    """Steps of a test command (``a && b`` -> two argv lists). There is no shell: ``&&`` is the only operator,
+    it runs the next step only if the previous one passed. Every step must start with an allowed executable."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars="&|;")
+    lexer.whitespace_split = True
+    steps: list[list[str]] = [[]]
+    for part in lexer:
+        if part == "&&":
+            steps.append([])
+        elif part and set(part) <= set("&|;"):
+            raise CodingError(f"Testbefehl: '{part}' geht nicht (keine Shell; Schritte nur mit && verketten)")
+        else:
+            steps[-1].append(part)
+    for argv in steps:
+        if not argv or argv[0] not in _TEST_EXECUTABLES:
+            raise CodingError(f"Testbefehl nicht erlaubt (erlaubt: {', '.join(sorted(_TEST_EXECUTABLES))})")
+    return steps
+
+
 NETWORK_ALLOWLIST = [
     "registry.npmjs.org",
     "*.npmjs.org",
@@ -349,9 +370,7 @@ class CodingRunner:
         if not repo.is_relative_to(home):
             raise CodingError("Repository muss im Benutzerordner liegen")
         if test_command:
-            argv = shlex.split(test_command)
-            if not argv or argv[0] not in _TEST_EXECUTABLES:
-                raise CodingError(f"Testbefehl nicht erlaubt (erlaubt: {', '.join(sorted(_TEST_EXECUTABLES))})")
+            split_test_command(test_command)
         async with session_scope() as s:
             job = CodingJob(
                 title=title[:300],
@@ -1018,27 +1037,39 @@ class CodingRunner:
             raise exc(f"Claude Code beendet ohne Ergebnis (Exit {proc.returncode}): {err}")
         return result
 
-    async def _run_tests(self, cwd: Path, command: str) -> dict[str, Any]:
-        argv = shlex.split(command)
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=cwd,
-            env=self._env(),
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,
-        )
+    async def _run_tests(self, cwd: Path, command: str, timeout_s: float = 900) -> dict[str, Any]:
+        """Runs the steps of ``command`` one after another (no shell); stops at the first failing step."""
         try:
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=900)
-        except TimeoutError:
-            await self._stop_process(proc)
-            return {"passed": False, "exit_code": None, "output": "Timeout nach 15 Minuten"}
-        return {
-            "passed": proc.returncode == 0,
-            "exit_code": proc.returncode,
-            "output": out.decode(errors="replace")[-8000:],
-        }
+            steps = split_test_command(command)
+        except CodingError as e:
+            return {"passed": False, "exit_code": None, "output": str(e)}
+        deadline = asyncio.get_running_loop().time() + timeout_s
+        output = ""
+        code: int | None = 0
+        for argv in steps:
+            if len(steps) > 1:
+                output += f"$ {shlex.join(argv)}\n"
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                cwd=cwd,
+                env=self._env(),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+            left = max(0.0, deadline - asyncio.get_running_loop().time())
+            try:
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=left)
+            except TimeoutError:
+                await self._stop_process(proc)
+                output += f"Timeout nach {timeout_s / 60:g} Minuten"
+                return {"passed": False, "exit_code": None, "output": output[-8000:]}
+            output += out.decode(errors="replace")
+            code = proc.returncode
+            if code != 0:
+                break
+        return {"passed": code == 0, "exit_code": code, "output": output[-8000:]}
 
     @staticmethod
     async def _stop_process(proc: asyncio.subprocess.Process, grace_s: float = 10) -> None:

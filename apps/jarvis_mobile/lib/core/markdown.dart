@@ -248,7 +248,7 @@ List<MdBlock> _blocks(List<String> lines) {
 
 (MdList, int) _parseList(List<String> lines, int start) {
   final first = _listRe.firstMatch(lines[start])!;
-  final base = first.group(1)!.length;
+  final base = _indent(first.group(1)!);
   final ordered = _isOrdered(first.group(2)!);
   final startNo = ordered ? int.tryParse(first.group(2)!.replaceAll(RegExp(r'[.)]'), '')) ?? 1 : 1;
   final items = <List<MdBlock>>[];
@@ -256,7 +256,7 @@ List<MdBlock> _blocks(List<String> lines) {
   var i = start;
   while (i < lines.length) {
     final m = _listRe.firstMatch(lines[i]);
-    if (m == null || m.group(1)!.length != base || _isOrdered(m.group(2)!) != ordered) break;
+    if (m == null || _indent(m.group(1)!) != base || _isOrdered(m.group(2)!) != ordered) break;
     final task = _taskRe.firstMatch(m.group(3)!);
     checked.add(task == null ? null : task.group(1) != ' ');
     final item = <String>[task == null ? m.group(3)! : m.group(3)!.substring(task.end)];
@@ -288,7 +288,7 @@ List<MdBlock> _blocks(List<String> lines) {
     }
     if (k > i && k < lines.length) {
       final n = _listRe.firstMatch(lines[k]);
-      if (n != null && n.group(1)!.length == base && _isOrdered(n.group(2)!) == ordered) i = k;
+      if (n != null && _indent(n.group(1)!) == base && _isOrdered(n.group(2)!) == ordered) i = k;
     }
   }
   return (MdList(ordered: ordered, start: startNo, items: items, checked: checked, tasks: List<int?>.filled(checked.length, null)), i);
@@ -330,6 +330,18 @@ int _closeStrong(String s, String marker, int from) {
     j = s.indexOf(marker, j + 1);
   }
   return -1;
+}
+
+/// Closing `**` / `__`. In `**a *b***` the closing run also ends the inner emphasis: strong is its last two markers.
+int _closeDouble(String s, String c, int from) {
+  final j = _closeStrong(s, '$c$c', from);
+  if (j == -1) return j;
+  var end = j;
+  while (end < s.length && s[end] == c) {
+    end++;
+  }
+  final open = s.substring(from, j).split('').where((x) => x == c).length.isOdd;
+  return end - j > 2 && open ? end - 2 : j;
 }
 
 int _closeEm(String s, String c, int from) {
@@ -389,7 +401,7 @@ void _inline(String s, bool b, bool it, bool st, String? href, List<MdSpan> out)
           }
         }
         if (s.startsWith('$c$c', i) && i + 2 < s.length && !_isSpace(s[i + 2])) {
-          final j = _closeStrong(s, '$c$c', i + 2);
+          final j = _closeDouble(s, c, i + 2);
           if (j != -1) {
             flush();
             _inline(s.substring(i + 2, j), true, it, st, href, out);

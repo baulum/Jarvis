@@ -51,6 +51,22 @@ describe("markdown parser", () => {
     expect(spansText(para(at(parseMarkdown("mobile_call_owner und 2 * 3 und **offen"), 0)))).toBe("mobile_call_owner und 2 * 3 und **offen");
   });
 
+  it("closes emphasis nested in bold at a shared marker run", () => {
+    const p = para(at(parseMarkdown("**Fett *mit kursiv***"), 0));
+    expect(spansText(p)).toBe("Fett mit kursiv");
+    expect(p.filter((s) => s.bold && s.italic).map((s) => s.text)).toEqual(["mit kursiv"]);
+    expect(spansText(para(at(parseMarkdown("**fett***"), 0)))).toBe("fett*");
+  });
+
+  it("measures list indentation with tabs like spaces", () => {
+    const b = parseMarkdown("\t- eins\n\t- zwei\n\t\t- unter");
+    expect(b).toHaveLength(1);
+    const l = at(b, 0);
+    if (l.type !== "list") throw new Error("list expected");
+    expect(l.items).toHaveLength(2);
+    expect(at(at(l.items, 1), 1)).toMatchObject({ type: "list" });
+  });
+
   it("only opens web and mail links", () => {
     expect(safeHref("https://example.com/a")).toBe("https://example.com/a");
     expect(safeHref("javascript:alert(1)")).toBeNull();

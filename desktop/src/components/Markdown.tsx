@@ -4,6 +4,7 @@ import { copyText } from "../lib/clipboard";
 import { highlight, type TokenKind } from "../lib/highlight";
 import { parseMarkdown, safeHref, type MdBlock, type MdSpan } from "../lib/markdown";
 import { openExternal } from "../lib/native";
+import { useApp } from "../store/app";
 
 const TOKEN_CLASS: Record<TokenKind, string> = {
   plain: "",
@@ -77,6 +78,15 @@ function TaskBox({ index, parsed }: { index: number | null; parsed: boolean }) {
   );
 }
 
+/** Links open in the system browser, never inside the app; if that fails the link is copied (as on mobile). */
+async function openLink(href: string): Promise<void> {
+  try {
+    await openExternal(href);
+  } catch {
+    if (await copyText(href)) useApp.getState().pushToast({ tone: "info", title: "Link kopiert", body: href });
+  }
+}
+
 function Inline({ spans }: { spans: MdSpan[] }) {
   return (
     <>
@@ -104,7 +114,7 @@ function Inline({ spans }: { spans: MdSpan[] }) {
               rel="noopener noreferrer"
               onClick={(e) => {
                 e.preventDefault();
-                void openExternal(href);
+                void openLink(href);
               }}
               className="text-arc underline decoration-arc-dim underline-offset-2 hover:text-white"
               title={href}
