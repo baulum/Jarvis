@@ -53,8 +53,8 @@ from jarvis.mobile.calls import CallService
 from jarvis.mobile.gateway import GatewayServer
 from jarvis.mobile.livekit_server import LiveKitServer
 from jarvis.mobile.location import LocationStore
-from jarvis.mobile.phone_control import PhoneControl
 from jarvis.mobile.pairing import PairingService
+from jarvis.mobile.phone_control import PhoneControl
 from jarvis.mobile.push import PushService
 from jarvis.secrets import secret_store
 from jarvis.security.audit import audit
@@ -206,9 +206,8 @@ class AppState:
         )
 
     def _register_mobile_tools(self) -> None:
-        from jarvis.mobile.tools import mobile_tools
-
         from jarvis.mobile.phone_tools import phone_tools
+        from jarvis.mobile.tools import mobile_tools
 
         for spec in (*mobile_tools(self), *phone_tools(self)):
             self.registry.register(spec)

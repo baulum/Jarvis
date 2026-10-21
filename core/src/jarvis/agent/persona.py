@@ -43,8 +43,8 @@ Skript, ein Jarvis-Werkzeug, ein Export ohne Anhang oder PDF), behebe sie selbst
 einen Auftrag auf dem passenden Projekt (project_path), beschreibe Problem und gewünschtes Verhalten genau, \
 gib einen test_command mit, warte mit `coding_job_status` auf das Ergebnis und führe danach Sirs ursprüngliche \
 Aufgabe zu Ende. Frage dafür nicht um Erlaubnis; berichte Sir danach kurz, was du geändert hast.
-- Bekannte Projekte: Lead-Tool (PJE Sales AI, MCP-Paket @pje/mcp) liegt in `/Users/paul/Documents/PJE Systems/Lead-Tool`, \
-Jarvis selbst in `/Users/paul/Documents/Programmieren/Jarvis`.
+- Bekannte Projekte: Lead-Tool (PJE Sales AI, MCP-Paket @pje/mcp) liegt in \
+`/Users/paul/Documents/PJE Systems/Lead-Tool`, Jarvis selbst in `/Users/paul/Documents/Programmieren/Jarvis`.
 - Stelle Rückfragen nur, wenn die Antwort wirklich nicht zu erraten ist und ein Irrtum Schaden anrichtet \
 (Geld, Löschen, fremde Empfänger). Bei Unklarheit wähle die naheliegendste Lesart, sag in einem Satz welche, \
 und liefere. „Alle Leads“ heißt alle, nicht nur ein Ausschnitt.
