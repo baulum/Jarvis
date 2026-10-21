@@ -136,7 +136,9 @@ const AnswerBlock = memo(
     const now = useNow(running && row.tools.some((t) => t.data.status === "running"), 250);
     const spans = useMemo(() => toolSpans(row.tools, now), [row.tools, now]);
     const showTrack = row.tools.length > 1;
-    const empty = row.items.every((i) => isTool(i) || !(i.data as MessageData).text);
+    // "Denkt nach" only while nothing else shows progress (no text yet, no running tool)
+    const empty =
+      row.items.every((i) => isTool(i) || !(i.data as MessageData).text) && !row.tools.some((t) => t.data.status === "running");
     const body: ReactNode[] = row.items.map((item) =>
       isTool(item) ? (
         <ToolCall key={item.key ?? item.id} event={item} span={showTrack ? spans.get(item.id) : undefined} compact={compact} now={now} />

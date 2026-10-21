@@ -3,6 +3,20 @@
 > Wiedereinstiegspunkt für neue Sessions. Nach jeder größeren Änderung aktualisieren.
 > Doku: ARCHITECTURE.md (Aufbau), SETUP.md (Installation/Betrieb), SECURITY.md (Sicherheitsmodell).
 
+## Stand: 2026-10-21 – Chat-Zeitleiste, Gedankenprozess, Routendienst
+
+- **Routendienst** (Connector `routing`, Werkzeuge `route_plan`, `route_geocode`): Auto/Fahrrad/Fußweg, Entfernung, Fahrzeit,
+  bis zu zwei Alternativen; OpenStreetMap ohne Schlüssel; Fehler (Zeitüberschreitung, keine Route, nicht erreichbar) klar benannt
+- **Chat-Zeitleiste** (`chat_events`, Migration `f2a3b4c5d6e7`): Text, Tool-Aufrufe und Prozessschritte in Ereignisreihenfolge,
+  persistent, nach Neuladen identisch; parallele Tools mit eigener ID und Start/Ende
+- **Desktop**: Tool-Zeilen (aufklappbar, gemeinsame Zeitachse), Gedankenprozess je Antwort mit Quellenangabe, klickbare
+  Checklisten, Routenkarte (Leaflet), gedrosseltes Streaming, Auto-Scroll nur am Ende, Laden älterer Turns
+- **Handy**: dieselbe Zeitleiste und Darstellung, Karte ohne neues Paket (OSM-Kacheln + gezeichnete Route)
+
+Offen: Migration auf die Test-DB anwenden (`jarvis_test`; die Produktions-DB migriert beim Core-Start selbst), danach
+`pytest -m integration` (Postgres-Variante von `test_chat_timeline.py`); Flutter-Code mit `flutter analyze` und `flutter test`
+prüfen (in der Entstehungssitzung nicht ausführbar).
+
 ## Stand: 2026-10-17 – J.A.R.V.I.S. Mobile (Android)
 
 Neue Android-App `apps/jarvis_mobile` (Flutter 3.41 + Kotlin) und Mobile-Schicht im Core (`core/src/jarvis/mobile/`).

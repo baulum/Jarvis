@@ -34,13 +34,17 @@ class MdQuote extends MdBlock {
 }
 
 class MdList extends MdBlock {
-  const MdList({required this.ordered, required this.start, required this.items, required this.checked});
+  const MdList({required this.ordered, required this.start, required this.items, required this.checked, required this.tasks});
   final bool ordered;
   final int start;
   final List<List<MdBlock>> items;
 
   /// task-list state per item (`- [x]` / `- [ ]`), null for a normal item
   final List<bool?> checked;
+
+  /// task items of the whole document numbered in reading order – the key a toggled state is stored under
+  /// (same numbering as the desktop app)
+  final List<int?> tasks;
 }
 
 class MdTable extends MdBlock {
@@ -79,8 +83,25 @@ String? safeHref(String raw) {
   return RegExp(r'^(https?://|mailto:)', caseSensitive: false).hasMatch(href) ? href : null;
 }
 
-List<MdBlock> parseMarkdown(String src) =>
-    _blocks(src.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n'));
+List<MdBlock> parseMarkdown(String src) {
+  final out = _blocks(src.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n'));
+  var n = 0;
+  void number(List<MdBlock> blocks) {
+    for (final b in blocks) {
+      if (b is MdList) {
+        for (var i = 0; i < b.items.length; i++) {
+          if (b.checked[i] != null) b.tasks[i] = n++;
+          number(b.items[i]);
+        }
+      } else if (b is MdQuote) {
+        number(b.blocks);
+      }
+    }
+  }
+
+  number(out);
+  return out;
+}
 
 bool _isOrdered(String marker) => marker.codeUnitAt(0) >= 0x30 && marker.codeUnitAt(0) <= 0x39;
 
@@ -270,7 +291,7 @@ List<MdBlock> _blocks(List<String> lines) {
       if (n != null && n.group(1)!.length == base && _isOrdered(n.group(2)!) == ordered) i = k;
     }
   }
-  return (MdList(ordered: ordered, start: startNo, items: items, checked: checked), i);
+  return (MdList(ordered: ordered, start: startNo, items: items, checked: checked, tasks: List<int?>.filled(checked.length, null)), i);
 }
 
 // ------------------------------------------------------------------ inline

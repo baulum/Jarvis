@@ -120,6 +120,24 @@ Reserve. Steuerung: `pause`/`resume` (SIGSTOP/SIGCONT auf die Prozessgruppe, das
 `/api/tasks/{id}/pause|resume|message` (weiches Pausieren zwischen Schritten; Nachrichten gehen an den laufenden Coding-Job der Aufgabe).
 Desktop (`AgentsView`) und Handy (Aktivität → Agenten) nutzen dieselben Endpunkte; Pausieren und Abbrechen fragen im UI vorher nach.
 
+**Chat-Zeitleiste.** Jeder Turn wird von `agent/timeline.py` (`TurnRecorder`) als geordnete Liste aufgezeichnet:
+`message` (Nutzer, Jarvis-Textsegmente, Systemmeldungen), `tool` (je Aufruf: `tool_use_id`, Status, Start/Ende in ms, Eingabe,
+Ergebnis, optional `display` wie eine Route), `process` (Gedankenprozess: Quelle `model` = echtes Reasoning des Modells, nur
+wenn die API es liefert; `protocol` = protokollierte Aktion wie Modellwahl, Gedächtnisabruf, Werkzeugwahl, Plan, Freigabe;
+`summary` = nachträglich aus den Protokolldaten gebildet) und `turn`. Jedes Element hat ID, `ts` (ms), eine fortlaufende `seq`
+je Gespräch und die `turn_id`. Ein Werkzeugaufruf schließt das laufende Textsegment; so stehen Text und Tools in
+Ereignisreihenfolge. Persistenz in `chat_events` (Upsert, ein Schreiber je Turn), live als `chat.event`; Text-Streaming als
+`chat.delta`/`chat.thinking` mit der Element-ID. `GET /api/sessions/{id}/events` liefert die Zeitleiste seitenweise nach Turns
+(ältere Nachrichten ohne Ereignisse werden davor einsortiert), `POST …/events/{eid}/check` speichert Checklisten-Haken in der
+Nachricht. Desktop (`desktop/src/lib/timeline.ts`) und Handy (`apps/jarvis_mobile/lib/state/timeline.dart`) falten dieselben
+Ereignisse nach denselben Regeln.
+
+**Routendienst.** Connector `routing` (`connectors/routing.py`, Provider in `routing/providers.py`): Geocoding über Nominatim
+(User-Agent, max. 1 Anfrage/s, Cache), Routing über OSRM (Standard: FOSSGIS-Server für Auto/Fahrrad/Fuß) oder Valhalla,
+austauschbar über die Schnittstellen `Geocoder`/`RoutingProvider`. Das Modell bekommt nur Kennzahlen; die Geometrie geht als
+Anzeige-Artefakt (`tools/artifacts.py`) an das Tool-Element und wird im Chat als Karte gezeigt (Desktop: Leaflet + OSM-Kacheln,
+Handy: OSM-Kacheln mit gezeichneter Route).
+
 **Slash-Befehle.** `GET /api/commands` (`jarvis/commands.py`) ist die einzige Quelle der Befehlsliste für Desktop und Handy; der Server
 beschreibt (`action`: prompt, model, new, stop, navigate, killswitch), die Apps führen aus.
 
