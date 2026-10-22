@@ -311,7 +311,8 @@ nicht möglich
 | Barge-in per Stimme | ✅ / ⬜ | Unit-Tests (Wörter des Unterbrechers bleiben erhalten, Klick löst nichts aus); im E2E/auf dem Gerät nicht ausgelöst |
 | Stopp-Button im Anruf (`POST /api/mobile/calls/{id}/interrupt`) | ✅ / ⬜ | Unit-Test Core + Widget-Test; auf dem Gerät nicht probiert |
 | „Stopp“ per Stimme (Anruf, Overlay, Mac): Jarvis schweigt, Gespräch bleibt offen | ✅ | Unit-Tests; „Gespräch beenden“/„Tschüss“ legen weiterhin auf |
-| Overlay („Hey Jarvis“): Stopp-Button, Barge-in während des Vorlesens | ⬜ | Kotlin in der Entstehungssitzung nicht gebaut/ausgeführt |
+| Einstellung „Jarvis ins Wort fallen“ (Standard an; Overlay + Anruf) | ✅ / ⬜ | Widget-Test, Core-Unit-Test (Anruf: aus → keine Unterbrechung, Stopp-Button geht); Gerät nicht probiert |
+| Overlay („Hey Jarvis“): Stopp-Button, Barge-in während des Vorlesens | ⬜ | `BargeInDetectorTest` (Kotlin) geschrieben; Kotlin in der Entstehungssitzung nicht gebaut/ausgeführt |
 | Halten bei Mobilfunkanruf | ⬜ | implementiert (`onSetInactive`) |
 | Netzwechsel WLAN ↔ mobil / Reconnect | ⬜ | LiveKit-Reconnect + Adress-Neuauswahl implementiert |
 | Unterwegs über Tailscale | ⬜ | Tailscale nicht installiert |

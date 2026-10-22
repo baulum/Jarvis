@@ -217,12 +217,13 @@ class AssistSession(context: Context, private val onUi: (AssistUi) -> Unit) {
     /**
      * Reads the answer out while listening for Sir. If he talks over it the speech stops at once and what he said
      * so far is returned (it becomes the start of his next utterance); null if the answer was read to the end.
-     * Without a microphone permission or while the microphone is busy the answer is simply read out.
+     * Without a microphone permission, with barge-in switched off in the settings or while the microphone is busy
+     * the answer is simply read out (the Stopp button still works).
      */
     private suspend fun speakUntilInterrupted(text: String): BargeInListener.Heard? = coroutineScope {
         val speaking = async { speech.speak(text) }
         val watcher = async(Dispatchers.IO) {
-            if (WakeWord.hasMic(app)) BargeInListener.listen { isActive } ?: awaitCancellation() else awaitCancellation()
+            if (WakeWord.bargeIn(app) && WakeWord.hasMic(app)) BargeInListener.listen { isActive } ?: awaitCancellation() else awaitCancellation()
         }
         val heard = select<BargeInListener.Heard?> {
             watcher.onAwait { it }

@@ -493,10 +493,14 @@ async def calls(limit: int = 50, st: AppState = StateDep, p: Principal = OwnerOr
     return await st.calls.history(limit)
 
 
+class CallOptions(BaseModel):
+    barge_in: bool = True  # app setting: Sir may talk over Jarvis (off → only the Stopp button interrupts)
+
+
 @router.post("/calls")
-async def call_start(st: AppState = StateDep, p: Principal = Mobile) -> dict[str, Any]:
+async def call_start(body: CallOptions | None = None, st: AppState = StateDep, p: Principal = Mobile) -> dict[str, Any]:
     try:
-        info = await st.calls.start_from_phone(p)
+        info = await st.calls.start_from_phone(p, barge_in=body.barge_in if body else True)
     except RuntimeError as e:
         raise HTTPException(409, str(e)) from e
     await audit(p.label, "call.start", target=info["call_id"])
@@ -504,9 +508,11 @@ async def call_start(st: AppState = StateDep, p: Principal = Mobile) -> dict[str
 
 
 @router.post("/calls/{cid}/answer")
-async def call_answer(cid: str, st: AppState = StateDep, p: Principal = Mobile) -> dict[str, Any]:
+async def call_answer(
+    cid: str, body: CallOptions | None = None, st: AppState = StateDep, p: Principal = Mobile
+) -> dict[str, Any]:
     try:
-        return await st.calls.answer(_uuid(cid), p)
+        return await st.calls.answer(_uuid(cid), p, barge_in=body.barge_in if body else True)
     except LookupError as e:
         raise HTTPException(404, str(e)) from e
     except PermissionError as e:

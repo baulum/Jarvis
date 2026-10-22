@@ -124,23 +124,55 @@ object VoiceRecorder {
 }
 
 /**
+ * Decides frame by frame whether Sir is talking over Jarvis. No audio classes in here, so it runs in JVM tests.
+ *
+ * The on-device voice comes out of the phone's own speaker, so it reaches the microphone. What keeps it from
+ * interrupting itself: the level of Jarvis' own voice is measured first (the first [WARMUP_FRAMES], then a slowly
+ * falling peak) and Sir must be clearly louder than that ([ratio]); and it has to last [needMs] – a click or a
+ * cough is no interruption. [ratio] is higher when the platform has no echo canceller to help.
+ */
+class BargeInDetector(private val ratio: Double = RATIO, private val needMs: Int = NEED_MS) {
+    companion object {
+        const val FRAME_MS = 20
+        const val WARMUP_FRAMES = 15 // 300 ms of Jarvis' own voice, measured before anyone is judged
+        const val NEED_MS = 400
+        const val MIN_RMS = 1_400.0
+        const val ECHO_FLOOR = 600.0
+        const val RATIO = 2.2
+        const val RATIO_WITHOUT_AEC = 3.2
+    }
+
+    private var frames = 0
+    private var echo = ECHO_FLOOR
+    private var hits = 0
+
+    /** One 20 ms frame with its RMS [level]; true as soon as the interruption is long and loud enough. */
+    fun feed(level: Double): Boolean {
+        frames++
+        if (frames <= WARMUP_FRAMES) {
+            echo = max(echo, level); return false
+        }
+        if (level > max(MIN_RMS, echo * ratio)) {
+            hits++
+        } else {
+            hits = max(0, hits - 1)
+            echo = max(level, echo * 0.995) // follows the peaks of Jarvis' own voice
+        }
+        return hits * FRAME_MS >= needMs
+    }
+}
+
+/**
  * Barge-in for the overlay: listens while Jarvis speaks and returns as soon as Sir talks over him.
  *
- * The on-device voice comes out of the phone's own speaker, so it reaches the microphone. Three things keep it
- * from interrupting itself: the VOICE_COMMUNICATION source with the platform's echo canceller and noise
- * suppressor where the device has them; the level of Jarvis' own voice is measured first (the first 300 ms, then
- * a slowly falling peak) and Sir must be clearly louder than that; and it has to last [NEED_MS] – a click or a
- * cough is no interruption.
+ * The microphone is opened as VOICE_COMMUNICATION with the platform's echo canceller and noise suppressor where the
+ * device has them; the decision itself is [BargeInDetector]. The last [KEEP_FRAMES] stay in a ring buffer (pre-roll):
+ * the words that interrupted are the start of the next utterance, none of it is lost.
  */
 object BargeInListener {
     private const val RATE = 16_000
     private const val FRAME = RATE / 50 // 20 ms
-    private const val WARMUP_FRAMES = 15 // 300 ms of Jarvis' own voice, measured before anyone is judged
-    private const val NEED_MS = 400
-    private const val KEEP_FRAMES = 40 // 800 ms: the words that interrupted are not lost
-    private const val MIN_RMS = 1_400.0
-    private const val ECHO_FLOOR = 600.0
-    private const val RATIO = 2.2
+    private const val KEEP_FRAMES = 40 // 800 ms
 
     /** What Sir said so far (16 kHz mono PCM) and the quietest level in it, a stand-in for the room's noise. */
     class Heard(val pcm: ByteArray, val noise: Double)
@@ -153,38 +185,27 @@ object BargeInListener {
         if (rec.state != AudioRecord.STATE_INITIALIZED) {
             rec.release(); return null // microphone busy: the answer is simply read out
         }
+        val aec = if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(rec.audioSessionId)?.also { it.enabled = true } else null
         val effects = listOfNotNull(
-            if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(rec.audioSessionId)?.also { it.enabled = true } else null,
+            aec,
             if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(rec.audioSessionId)?.also { it.enabled = true } else null,
         )
+        val detector = BargeInDetector(if (aec != null) BargeInDetector.RATIO else BargeInDetector.RATIO_WITHOUT_AEC)
         val recent = ArrayDeque<ShortArray>()
         val levels = ArrayDeque<Double>()
         val buf = ShortArray(FRAME)
-        var frames = 0
-        var echo = ECHO_FLOOR
-        var hits = 0
         try {
             rec.startRecording()
             while (active()) {
                 val n = rec.read(buf, 0, FRAME)
                 if (n < 0) return null
                 if (n == 0) continue
-                frames++
                 val level = VoiceRecorder.rms(buf, n)
                 recent.addLast(buf.copyOf(n)); levels.addLast(level)
                 if (recent.size > KEEP_FRAMES) {
                     recent.removeFirst(); levels.removeFirst()
                 }
-                if (frames <= WARMUP_FRAMES) {
-                    echo = max(echo, level); continue
-                }
-                if (level > max(MIN_RMS, echo * RATIO)) {
-                    hits++
-                } else {
-                    hits = max(0, hits - 1)
-                    echo = max(level, echo * 0.995) // follows the peaks of Jarvis' own voice
-                }
-                if (hits * 20 >= NEED_MS) {
+                if (detector.feed(level)) {
                     val out = ByteArrayOutputStream()
                     recent.forEach { VoiceRecorder.write(out, it) }
                     return Heard(out.toByteArray(), levels.minOrNull() ?: 0.0)

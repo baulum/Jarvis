@@ -33,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import livekit.org.webrtc.AudioTrackSink
 import org.json.JSONObject
+import systems.pje.jarvis_mobile.assist.WakeWord
 import systems.pje.jarvis_mobile.bridge.NativeEvents
 import systems.pje.jarvis_mobile.net.Gateway
 import systems.pje.jarvis_mobile.net.Http
@@ -229,8 +230,9 @@ class CallService : Service() {
         CallManager.update { it.copy(status = "connecting") }
         promote(foregroundTypes(withMic = true))
         val info = try {
-            val text = if (incoming) gw.request("POST", "/api/mobile/calls/${CallManager.state.value.callId}/answer")
-            else gw.request("POST", "/api/mobile/calls")
+            val options = JSONObject().put("barge_in", WakeWord.bargeIn(this)).toString() // Sir may talk over Jarvis (setting)
+            val text = if (incoming) gw.request("POST", "/api/mobile/calls/${CallManager.state.value.callId}/answer", options)
+            else gw.request("POST", "/api/mobile/calls", options)
             JSONObject(text)
         } catch (e: Exception) {
             Log.w(TAG, "Call setup failed: ${e.message}")

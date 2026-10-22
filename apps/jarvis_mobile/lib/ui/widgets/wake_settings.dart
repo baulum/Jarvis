@@ -47,9 +47,9 @@ class _WakeSettingsState extends ConsumerState<WakeSettings> with WidgetsBinding
     if (mounted) setState(() => _s = s);
   }
 
-  Future<bool> _configure({bool? enabled, bool? screenOnly}) async {
+  Future<bool> _configure({bool? enabled, bool? screenOnly, bool? bargeIn}) async {
     try {
-      final s = await ref.read(nativeProvider).wakeConfigure(enabled: enabled, screenOnly: screenOnly);
+      final s = await ref.read(nativeProvider).wakeConfigure(enabled: enabled, screenOnly: screenOnly, bargeIn: bargeIn);
       if (mounted) setState(() => _s = s);
       return true;
     } on PlatformException catch (e) {
@@ -133,6 +133,12 @@ class _WakeSettingsState extends ConsumerState<WakeSettings> with WidgetsBinding
         _row('Schlüsselwort', s['keyword']?.toString() ?? '–'),
         _switch('Nur bei eingeschaltetem Bildschirm', s['screen_only'] == true, (v) => _configure(screenOnly: v)),
         Text('Spart Akku: bei ausgeschaltetem Bildschirm ist das Mikrofon dann ganz aus.', style: J.mono(11, color: J.text3)),
+        const SizedBox(height: J.s2),
+        // default on; a status without the key (older build) counts as on
+        _switch('Jarvis ins Wort fallen', s['barge_in'] != false, (v) => _configure(bargeIn: v)),
+        Text('Jarvis hört beim Sprechen weiter zu und verstummt sofort, wenn Sie dazwischensprechen – im Sprachfenster und im Anruf. '
+            'Aus: nur der Stopp-Button unterbricht ihn.',
+            style: J.mono(11, color: J.text3)),
         const SizedBox(height: J.s4),
         _perm('Mikrofon', s['mic'] == true, 'Für das Aktivierungswort und Ihre Frage.', () async {
           // granted → start the service right away (Android only allows it while the app is in front)

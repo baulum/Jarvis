@@ -174,6 +174,49 @@ async def test_call_ignores_a_click_while_jarvis_speaks() -> None:
     assert called == [] and agent.metrics["barge_ins"] == 0
 
 
+async def test_call_barge_in_switched_off_in_the_app_never_interrupts() -> None:
+    agent = _agent()
+    agent.barge_in = False  # setting "Jarvis ins Wort fallen" off: only the Stopp button interrupts
+    agent._audio_q = asyncio.Queue()
+    agent.state.settings = SimpleNamespace(
+        voice=SimpleNamespace(
+            vad_min_rms=180,
+            speculative_stt_ms=280,
+            barge_in_ms=320,
+            end_of_turn_silence_ms=1100,
+            min_end_of_turn_silence_ms=400,
+        )
+    )
+    called: list[int] = []
+
+    async def interrupt() -> None:
+        called.append(1)
+
+    agent._interrupt = interrupt
+    loop = asyncio.create_task(agent._listen_loop())
+    try:
+        for chunk in chunks(np.concatenate([quiet(400), tone(1500), quiet(300)])):
+            agent._audio_q.put_nowait(chunk)
+        await asyncio.sleep(0.2)
+    finally:
+        loop.cancel()
+    assert called == [] and agent.metrics["barge_ins"] == 0
+    # the Stopp button is the fallback and still works
+    cleared: list[int] = []
+    agent._source = SimpleNamespace(clear_queue=lambda: cleared.append(1))
+    agent._interrupt = CallVoiceAgent._interrupt.__get__(agent)
+    assert await agent.interrupt_speech() is True and cleared == [1]
+
+
+def test_call_barge_in_is_on_by_default_and_follows_the_app_setting() -> None:
+    assert CallVoiceAgent.barge_in is True
+
+    from jarvis.mobile.api import CallOptions
+
+    assert CallOptions().barge_in is True
+    assert CallOptions.model_validate({"barge_in": False}).barge_in is False
+
+
 async def test_call_stop_command_is_not_sent_to_the_agent_and_does_not_hang_up() -> None:
     agent = _agent()
     agent.principal = SimpleNamespace()

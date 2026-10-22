@@ -74,6 +74,8 @@ def tool_label(name: str) -> str:
 
 
 class CallVoiceAgent:
+    barge_in = True  # app setting, sent when the call is placed / answered; off → only the Stopp button interrupts
+
     def __init__(
         self,
         state: AppState,
@@ -283,6 +285,8 @@ class CallVoiceAgent:
             pcm = await self._audio_q.get()
             busy = self._speaking or (self._turn_task is not None and not self._turn_task.done())
             if busy:
+                if not self.barge_in:
+                    continue  # switched off in the app: his voice while Jarvis talks is no interruption
                 recent.append(pcm)
                 recent_len += pcm.size
                 while recent_len - recent[0].size >= IN_RATE * 0.6:

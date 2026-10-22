@@ -105,7 +105,12 @@ spricht *oder* noch an der Antwort arbeitet:
 - *Erkennung:* anhaltende Sprache (`voice.barge_in_ms`, 320 ms) deutlich über dem Eigenecho (Mac: `BargeInDetector`, ohne
   Echounterdrückung relativ zu den Pegelspitzen der eigenen Stimme; Anruf: Echounterdrückung des Handys; Telefonleitung:
   `BARGE_IN_RMS` über dieselbe Mindestdauer; Handy-Overlay: AEC-Quelle + Eigenecho-Pegel). Ein Klick oder Husten genügt nicht.
-  „Hey Jarvis“ unterbricht am Mac immer.
+  „Hey Jarvis“ unterbricht am Mac immer. Handy-Overlay: `BargeInDetector` (Kotlin, rein rechnerisch, JVM-getestet) – Eigenecho
+  wird in den ersten 300 ms gemessen, Sir muss ≥ 2,2× darüber liegen (3,2× ohne AEC des Geräts) und 400 ms durchhalten;
+  die letzten 800 ms laufen als Pre-Roll-Puffer mit.
+- *Einstellung:* Handy › Einstellungen › „Jarvis ins Wort fallen“ (Standard an, gilt für Overlay und Anruf; die App meldet sie
+  beim Start/Annehmen eines Anrufs als `barge_in` an `POST /api/mobile/calls[/{id}/answer]`). Aus: nur der Stopp-Button
+  unterbricht. Der Stopp-Button bleibt in beiden Fällen als Rückfall.
 - *Wirkung:* Wiedergabepuffer verwerfen (Mac `flush`, Anruf `clear_queue`, Twilio `clear`), Synthese abbrechen
   (`SpeechTurn.cancel`), nur den Agent-Lauf **dieser** Sitzung abbrechen (`Orchestrator.interrupt(session_id)`); die Wörter des
   Unterbrechers (Puffer von ~0,6 s) sind der Anfang der nächsten Äußerung und werden ganz normal verarbeitet.

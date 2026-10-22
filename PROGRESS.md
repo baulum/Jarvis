@@ -3,6 +3,14 @@
 > Wiedereinstiegspunkt für neue Sessions. Nach jeder größeren Änderung aktualisieren.
 > Doku: ARCHITECTURE.md (Aufbau), SETUP.md (Installation/Betrieb), SECURITY.md (Sicherheitsmodell).
 
+## Stand: 2026-10-22 – Barge-in schaltbar, Overlay-Detektor testbar
+
+- **Einstellung „Jarvis ins Wort fallen“** (Handy › Einstellungen, Standard an): Overlay (`WakeWord.bargeIn`) und Anruf
+  (`barge_in` beim Start/Annehmen → `CallVoiceAgent.barge_in`); aus = nur der Stopp-Button unterbricht
+- **Overlay:** Entscheidungslogik als `BargeInDetector` herausgelöst (JVM-Test `BargeInDetectorTest`); ohne Echo-
+  unterdrückung des Geräts gilt die strengere Schwelle (3,2× statt 2,2× Eigenecho)
+- Tests: Core 507 Unit, Flutter 59, `flutter analyze` sauber. Kotlin-Tests nicht ausgeführt (kein Gradle in der Umgebung)
+
 ## Stand: 2026-10-22 – Barge-in und Stopp-Befehl in allen Sprachkanälen
 
 Beschreibung in ARCHITECTURE.md („Unterbrechen (Barge-in) und Stopp“).

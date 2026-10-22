@@ -105,7 +105,7 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
             "phoneControlStatus" -> result.success(PhoneControlService.isEnabled(context))
             "wakeStatus" ->result.success(WakeWord.status(context))
             "wakeConfigure" -> try {
-                WakeWord.configure(context, call.argument<Boolean>("enabled"), call.argument<Boolean>("screenOnly"))
+                WakeWord.configure(context, call.argument<Boolean>("enabled"), call.argument<Boolean>("screenOnly"), call.argument<Boolean>("bargeIn"))
                 result.success(WakeWord.status(context))
             } catch (e: Exception) {
                 android.util.Log.w("JarvisWake", "configure failed: ${e.javaClass.simpleName}")

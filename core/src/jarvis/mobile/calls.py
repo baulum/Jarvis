@@ -266,7 +266,7 @@ class CallService:
             await self._end(call_id, "missed", "timeout")
 
     # ------------------------------------------------------------------ phone actions
-    async def answer(self, call_id: uuid.UUID, principal: Principal) -> dict[str, Any]:
+    async def answer(self, call_id: uuid.UUID, principal: Principal, barge_in: bool = True) -> dict[str, Any]:
         async with session_scope() as s:
             c = await s.get(CallSession, call_id, with_for_update=True)
             if c is None:
@@ -284,6 +284,7 @@ class CallService:
             await self._end(call_id, "failed", "agent_gone")
             raise RuntimeError("Jarvis ist für dieses Gespräch nicht mehr verfügbar")
         agent.set_owner(principal)
+        agent.barge_in = barge_in
         await self.state.push.send_all(
             "call_cancel", {"call_id": str(call_id), "status": "answered_elsewhere"}, high_priority=True, ttl_s=60
         )  # the answering phone ignores it (call already active there)
@@ -298,7 +299,7 @@ class CallService:
                 return
         await self._end(call_id, "declined", "declined", device_id=principal.device_id)
 
-    async def start_from_phone(self, principal: Principal) -> dict[str, Any]:
+    async def start_from_phone(self, principal: Principal, barge_in: bool = True) -> dict[str, Any]:
         av = await self.availability()
         if not av["can_call_jarvis"]:
             raise RuntimeError(", ".join(av["problems"]) or "es läuft bereits ein Anruf")
@@ -317,6 +318,7 @@ class CallService:
             )
         agent = self._start_agent(call_id, room, call_opening(self.state.personality), join_timeout=40)
         agent.set_owner(principal)
+        agent.barge_in = barge_in
         await bus.publish("call.started", call_id=str(call_id), direction="to_jarvis")
         return self._join_info(call_id, room, principal)
 

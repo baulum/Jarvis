@@ -68,10 +68,10 @@ class NativeBridge {
       jsonDecode(await _ch.invokeMethod<String>('wakeStatus') ?? '{}') as Map<String, dynamic>;
 
   /// Only the given values change.
-  Future<Map<String, dynamic>> wakeConfigure({bool? enabled, bool? screenOnly}) async =>
+  Future<Map<String, dynamic>> wakeConfigure({bool? enabled, bool? screenOnly, bool? bargeIn}) async =>
       jsonDecode(await _ch.invokeMethod<String>(
                 'wakeConfigure',
-                {'enabled': enabled, 'screenOnly': screenOnly},
+                {'enabled': enabled, 'screenOnly': screenOnly, 'bargeIn': bargeIn},
               ) ??
               '{}') as Map<String, dynamic>;
 

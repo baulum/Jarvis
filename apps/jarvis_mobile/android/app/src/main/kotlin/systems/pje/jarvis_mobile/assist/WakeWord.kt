@@ -40,6 +40,9 @@ object WakeWord {
     fun screenOnly(c: Context) = prefs(c).getBoolean("screen_only", true)
     fun sensitivity(c: Context) = prefs(c).getFloat("sensitivity", 0.6f)
 
+    /** Sir may talk over Jarvis (overlay and calls); off → only the Stopp button interrupts. */
+    fun bargeIn(c: Context) = prefs(c).getBoolean("barge_in", true)
+
     fun hasMic(c: Context) = ContextCompat.checkSelfPermission(c, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     fun canOverlay(c: Context) = Settings.canDrawOverlays(c)
 
@@ -51,10 +54,11 @@ object WakeWord {
         return VoiceInteractionService.isActiveService(c, ComponentName(c, JarvisVoiceInteractionService::class.java))
     }
 
-    fun configure(c: Context, enabled: Boolean?, screenOnly: Boolean?) {
+    fun configure(c: Context, enabled: Boolean?, screenOnly: Boolean?, bargeIn: Boolean? = null) {
         prefs(c).edit().apply {
             if (enabled != null) putBoolean("enabled", enabled)
             if (screenOnly != null) putBoolean("screen_only", screenOnly)
+            if (bargeIn != null) putBoolean("barge_in", bargeIn)
         }.apply()
         when {
             !enabled(c) -> {
@@ -96,6 +100,7 @@ object WakeWord {
             .put("last_wake", s.lastWake)
             .put("battery_unrestricted", batteryUnrestricted(c))
             .put("screen_only", screenOnly(c))
+            .put("barge_in", bargeIn(c))
             .put("keyword", "„Hey Jarvis“")
             .put("mic", hasMic(c))
             .put("notifications", NotificationManagerCompat.from(c).areNotificationsEnabled())
