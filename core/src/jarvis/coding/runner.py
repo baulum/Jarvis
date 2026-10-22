@@ -723,6 +723,13 @@ class CodingRunner:
                     await self._commit_pending(repo)
                     await self._git(repo, "worktree", "add", "-b", branch, str(wt), "HEAD")
                     worktree = str(wt)
+                elif not Path(worktree).is_dir():  # removed after a backup (see _ship_backup): bring it back
+                    wt = Path(worktree)
+                    await self._git(repo, "worktree", "prune", check=False)
+                    if await self._git(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False):
+                        await self._git(repo, "worktree", "add", str(wt), branch)
+                    else:
+                        await self._git(repo, "worktree", "add", "-b", branch, str(wt), "HEAD")
                 self.logs_dir.mkdir(parents=True, exist_ok=True)
                 log_path = self.logs_dir / f"{job_id}.jsonl"
                 await self._update(
@@ -1373,6 +1380,7 @@ class CodingRunner:
         try:
             if not (await self._branch_work(wt))["commits"]:
                 ship["message"] = f"{note}; keine Änderungen auf dem Job-Branch {branch}, nichts zu sichern."
+                await self._backup_remove_worktree(ship, wt, branch)
                 return
             if await self._git(wt, "status", "--porcelain"):
                 raise CodingError("Worktree enthält nicht committete Änderungen")
@@ -1387,7 +1395,26 @@ class CodingRunner:
             )[:900]
             return
         ship["pushed"] = True
-        ship["message"] = f"{note}; Job-Branch {branch} auf origin gesichert, Worktree {wt} bleibt für 'Wiederholen'."
+        ship["message"] = f"{note}; Job-Branch {branch} auf origin gesichert."
+        await self._backup_remove_worktree(ship, wt, branch)
+
+    async def _backup_remove_worktree(self, ship: dict[str, Any], wt: Path, branch: str) -> None:
+        """The work is safe on origin (or there is none): remove the worktree so it does not clutter the editor.
+        'Wiederholen' recreates it from the job branch. A worktree with open changes stays."""
+        try:
+            if not wt.exists():
+                return
+            if not wt.resolve().is_relative_to(self.workspaces.resolve()):
+                raise CodingError("liegt außerhalb des Jarvis-Workspace")
+            if await self._git(wt, "status", "--porcelain"):
+                raise CodingError("enthält nicht gesicherte Änderungen")
+            repo = Path(await self._git(wt, "rev-parse", "--git-common-dir"))
+            repo = (wt / repo).resolve().parent if not repo.is_absolute() else repo.resolve().parent
+            await self._git(repo, "worktree", "remove", "--force", str(wt))
+            ship["worktree_removed"] = True
+            ship["message"] += " Worktree entfernt (Wiederholen legt ihn neu an)."
+        except Exception as e:
+            ship["message"] += f" Worktree {wt} bleibt: {e}"
 
     async def _ship_merge(self, ship: dict[str, Any], wt: Path, branch: str, title: str, body: str) -> None:
         base = ship["base"]

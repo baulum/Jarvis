@@ -345,7 +345,7 @@ async def test_red_backs_up_the_branch_but_never_main(env: SimpleNamespace) -> N
     assert _git(env.origin, "rev-parse", BRANCH) == head
     assert _origin_main(env) == before
     assert not env.supabase_log.exists()
-    assert BRANCH in _local_branches(env) and env.wt.exists()  # job branch and worktree stay
+    assert BRANCH in _local_branches(env) and not env.wt.exists()  # branch stays, worktree removed after backup
     assert "cleanup" not in ship
 
 
@@ -613,13 +613,12 @@ async def test_run_red_job_commits_wip_and_pushes_branch_not_main(
     assert job.result["ship"]["state"] == "not_shipped" and job.result["ship"]["pushed"] is True
     assert env.gh.created == [] and env.gh.merged == []
     assert _origin_main(env) == before
-    assert _git(env.origin, "rev-parse", BRANCH) == _git(env.wt, "rev-parse", "HEAD")
-    assert _git(env.wt, "log", "-1", "--format=%s").startswith("Jarvis (WIP): Feature")
-    assert _git(env.wt, "status", "--porcelain") == ""
-    assert job.result["commit"] == _git(env.wt, "rev-parse", "--short", "HEAD")
+    assert _git(env.origin, "rev-parse", BRANCH) == _git(env.repo, "rev-parse", BRANCH)
+    assert _git(env.repo, "log", "-1", "--format=%s", BRANCH).startswith("Jarvis (WIP): Feature")
+    assert job.result["commit"] == _git(env.repo, "rev-parse", "--short", BRANCH)
     summary = _finished(env)["summary"]
     assert "Nichts in main gemergt oder deployt" in summary and "auf origin gesichert" in summary
-    assert BRANCH in _local_branches(env) and env.wt.exists()
+    assert BRANCH in _local_branches(env) and not env.wt.exists()
 
 
 async def test_run_aborted_job_commits_and_pushes_its_work(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -637,7 +636,7 @@ async def test_run_aborted_job_commits_and_pushes_its_work(env: SimpleNamespace,
     assert job.result["ship"]["pushed"] is True and "Der Job ist abgebrochen" in job.result["ship"]["message"]
     assert _git(env.origin, "show", f"{BRANCH}:half.py") == "x = 1"
     assert _origin_main(env) == before and env.gh.created == []
-    assert env.wt.exists()
+    assert not env.wt.exists()
 
 
 async def test_run_red_job_names_a_failed_backup(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -685,7 +684,7 @@ async def test_cancelled_job_commits_and_pushes_its_work(env: SimpleNamespace, m
     assert job.result["ship"]["pushed"] is True and "abgebrochen" in job.result["ship"]["message"]
     assert _git(env.origin, "show", f"{BRANCH}:wip.py") == "y = 2"
     assert _origin_main(env) == before and env.gh.created == []
-    assert env.wt.exists()
+    assert not env.wt.exists()
 
 
 async def test_run_with_auto_ship_off_does_not_touch_remote(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
