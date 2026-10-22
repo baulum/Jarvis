@@ -1435,6 +1435,14 @@ class CodingRunner:
             ship["nothing_to_ship"] = True
             ship["message"] = f"Nichts auszuliefern: keine Änderungen gegenüber {base}."
             return
+        if not self.cfg.ship_via_pr and not ship["pr"]:
+            ship["stage"] = "merge"
+            try:
+                await self._ship_direct(ship, wt, base)
+                return
+            except CodingError as e:  # conflict or protected main: fall back to the PR route below
+                ship["direct_error"] = str(e)[:300]
+                logger.info("Direkter Merge nach %s nicht möglich (%s), weiter per PR", base, e)
         await self._git(wt, "push", "-u", "origin", branch)
         ship["pushed"] = True
         if not ship["pr"]:
@@ -1447,6 +1455,28 @@ class CodingRunner:
             raise CodingError(str(merged.get("message") or "GitHub hat den Merge abgelehnt"))
         ship["merged"] = True
         ship["merge_sha"] = merged.get("sha")
+
+    async def _ship_direct(self, ship: dict[str, Any], wt: Path, base: str) -> None:
+        """No PR: rebase the job branch onto origin/<base> and push it straight to <base> (fast-forward only)."""
+        for attempt in (1, 2):
+            try:
+                await self._git(wt, "rebase", f"origin/{base}")
+            except CodingError as e:
+                await self._git(wt, "rebase", "--abort", check=False)
+                raise CodingError(f"Rebase auf {base} nicht möglich: {e}") from e
+            head = await self._git(wt, "rev-parse", "HEAD")
+            try:
+                await self._git(wt, "push", "origin", f"HEAD:refs/heads/{base}")
+            except CodingError:
+                if attempt == 2:
+                    raise
+                await self._git(wt, "fetch", "origin", base)  # main moved meanwhile: rebase once more
+                continue
+            break
+        ship["head"] = head
+        ship["merged"] = True
+        ship["merge_sha"] = head
+        ship["direct"] = True
 
     async def _merge_when_ready(self, gh: Any, repo_name: str, number: int, head: str) -> Any:
         """Merges the PR. Right after it was opened GitHub may refuse with 405 (mergeability still being computed,
@@ -1514,7 +1544,9 @@ class CodingRunner:
         await self._git(repo, "fetch", "origin", base)
         listing = await self._git(repo, "ls-tree", "-r", "--name-only", f"origin/{base}")
         projects = supabase_projects(listing.splitlines())
-        merged_note = f"PR #{pr['number']} in {base} gemergt ({pr['url']})."
+        merged_note = (
+            f"PR #{pr['number']} in {base} gemergt ({pr['url']})." if pr else f"Direkt nach {base} gemergt und gepusht."
+        )
         if not projects:
             ship["supabase"] = {"present": False, "note": "Supabase nicht im Projekt – übersprungen"}
             ship["state"] = "shipped"

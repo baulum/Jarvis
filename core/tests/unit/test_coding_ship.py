@@ -113,6 +113,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         auto_ship=True,
         ship_base_branch="main",
         ship_merge_method="squash",
+        ship_via_pr=True,
         supabase_command=str(tmp_path / "bin" / "supabase"),
         supabase_timeout_minutes=1,
         job_timeout_minutes=1,
@@ -694,3 +695,14 @@ async def test_run_with_auto_ship_off_does_not_touch_remote(env: SimpleNamespace
     assert env.store[jid].status == "completed" and "ship" not in env.store[jid].result
     assert env.gh.created == [] and _origin_branches(env) == ["main"]
     assert env.store[jid].result["commit"] == _git(env.wt, "rev-parse", "--short", "HEAD")
+
+
+async def test_green_ships_directly_to_main_without_pr(env: SimpleNamespace) -> None:
+    head = _commit(env, {"a.py": "x = 1\n"})
+    env.runner.cfg.ship_via_pr = False
+    ship = await _flow(env)
+
+    assert ship["state"] != "failed" and ship["merged"] is True and ship["direct"] is True
+    assert env.gh.created == [] and env.gh.merged == []
+    assert _origin_main(env) == head
+    assert not env.wt.exists() and BRANCH not in _local_branches(env)

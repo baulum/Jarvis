@@ -226,6 +226,9 @@ class CodingCfg(_Strict):
     # gepusht, aber nichts gemergt/deployt, der Worktree bleibt. False = nur committen.
     auto_ship: bool = True
     ship_base_branch: str = "main"
+    # False (Standard): Job-Branch auf origin/<base> rebasen und direkt nach <base> pushen, ohne PR. Bei Konflikt
+    # oder geschütztem Branch Fallback auf den PR-Weg. True = immer per PR.
+    ship_via_pr: bool = False
     ship_merge_method: Literal["squash", "merge", "rebase"] = "squash"
     # Supabase CLI (Programmname oder absoluter Pfad); nur nötig, wenn das Projekt supabase/functions oder
     # supabase/migrations enthält.
