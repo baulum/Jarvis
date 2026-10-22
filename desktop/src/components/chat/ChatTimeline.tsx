@@ -26,6 +26,7 @@ import {
   currentStep,
   formatClockMs,
   hasModelReasoning,
+  isMediaDisplay,
   isRouteDisplay,
   isTool,
   SOURCE_LABEL,
@@ -40,6 +41,7 @@ import {
 } from "../../lib/timeline";
 import { useApp } from "../../store/app";
 import { Markdown } from "../Markdown";
+import { GeneratedMedia } from "./GeneratedMedia";
 
 const RouteMap = lazy(() => import("./RouteMap"));
 
@@ -204,6 +206,7 @@ function ToolCall({ event, span, compact, now }: { event: TimelineEvent<ToolData
   const d = event.data;
   const duration = d.duration_ms ?? (d.status === "running" && d.started_ts ? now - d.started_ts : undefined);
   const route = isRouteDisplay(d.display) ? d.display : null;
+  const media = isMediaDisplay(d.display) ? d.display : null;
   const detail = !d.legacy && (d.input || d.result || d.error || d.started_ts);
   const icon =
     d.status === "running" ? (
@@ -275,6 +278,7 @@ function ToolCall({ event, span, compact, now }: { event: TimelineEvent<ToolData
           <RouteMap display={route} compact={compact} />
         </Suspense>
       )}
+      {media && d.status === "ok" && <GeneratedMedia display={media} compact={compact} />}
     </div>
   );
 }

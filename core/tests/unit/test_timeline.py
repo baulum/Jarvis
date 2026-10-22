@@ -192,6 +192,36 @@ async def test_route_artifact_is_attached_to_the_tool_item() -> None:
     assert store_art.take(aid) is None  # consumed exactly once
 
 
+async def test_generated_image_and_video_are_attached_and_survive_a_reload() -> None:
+    store_art = ArtifactStore()
+    img = store_art.put("image", {"media": "images", "file": "20261022-102738-53c75e52.png", "prompt": "Leuchtturm"})
+    vid = store_art.put("video", {"media": "videos", "file": "20261022-103000-aa11bb22.mp4", "duration_s": 5})
+    rec, bus, clock, store = _recorder(artifact_store=store_art)
+    await rec.start("Mach ein Bild und ein Video", "desktop")
+    for name, use, aid in (("image_generate", "i", img), ("video_generate", "v", vid)):
+        await rec.on_agent_event(AgentEvent("tool_started", data={"name": name, "tool_use_id": use}))
+        await rec.on_agent_event(
+            AgentEvent("tool_completed", data={"name": name, "tool_use_id": use, "result": _mcp({"image_path": "/x", "artifact_id": aid})})
+        )
+    await rec.finish()
+    # the live event carries the attachment …
+    live = [e for e in bus.items() if e["kind"] == "tool" and e["data"]["status"] == "ok"]
+    assert [e["data"]["display"]["kind"] for e in live] == ["image", "video"]
+    # … and so does the stored timeline a reload reads
+    tools = [i for i in (await store.list(SID))[0] if i["kind"] == "tool"]
+    assert tools[0]["data"]["display"] == {"kind": "image", "media": "images", "file": "20261022-102738-53c75e52.png", "prompt": "Leuchtturm"}
+    assert tools[1]["data"]["display"]["file"] == "20261022-103000-aa11bb22.mp4"
+    # a failed call shows nothing, even with an artifact id in its text
+    rec2, _, _, store2 = _recorder(artifact_store=store_art)
+    leftover = store_art.put("image", {"media": "images", "file": "a.png"})
+    await rec2.start("Nochmal", "desktop")
+    await rec2.on_agent_event(AgentEvent("tool_started", data={"name": "image_generate", "tool_use_id": "f"}))
+    await rec2.on_agent_event(AgentEvent("tool_failed", data={"name": "image_generate", "tool_use_id": "f", "result": leftover, "error": "x"}))
+    await rec2.finish()
+    failed = next(i for i in (await store2.list(SID))[0] if i["kind"] == "tool")
+    assert "display" not in failed["data"]
+
+
 async def test_bus_observations_become_protocol_steps() -> None:
     async def plan_steps(task_id: str) -> list[str]:
         return ["Kunde prüfen", "Rechnung entwerfen"]

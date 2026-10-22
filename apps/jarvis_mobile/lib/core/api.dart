@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
@@ -121,6 +122,18 @@ class Api {
     );
     return WebSocket.connect(ws.toString(), customClient: pinnedHttpClient(_pin))
         .timeout(const Duration(seconds: 8));
+  }
+
+  /// A generated image/video of the chat (GET /api/media/{images|videos}/{file}); the file name is checked by
+  /// the caller and again by the core.
+  Future<Uint8List> media(String kind, String file) async {
+    if (_client == null) await init();
+    final token = await native.accessToken();
+    final res = await _client!
+        .get(await _uri('/api/media/$kind/${Uri.encodeComponent(file)}'), headers: {'Authorization': 'Bearer $token'})
+        .timeout(const Duration(seconds: 60));
+    if (res.statusCode >= 400 || res.bodyBytes.isEmpty) throw ApiError(res.statusCode, 'Datei nicht verfügbar');
+    return res.bodyBytes;
   }
 
   Future<String> transcribe(List<int> wav) async {

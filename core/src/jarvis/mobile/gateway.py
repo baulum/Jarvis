@@ -38,6 +38,8 @@ MOBILE_ROUTES: list[tuple[frozenset[str], re.Pattern[str]]] = [
     (frozenset({"POST"}), re.compile(r"^/api/chat(/interrupt)?$")),
     (frozenset({"GET"}), re.compile(r"^/api/sessions(/[0-9a-f-]{36}/(messages|events))?$")),
     (frozenset({"POST"}), re.compile(r"^/api/sessions/[0-9a-f-]{36}/events/[A-Za-z0-9_-]{1,40}/check$")),
+    # generated images/videos in the chat (file name only, see kie_creative.resolve_media_file)
+    (frozenset({"GET"}), re.compile(r"^/api/media/(images|videos)/[A-Za-z0-9][A-Za-z0-9_-]{0,100}\.[a-z0-9]{2,5}$")),
     (frozenset({"GET"}), re.compile(r"^/api/tasks(/[0-9a-f-]{36})?$")),
     (frozenset({"POST"}), re.compile(r"^/api/tasks/[0-9a-f-]{36}/(input|cancel|retry|pause|resume|message)$")),
     (frozenset({"GET"}), re.compile(r"^/api/approvals(/mode)?$")),  # deciding goes through /api/mobile (signed)

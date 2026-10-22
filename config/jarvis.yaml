@@ -228,6 +228,16 @@ coding:
   ship_merge_method: squash        # squash | merge | rebase
   supabase_command: supabase       # Programmname im PATH oder absoluter Pfad
 
+creative:
+  # KIE.ai-Modelle für image_generate / video_generate (Connector „KIE.ai“). Überschreibbar per
+  # JARVIS__CREATIVE__IMAGE_MODEL usw.; ein in der App beim Connector eingetragenes Modell hat Vorrang.
+  image_model: gpt-image-2-5-sunburst-text-to-image        # Text → Bild
+  image_edit_model: gpt-image-2-5-sunburst-image-to-image  # mit Referenzbild
+  video_model: wan/3-0-video
+  image_resolution: 1K       # 1K | 2K | 4K
+  video_resolution: 720P     # 480P | 720P | 1080P
+  video_timeout_s: 600       # Warten auf ein Video; + Up-/Download muss unter agent.turn_timeout_s (900) bleiben
+
 browser:
   headless: true
   default_timeout_ms: 20000

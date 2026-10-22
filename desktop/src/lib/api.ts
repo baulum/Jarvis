@@ -177,6 +177,9 @@ export function createApi(opts: ApiOptions) {
       }),
     setCheck: (sid: string, eventId: string, index: number, checked: boolean) =>
       post<{ ok: boolean }>(`/sessions/${id(sid)}/events/${id(eventId)}/check`, { index, checked }),
+    /** A generated image/video of the chat (authenticated, so it is loaded as a Blob, not via <img src>). */
+    media: async (kind: "images" | "videos", file: string): Promise<Blob> =>
+      (await raw("GET", `/media/${kind}/${id(file)}`)).blob(),
 
     // approvals
     approvals: (status: "pending" | "all" | string = "pending") => get<Approval[]>("/approvals", { status }),
