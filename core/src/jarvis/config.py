@@ -318,6 +318,22 @@ class BackupCfg(_Strict):
     pg_dump: str = "pg_dump"
 
 
+class CreativeCfg(_Strict):
+    """KIE.ai models for image_generate / video_generate (connector ``kie_creative``).
+
+    One place for the model ids: override in ``jarvis.yaml`` (``creative:``) or per environment
+    (``JARVIS__CREATIVE__IMAGE_MODEL`` …). A model set in the connector settings of the app wins over both.
+    """
+
+    image_model: str = "gpt-image-2-5-sunburst-text-to-image"  # text → image
+    image_edit_model: str = "gpt-image-2-5-sunburst-image-to-image"  # with reference_image_path
+    video_model: str = "wan/3-0-video"
+    image_resolution: Literal["1K", "2K", "4K"] = "1K"
+    video_resolution: Literal["480P", "720P", "1080P"] = "720P"
+    # Polling limit for one video; with upload/download it must stay below agent.turn_timeout_s (900 s).
+    video_timeout_s: int = Field(default=600, ge=60, le=3600)
+
+
 class Settings(_Strict):
     server: ServerCfg = Field(default_factory=ServerCfg)
     paths: PathsCfg
@@ -334,6 +350,7 @@ class Settings(_Strict):
     scheduler: SchedulerCfg = Field(default_factory=SchedulerCfg)
     mobile: MobileCfg = Field(default_factory=MobileCfg)
     backup: BackupCfg = Field(default_factory=BackupCfg)
+    creative: CreativeCfg = Field(default_factory=CreativeCfg)
 
 
 class Personality(_Strict):

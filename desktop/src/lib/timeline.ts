@@ -33,6 +33,16 @@ export interface RouteDisplay {
   tiles: { url: string; attribution: string };
 }
 
+/** A file made by image_generate / video_generate, loaded via GET /api/media/{media}/{file}. */
+export interface MediaDisplay {
+  kind: "image" | "video";
+  media: "images" | "videos";
+  file: string;
+  prompt?: string;
+  aspect_ratio?: string;
+  duration_s?: number;
+}
+
 export interface ToolData {
   tool_use_id?: string;
   name: string;
@@ -43,7 +53,7 @@ export interface ToolData {
   input?: string;
   result?: string;
   error?: string;
-  display?: RouteDisplay | { kind: string };
+  display?: RouteDisplay | MediaDisplay | { kind: string };
   legacy?: boolean;
   redacted?: boolean;
 }
@@ -328,6 +338,22 @@ export const SOURCE_LABEL: Record<ProcessSource, string> = {
 
 export function isRouteDisplay(d: ToolData["display"]): d is RouteDisplay {
   return Boolean(d && d.kind === "route" && Array.isArray((d as RouteDisplay).routes));
+}
+
+// Same rule as the core (kie_creative.resolve_media_file): a bare file name, never a path.
+const MEDIA_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,100}\.[a-z0-9]{2,5}$/;
+const MEDIA_SUFFIX = { image: /\.(png|jpe?g|webp)$/i, video: /\.(mp4|webm|mov)$/i } as const;
+
+/** A generated image or video is shown only when its attachment is well-formed. */
+export function isMediaDisplay(d: ToolData["display"]): d is MediaDisplay {
+  if (!d || (d.kind !== "image" && d.kind !== "video")) return false;
+  const m = d as MediaDisplay;
+  return (
+    m.media === (m.kind === "image" ? "images" : "videos") &&
+    typeof m.file === "string" &&
+    MEDIA_NAME.test(m.file) &&
+    MEDIA_SUFFIX[m.kind].test(m.file)
+  );
 }
 
 const clock = new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });

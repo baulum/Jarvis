@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
@@ -19,6 +19,7 @@ from jarvis.app_state import VERSION, AppState
 from jarvis.coding.runner import CodingError
 from jarvis.commands import command_list
 from jarvis.config import RISK_ORDER
+from jarvis.connectors.kie_creative import MEDIA_TYPES, resolve_media_file
 from jarvis.db import session_scope
 from jarvis.db.models import Approval, AuditEntry, Call, ChatSession, CodingJob, Task
 from jarvis.events import bus, spawn
@@ -216,6 +217,24 @@ async def session_events(
     if p.role == "mobile_owner":
         out["events"] = [redact_for_mobile(e) for e in out["events"]]
     return out
+
+
+@router.get("/media/{kind}/{name}")
+async def media_file(kind: str, name: str, st: AppState = StateDep, p: Principal = Reader) -> FileResponse:
+    """A generated image/video shown in the chat. Only a bare file name from generated-images/-videos is
+    accepted (``resolve_media_file``); everything else – paths, other folders, other types – is 404."""
+    path = resolve_media_file(st, kind, name)
+    if path is None:
+        raise HTTPException(404, "not found")
+    return FileResponse(
+        path,
+        media_type=MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream"),
+        headers={
+            "Cache-Control": "private, max-age=86400",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
+    )
 
 
 class CheckBody(BaseModel):

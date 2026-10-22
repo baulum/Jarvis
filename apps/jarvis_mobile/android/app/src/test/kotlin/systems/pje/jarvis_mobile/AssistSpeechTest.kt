@@ -15,4 +15,10 @@ class AssistSpeechTest {
     fun bareUrlsBecomeLink() {
         assertEquals("Die Seite ist unter Link online.", Speech.speakable("Die Seite ist unter https://pje.systems/neu online."))
     }
+
+    @Test
+    fun filePathsAreNotReadAloud() {
+        val text = "Fertig, Sir: /Users/paul/Library/Application Support/Jarvis/generated-images/20261022-102738-53c75e52.png ist im Chat."
+        assertEquals("Fertig, Sir: ist im Chat.", Speech.speakable(text))
+    }
 }

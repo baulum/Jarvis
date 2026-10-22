@@ -12,6 +12,7 @@ import '../../state/providers.dart';
 import '../../state/timeline.dart';
 import '../widgets/composer.dart';
 import '../widgets/core_orb.dart';
+import '../widgets/generated_media.dart';
 import '../widgets/hud.dart';
 import '../widgets/markdown_view.dart';
 import '../widgets/model_picker.dart';
@@ -421,6 +422,7 @@ class _ToolCallState extends State<_ToolCall> {
     final label = switch (status) { 'running' => 'läuft', 'failed' => 'fehlgeschlagen', _ => 'erfolgreich' };
     final display = d['display'];
     final route = display is Map && display['kind'] == 'route' && status == 'ok' ? display.cast<String, dynamic>() : null;
+    final media = status == 'ok' ? mediaDisplay(display) : null;
     final span = widget.span;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Container(
@@ -497,6 +499,10 @@ class _ToolCallState extends State<_ToolCall> {
       if (route != null) ...[
         const SizedBox(height: J.s2),
         RouteMap(display: route, onOpen: widget.onLink),
+      ],
+      if (media != null) ...[
+        const SizedBox(height: J.s2),
+        GeneratedMedia(display: media),
       ],
     ]);
   }

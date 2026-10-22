@@ -3,17 +3,21 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { toggleCheck, pushToast, openExternal, copyText } = vi.hoisted(() => ({
+const { toggleCheck, pushToast, openExternal, copyText, media } = vi.hoisted(() => ({
   toggleCheck: vi.fn(async () => undefined),
   pushToast: vi.fn(),
   openExternal: vi.fn(async (_url: string) => undefined),
   copyText: vi.fn(async (_text: string) => true),
+  media: vi.fn(async (_kind: string, file: string) => new Blob([file])),
 }));
 vi.mock("../../store/app", async () => {
   const { create } = await import("zustand");
   const useApp = create(() => ({ toggleCheck, pushToast }));
-  return { useApp, api: {} };
+  return { useApp, api: { media } };
 });
+// jsdom has no object URLs
+URL.createObjectURL = vi.fn((b: Blob) => `blob:test/${b.size}`);
+URL.revokeObjectURL = vi.fn();
 vi.mock("../../lib/native", () => ({ openExternal }));
 vi.mock("../../lib/clipboard", () => ({ copyText }));
 vi.mock("./RouteMap", () => ({
@@ -257,6 +261,75 @@ describe("ChatTimeline", () => {
     const boxes = screen.getAllByRole("checkbox");
     fireEvent.click(boxes[1] as HTMLElement);
     expect(toggleCheck).toHaveBeenCalledWith("s1", "m2", 1, true);
+  });
+
+  describe("generated images and videos", () => {
+    const answer = (name: string, display: Record<string, unknown>, status = "ok") => [
+      item("u", 1, "message", { role: "user", text: "Mach mir ein Bild" }),
+      item("turn", 2, "turn", { status: "done", reasoning: false }),
+      item("tool", 3, "tool", { name, tool_use_id: "toolu_m", status, started_ts: 0, ended_ts: 9000, duration_ms: 9000, display }),
+      item("m", 4, "message", { role: "assistant", text: "Hier ist der **Leuchtturm**, Sir." }),
+    ];
+
+    it("shows the image inline (not the path), loaded by file name, and enlarges it on click", async () => {
+      const file = "20261022-102738-53c75e52.png";
+      const { container } = render(
+        <ChatTimeline thread={thread(answer("image_generate", { kind: "image", media: "images", file, prompt: "Leuchtturm bei Nacht", aspect_ratio: "16:9" }))} />,
+      );
+      expect(screen.getByRole("status", { name: "Bild wird geladen" })).toBeTruthy(); // placeholder while loading
+      const img = (await screen.findByRole("img", { name: "Erzeugtes Bild: Leuchtturm bei Nacht" })) as HTMLImageElement;
+      expect(media).toHaveBeenCalledWith("images", file);
+      expect(img.getAttribute("src")).toMatch(/^blob:/);
+      expect(img.className).toContain("max-h-[26rem]"); // capped size in the chat
+      expect(container.textContent).not.toContain("generated-images");
+      // Markdown and the tool row keep working next to the image
+      expect(container.querySelector("strong")?.textContent).toBe("Leuchtturm");
+      expect(screen.getByTitle("image_generate: erfolgreich")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Bild vergrößern" }));
+      const dialog = screen.getByRole("dialog", { name: "Bild vergrößert" });
+      expect(within(dialog).getByRole("img").getAttribute("src")).toBe(img.getAttribute("src"));
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("shows a placeholder when the image cannot be loaded or decoded", async () => {
+      media.mockRejectedValueOnce(new Error("404"));
+      render(<ChatTimeline thread={thread(answer("image_generate", { kind: "image", media: "images", file: "missing-1.png" }))} />);
+      expect(await screen.findByRole("img", { name: "Bild konnte nicht geladen werden" })).toBeTruthy();
+      cleanup();
+
+      render(<ChatTimeline thread={thread(answer("image_generate", { kind: "image", media: "images", file: "corrupt-1.png" }))} />);
+      fireEvent.error(await screen.findByRole("img", { name: "Erzeugtes Bild" }));
+      expect(screen.getByRole("img", { name: "Bild konnte nicht geladen werden" })).toBeTruthy();
+    });
+
+    it("plays a generated video inline", async () => {
+      const { container } = render(
+        <ChatTimeline thread={thread(answer("video_generate", { kind: "video", media: "videos", file: "clip-1.mp4", duration_s: 5 }))} compact />,
+      );
+      await vi.waitFor(() => expect(container.querySelector("video")).toBeTruthy());
+      const video = container.querySelector("video") as HTMLVideoElement;
+      expect(media).toHaveBeenCalledWith("videos", "clip-1.mp4");
+      expect(video.controls).toBe(true);
+      expect(video.getAttribute("src")).toMatch(/^blob:/);
+      expect(video.className).toContain("max-h-48"); // smaller in the chat dock
+    });
+
+    it("never requests anything for malformed attachments or failed calls", () => {
+      for (const display of [
+        { kind: "image", media: "images", file: "../secret.png" },
+        { kind: "image", media: "images", file: "/Users/paul/x.png" },
+        { kind: "image", media: "videos", file: "a.png" },
+        { kind: "video", media: "videos", file: "a.png" },
+      ]) {
+        render(<ChatTimeline thread={thread(answer("image_generate", display))} />);
+        cleanup();
+      }
+      render(<ChatTimeline thread={thread(answer("image_generate", { kind: "image", media: "images", file: "ok.png" }, "failed"))} />);
+      expect(media).not.toHaveBeenCalled();
+      expect(screen.queryByRole("img")).toBeNull();
+    });
   });
 
   it("parallel tool calls get their own rows and a shared time axis", () => {

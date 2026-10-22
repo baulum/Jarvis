@@ -529,10 +529,18 @@ def pronounceable(text: str) -> str:
     return _NAME_ACRONYM.sub("Jarvis", text)
 
 
+# Local file paths (e.g. a generated image under ~/Library/Application Support/…) are never read out. A segment
+# may contain spaces only when another "/" follows, so the words after the file name stay.
+_FILE_PATH = re.compile(
+    r"(?<![\w.:/])(?:~|/(?:Users|private|tmp|var|Volumes|home|opt))(?:/(?:[^\s/`]+(?: [^\s/`]+)*(?=/)|[^\s/`]+))+"
+)
+
+
 def speakable(text: str) -> str:
     """Strip markdown and symbols that TTS would read out literally."""
     text = pronounceable(text)
     text = re.sub(r"```.*?```", " (Code ausgelassen) ", text, flags=re.S)
+    text = _FILE_PATH.sub("", text)
     text = re.sub(r"`([^`]*)`", r"\1", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"https?://\S+", "Link", text)

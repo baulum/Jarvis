@@ -181,9 +181,15 @@ class Speech(context: Context) {
     }
 
     companion object {
-        /** Markdown and code are for the screen, not the ear. */
+        // Local file paths (a generated image on the Mac …) – same rule as the core's speakable().
+        private val FILE_PATH = Regex(
+            "(?<![\\w.:/])(?:~|/(?:Users|private|tmp|var|Volumes|home|opt))(?:/(?:[^\\s/`]+(?: [^\\s/`]+)*(?=/)|[^\\s/`]+))+",
+        )
+
+        /** Markdown, code and file paths are for the screen, not the ear. */
         fun speakable(text: String): String = text
             .replace(Regex("```[\\s\\S]*?```"), " ")
+            .replace(FILE_PATH, "")
             .replace(Regex("\\[([^\\]]+)]\\([^)]+\\)"), "$1")
             .replace(Regex("https?://\\S+"), "Link")
             .replace(Regex("[*_#>`|]+"), "")
