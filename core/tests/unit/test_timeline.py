@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from jarvis.agent.llm import AgentEvent
+from jarvis.agent.orchestrator import Orchestrator
 from jarvis.agent.timeline import (
     MemoryTimelineStore,
     SeqAllocator,
@@ -21,7 +22,7 @@ from jarvis.agent.timeline import (
     upsert_statement,
     window_conditions,
 )
-from jarvis.tools.artifacts import ArtifactStore
+from jarvis.tools.artifacts import ArtifactStore, media_display, payload_data
 
 SID = str(uuid.uuid4())
 
@@ -220,6 +221,108 @@ async def test_generated_image_and_video_are_attached_and_survive_a_reload() -> 
     await rec2.finish()
     failed = next(i for i in (await store2.list(SID))[0] if i["kind"] == "tool")
     assert "display" not in failed["data"]
+
+
+async def test_generated_image_shows_even_when_its_artifact_is_gone() -> None:
+    """The artifact store is one-shot and in memory: a ledger duplicate (same prompt again), an expired artifact or a
+    core restart used to leave the chat without the image although the tool said "Sir sieht das Bild"."""
+    store_art = ArtifactStore()
+    rec, bus, clock, store = _recorder(artifact_store=store_art)
+    await rec.start("Nochmal das Bild", "desktop")
+    args = {"prompt": "Leuchtturm bei Nacht", "aspect_ratio": "16:9"}
+    await rec.on_agent_event(AgentEvent("tool_started", data={"name": "image_generate", "tool_use_id": "d", "input": args}))
+    duplicate = json.dumps(
+        {
+            "status": "duplicate",
+            "tool": "image_generate",
+            "message": "Diese Aktion wurde bereits ausgeführt; Ergebnis aus dem Ledger.",
+            "data": {
+                "image_path": "/Users/paul/Library/Application Support/Jarvis/generated-images/20261022-102738-53c75e52.png",
+                "artifact_id": "art_0123456789abcdef0123",  # consumed long ago
+            },
+        }
+    )
+    await rec.on_agent_event(AgentEvent("tool_completed", data={"name": "image_generate", "tool_use_id": "d", "result": duplicate}))
+    await rec.finish()
+    tool = next(i for i in (await store.list(SID))[0] if i["kind"] == "tool")
+    assert tool["data"]["display"] == {
+        "kind": "image",
+        "media": "images",
+        "file": "20261022-102738-53c75e52.png",
+        "prompt": "Leuchtturm bei Nacht",
+        "aspect_ratio": "16:9",
+    }
+
+
+async def test_artifact_display_never_carries_the_absolute_path() -> None:
+    store_art = ArtifactStore()
+    aid = store_art.put("image", {"media": "images", "file": "a1.png", "path": "/Users/paul/x/a1.png", "prompt": "p"})
+    rec, bus, clock, store = _recorder(artifact_store=store_art)
+    await rec.start("Bild", "desktop")
+    await rec.on_agent_event(AgentEvent("tool_started", data={"name": "image_generate", "tool_use_id": "i"}))
+    await rec.on_agent_event(
+        AgentEvent("tool_completed", data={"name": "image_generate", "tool_use_id": "i", "result": _mcp({"image_path": "/Users/paul/x/a1.png", "artifact_id": aid})})
+    )
+    await rec.finish()
+    tool = next(i for i in (await store.list(SID))[0] if i["kind"] == "tool")
+    assert tool["data"]["display"] == {"kind": "image", "media": "images", "file": "a1.png", "prompt": "p"}
+
+
+def test_media_display_rules() -> None:
+    assert media_display({"video_path": "/x/clip-1.mp4", "duration_s": 5}) == {"kind": "video", "media": "videos", "file": "clip-1.mp4", "duration_s": 5}
+    assert media_display({"image_path": "/x/../../etc/pass wd.png"}) is None  # not a bare generated name
+    assert media_display({"text": "kein Bild"}) is None
+    assert media_display("art_0123") is None
+    assert payload_data('{"status": "ok", "tool": "t", "data": {"a": 1}}') == {"a": 1}
+    assert payload_data("kein json") is None
+
+
+async def test_media_after_approval_is_appended_to_its_conversation() -> None:
+    """In a tainted session (or in 'block everything' mode) image_generate needs approval. It then runs inside
+    the approval decision – after the turn – and its image used to appear only in the approvals view."""
+    orch = Orchestrator.__new__(Orchestrator)
+    orch.timeline_store = MemoryTimelineStore()
+    orch.seq = SeqAllocator(orch.timeline_store)
+    published: list[dict[str, Any]] = []
+
+    async def capture(ev: Any) -> None:
+        published.append(ev.data["event"])
+
+    from jarvis.events import bus as event_bus
+
+    event_bus.subscribe("chat.event", capture)
+    try:
+        result = {"status": "ok", "tool": "image_generate", "data": {"image_path": "/g/20261022-110000-aa11bb22.png", "model": "m"}}
+        ev = SimpleNamespace(data={"status": "executed", "tool": "image_generate", "session_id": SID, "result": result})
+        await orch.on_approval_decided(ev)  # type: ignore[arg-type]
+        # rejected/failed decisions and results without media add nothing
+        for data in (
+            {"status": "rejected", "tool": "image_generate", "session_id": SID, "result": {}},
+            {"status": "executed", "tool": "calendar_create", "session_id": SID, "result": {"status": "ok", "tool": "x", "data": {"id": 1}}},
+            {"status": "executed", "tool": "image_generate", "session_id": None, "result": result},
+        ):
+            await orch.on_approval_decided(SimpleNamespace(data=data))  # type: ignore[arg-type]
+    finally:
+        event_bus.unsubscribe("chat.event", capture)
+    items, _ = await orch.timeline_store.list(SID)
+    assert len(items) == 1 and published == items
+    item = items[0]
+    assert item["kind"] == "tool" and item["data"]["status"] == "ok" and item["data"]["via"] == "approval"
+    assert item["data"]["display"] == {"kind": "image", "media": "images", "file": "20261022-110000-aa11bb22.png"}
+    assert item["turn_id"]  # its own exchange: rendered as a Jarvis answer with the image
+
+
+async def test_user_message_carries_its_attachments() -> None:
+    rec, bus, clock, store = _recorder()
+    shown = [{"file": "20261022-141500-1a2b3c4d-foto.png", "name": "foto.png", "kind": "image", "mime": "image/png", "size": 12}]
+    await rec.start("Was ist das?", "desktop", attachments=shown)
+    await rec.finish()
+    user = (await store.list(SID))[0][0]
+    assert user["data"]["attachments"] == shown and user["data"]["text"] == "Was ist das?"
+    rec2, _, _, store2 = _recorder()
+    await rec2.start("Ohne", "desktop")
+    await rec2.finish()
+    assert "attachments" not in (await store2.list(SID))[0][0]["data"]
 
 
 async def test_bus_observations_become_protocol_steps() -> None:

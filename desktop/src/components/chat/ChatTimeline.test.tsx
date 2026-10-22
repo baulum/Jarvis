@@ -3,17 +3,18 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { toggleCheck, pushToast, openExternal, copyText, media } = vi.hoisted(() => ({
+const { toggleCheck, pushToast, openExternal, copyText, media, revealMedia } = vi.hoisted(() => ({
   toggleCheck: vi.fn(async () => undefined),
   pushToast: vi.fn(),
   openExternal: vi.fn(async (_url: string) => undefined),
   copyText: vi.fn(async (_text: string) => true),
   media: vi.fn(async (_kind: string, file: string) => new Blob([file])),
+  revealMedia: vi.fn(async (_kind: string, _file: string) => ({ ok: true })),
 }));
 vi.mock("../../store/app", async () => {
   const { create } = await import("zustand");
   const useApp = create(() => ({ toggleCheck, pushToast }));
-  return { useApp, api: { media } };
+  return { useApp, api: { media, revealMedia } };
 });
 // jsdom has no object URLs
 URL.createObjectURL = vi.fn((b: Blob) => `blob:test/${b.size}`);
@@ -316,6 +317,36 @@ describe("ChatTimeline", () => {
       expect(video.className).toContain("max-h-48"); // smaller in the chat dock
     });
 
+    it("says why an image is missing, loads it again on request and shows it in the Finder", async () => {
+      const { ApiError } = await import("../../lib/api");
+      media.mockRejectedValueOnce(new ApiError(404, "/media/images/gone-1.png", "Nicht gefunden."));
+      render(<ChatTimeline thread={thread(answer("image_generate", { kind: "image", media: "images", file: "gone-1.png" }))} />);
+      const placeholder = await screen.findByRole("img", { name: "Bild konnte nicht geladen werden" });
+      expect(placeholder.textContent).toContain("Die Datei ist nicht mehr vorhanden.");
+      expect(placeholder.textContent).toContain("gone-1.png");
+      fireEvent.click(within(placeholder).getByRole("button", { name: /Erneut laden/ }));
+      expect(await screen.findByRole("img", { name: "Erzeugtes Bild" })).toBeTruthy();
+      expect(media).toHaveBeenCalledTimes(2);
+
+      fireEvent.click(screen.getByRole("button", { name: "Im Finder zeigen" }));
+      expect(revealMedia).toHaveBeenCalledWith("images", "gone-1.png");
+      fireEvent.click(screen.getByRole("button", { name: "Bild vergrößern" }));
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Im Finder zeigen" }));
+      expect(revealMedia).toHaveBeenCalledTimes(2);
+    });
+
+    it("an image generated after an approval appears as its own answer, marked as such", async () => {
+      const events = [
+        item("u", 1, "message", { role: "user", text: "Mach ein Bild" }),
+        item("a", 2, "message", { role: "assistant", text: "Die Freigabe steht aus, Sir." }),
+        item("late", 3, "tool", { name: "image_generate", status: "ok", started_ts: 5, ended_ts: 5, via: "approval", display: { kind: "image", media: "images", file: "late-1.png" } }, "t2"),
+      ];
+      render(<ChatTimeline thread={thread(events)} />);
+      expect(screen.getByText("nach Freigabe")).toBeTruthy();
+      expect(await screen.findByRole("img", { name: "Erzeugtes Bild" })).toBeTruthy();
+      expect(media).toHaveBeenCalledWith("images", "late-1.png");
+    });
+
     it("never requests anything for malformed attachments or failed calls", () => {
       for (const display of [
         { kind: "image", media: "images", file: "../secret.png" },
@@ -329,6 +360,48 @@ describe("ChatTimeline", () => {
       render(<ChatTimeline thread={thread(answer("image_generate", { kind: "image", media: "images", file: "ok.png" }, "failed"))} />);
       expect(media).not.toHaveBeenCalled();
       expect(screen.queryByRole("img")).toBeNull();
+    });
+  });
+
+  describe("attachments Sir sent", () => {
+    const img = { file: "20261022-141500-1a2b3c4d-foto.png", name: "Foto vom Lager.png", kind: "image", mime: "image/png", size: 2048 };
+    const pdf = { file: "20261022-141500-0000aaaa-vertrag.pdf", name: "Vertrag.pdf", kind: "document", mime: "application/pdf", size: 3 * 1024 * 1024 };
+
+    it("shows image thumbnails and document chips in the message, in both layouts", async () => {
+      for (const compact of [false, true]) {
+        render(<ChatTimeline thread={thread([item("u", 1, "message", { role: "user", text: "Was steht drin?", attachments: [img, pdf] })])} compact={compact} />);
+        const thumb = (await screen.findByRole("img", { name: "Foto vom Lager.png" })) as HTMLImageElement;
+        expect(thumb.getAttribute("src")).toMatch(/^blob:/);
+        expect(media).toHaveBeenCalledWith("attachments", img.file);
+        expect(media).not.toHaveBeenCalledWith("attachments", pdf.file); // documents are never fetched
+        expect(screen.getByText("Vertrag.pdf")).toBeTruthy();
+        expect(screen.getByText("3,0 MB")).toBeTruthy();
+        expect(screen.getByText("Was steht drin?")).toBeTruthy();
+        cleanup();
+      }
+    });
+
+    it("opens the image large, reveals files in the Finder and renders a message of files only", async () => {
+      render(<ChatTimeline thread={thread([item("u", 1, "message", { role: "user", text: "", attachments: [img, pdf] })])} />);
+      fireEvent.click(await screen.findByRole("button", { name: "Anhang vergrößern: Foto vom Lager.png" }));
+      const dialog = screen.getByRole("dialog", { name: "Bild vergrößert" });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Im Finder zeigen" }));
+      expect(revealMedia).toHaveBeenCalledWith("attachments", img.file);
+      fireEvent.keyDown(window, { key: "Escape" });
+      fireEvent.click(screen.getByRole("button", { name: "Im Finder zeigen: Vertrag.pdf" }));
+      expect(revealMedia).toHaveBeenLastCalledWith("attachments", pdf.file);
+    });
+
+    it("a missing attachment image says so and can be loaded again; a failed reveal becomes a toast", async () => {
+      media.mockRejectedValueOnce(new Error("offline"));
+      revealMedia.mockRejectedValueOnce(new Error("Nicht gefunden."));
+      const fresh = { ...img, file: "20261022-150000-bbbbcccc-neu.png", name: "Neu.png" }; // not in the load cache yet
+      render(<ChatTimeline thread={thread([item("u", 1, "message", { role: "user", text: "x", attachments: [fresh, pdf] })])} />);
+      const broken = await screen.findByRole("button", { name: /konnte nicht geladen werden/ });
+      fireEvent.click(broken);
+      expect(await screen.findByRole("img", { name: "Neu.png" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Im Finder zeigen: Vertrag.pdf" }));
+      await vi.waitFor(() => expect(pushToast).toHaveBeenCalledWith(expect.objectContaining({ tone: "bad", body: "Nicht gefunden." })));
     });
   });
 

@@ -440,6 +440,10 @@ class ToolExecutor:
                 row.duration_ms = duration_ms
                 row.finished_at = datetime.now(UTC)
 
+    async def taint(self, session_id: uuid.UUID, source: str) -> None:
+        """Marks a conversation as containing untrusted content (e.g. a document attachment with injection hits)."""
+        await self._taint(session_id, source)
+
     async def _taint(self, session_id: uuid.UUID, source: str) -> None:
         async with session_scope() as s:
             sess = await s.get(ChatSession, session_id)

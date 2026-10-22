@@ -37,8 +37,12 @@ import type {
   WakeupResult,
   WakeupSettings,
 } from "./types";
+import type { AttachmentInfo } from "./attachments";
 import type { SlashCommand } from "./slash";
 import type { TimelineEvent } from "./timeline";
+
+/** Files the chat shows: generated images/videos and image attachments (by bare file name only). */
+export type ChatFileKind = "images" | "videos" | "attachments";
 
 export const CORE_URL = "http://127.0.0.1:8765";
 
@@ -111,19 +115,21 @@ export function createApi(opts: ApiOptions) {
   const doFetch: Fetch = opts.fetchImpl ?? ((...args) => fetch(...args));
   const timeoutMs = opts.timeoutMs ?? 20_000;
 
-  async function raw(method: string, path: string, body?: unknown, query?: Query): Promise<Response> {
+  async function raw(method: string, path: string, body?: unknown, query?: Query, waitMs = timeoutMs): Promise<Response> {
     const token = opts.getToken();
     if (!token) throw new ApiError(401, path, "Kein Geräte-Token geladen.");
     const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
-    if (body !== undefined) headers["Content-Type"] = "application/json";
+    // a Blob (file upload) goes out as raw bytes, everything else as JSON
+    const binary = body instanceof Blob;
+    if (body !== undefined) headers["Content-Type"] = binary ? "application/octet-stream" : "application/json";
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const timer = setTimeout(() => ctrl.abort(), waitMs);
     let res: Response;
     try {
       res = await doFetch(buildUrl(baseUrl, path, query), {
         method,
         headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: body === undefined ? undefined : binary ? body : JSON.stringify(body),
         signal: ctrl.signal,
       });
     } catch (e) {
@@ -164,8 +170,15 @@ export function createApi(opts: ApiOptions) {
       post<KillSwitchState>("/system/killswitch", { engaged, reason }),
 
     // chat
-    sendChat: (message: string, sessionId?: string | null) =>
-      post<ChatAccepted>("/chat", sessionId ? { message, session_id: sessionId } : { message }),
+    sendChat: (message: string, sessionId?: string | null, attachments: AttachmentInfo[] = []) =>
+      post<ChatAccepted>("/chat", {
+        message,
+        ...(sessionId ? { session_id: sessionId } : {}),
+        ...(attachments.length ? { attachments: attachments.map((a) => ({ file: a.file, name: a.name })) } : {}),
+      }),
+    /** One attachment as raw bytes; the core checks type, size and signature and returns its stored name. */
+    uploadAttachment: async (file: Blob, name: string): Promise<AttachmentInfo> =>
+      (await (await raw("POST", "/attachments", file, { name }, 120_000)).json()) as AttachmentInfo,
     interruptChat: () => post<{ interrupted: boolean }>("/chat/interrupt"),
     sessions: (limit = 40) => get<ChatSessionInfo[]>("/sessions", { limit }),
     sessionMessages: (sid: string) => get<ChatMessageRow[]>(`/sessions/${id(sid)}/messages`),
@@ -177,9 +190,11 @@ export function createApi(opts: ApiOptions) {
       }),
     setCheck: (sid: string, eventId: string, index: number, checked: boolean) =>
       post<{ ok: boolean }>(`/sessions/${id(sid)}/events/${id(eventId)}/check`, { index, checked }),
-    /** A generated image/video of the chat (authenticated, so it is loaded as a Blob, not via <img src>). */
-    media: async (kind: "images" | "videos", file: string): Promise<Blob> =>
-      (await raw("GET", `/media/${kind}/${id(file)}`)).blob(),
+    /** A generated image/video or an image attachment (authenticated, so it is loaded as a Blob, not via <img src>). */
+    media: async (kind: ChatFileKind, file: string): Promise<Blob> =>
+      (await raw("GET", `/media/${kind}/${id(file)}`, undefined, undefined, 120_000)).blob(),
+    /** Shows the file in the Finder (the core runs `open -R` after the same name-only check). */
+    revealMedia: (kind: ChatFileKind, file: string) => post<{ ok: boolean }>(`/media/${kind}/${id(file)}/reveal`),
 
     // approvals
     approvals: (status: "pending" | "all" | string = "pending") => get<Approval[]>("/approvals", { status }),

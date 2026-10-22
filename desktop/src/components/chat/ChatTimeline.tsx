@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useMemo, useState, type ReactNode } from "react";
 import { useNow } from "../../hooks/useNow";
+import { messageAttachments } from "../../lib/attachments";
 import { formatMs } from "../../lib/format";
 import { routeSummary } from "../../lib/route";
 import {
@@ -41,6 +42,7 @@ import {
 } from "../../lib/timeline";
 import { useApp } from "../../store/app";
 import { Markdown } from "../Markdown";
+import { SentAttachments } from "./Attachments";
 import { GeneratedMedia } from "./GeneratedMedia";
 
 const RouteMap = lazy(() => import("./RouteMap"));
@@ -93,20 +95,32 @@ export function ChatTimeline({ thread, compact = false, lastRows, onLoadOlder, l
 // ------------------------------------------------------------------ message types
 
 const UserBubble = memo(function UserBubble({ event, compact }: { event: TimelineEvent<MessageData>; compact: boolean }) {
+  const files = messageAttachments(event.data.attachments);
+  const text = event.data.text;
   if (compact)
     return (
-      <div className="selectable text-right text-ink-dim">
-        <Markdown text={event.data.text} compact />
+      <div className="flex flex-col items-end gap-1.5">
+        {files.length > 0 && <SentAttachments items={files} compact />}
+        {text && (
+          <div className="selectable text-right text-ink-dim">
+            <Markdown text={text} compact />
+          </div>
+        )}
       </div>
     );
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className={`flex flex-col items-end gap-1 ${event.local ? "opacity-70" : ""}`}>
       <span className="type-data px-1 text-ink-faint">Sie</span>
-      <div
-        className={`selectable max-w-[80%] rounded-2xl rounded-br-sm border border-arc-dim/40 bg-arc-deep/60 px-4 py-2.5 ${event.local ? "opacity-70" : ""}`}
-      >
-        <Markdown text={event.data.text} />
-      </div>
+      {files.length > 0 && (
+        <div className="max-w-[80%]">
+          <SentAttachments items={files} />
+        </div>
+      )}
+      {text && (
+        <div className="selectable max-w-[80%] rounded-2xl rounded-br-sm border border-arc-dim/40 bg-arc-deep/60 px-4 py-2.5">
+          <Markdown text={text} />
+        </div>
+      )}
     </div>
   );
 });
@@ -232,6 +246,7 @@ function ToolCall({ event, span, compact, now }: { event: TimelineEvent<ToolData
           <span className="type-data min-w-0 truncate text-ink">{d.name}</span>
           <span className="sr-only">{STATUS_LABEL[d.status]}</span>
           {span?.parallel && <span className="text-2xs text-ink-faint">parallel</span>}
+          {d.via === "approval" && <span className="text-2xs text-ink-faint">nach Freigabe</span>}
           <span className="ml-auto flex items-center gap-2">
             {span && !compact && (
               <span className="tool-track" aria-hidden>

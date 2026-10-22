@@ -1,10 +1,12 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowDown, CircleStop, Plus, SendHorizontal } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApprovalCard } from "../components/ApprovalCard";
+import { AttachButton, AttachmentTray, DropOverlay } from "../components/chat/Attachments";
 import { ChatTimeline } from "../components/chat/ChatTimeline";
 import { ModelPicker } from "../components/ModelPicker";
 import { Button, EmptyState, ErrorState, Skeleton } from "../components/ui";
+import { useAttachmentDraft } from "../hooks/useAttachmentDraft";
 import { useQuery } from "../hooks/useQuery";
 import { useSlash } from "../hooks/useSlash";
 import { useStickToBottom } from "../hooks/useStickToBottom";
@@ -80,6 +82,11 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
+  const onAttachErrors = useCallback(
+    (errors: string[]) => pushToast({ tone: "bad", title: errors.length > 1 ? "Dateien nicht angehängt" : "Datei nicht angehängt", body: errors.join(" ") }),
+    [pushToast],
+  );
+  const attach = useAttachmentDraft({ onErrors: onAttachErrors });
   const events = thread?.events;
   const { ref: scrollRef, onScroll, atBottom, toBottom, keepPosition } = useStickToBottom<HTMLDivElement>(events);
   const loading = Boolean(sessionId) && !thread?.loaded && !loadError;
@@ -105,17 +112,20 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
 
   async function send() {
     const text = draft.trim();
-    if (!text || sending) return;
-    if (await slash.tryRun(text)) return;
+    const withFiles = attach.items.length > 0;
+    if ((!text && !withFiles) || sending) return;
+    if (!withFiles && (await slash.tryRun(text))) return;
     setDraft("");
-    await sendText(text);
+    await sendText(text, withFiles);
   }
 
-  async function sendText(text: string) {
+  async function sendText(text: string, withFiles = false) {
     setSending(true);
     toBottom(false);
     try {
-      const sid = await sendMessage(text, sessionId);
+      const files = withFiles ? await attach.upload() : [];
+      const sid = await sendMessage(text, sessionId, files);
+      if (withFiles) attach.clear();
       if (sid !== sessionId) setActive(sid);
     } catch (e) {
       setDraft(text);
@@ -151,7 +161,8 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
   }
 
   return (
-    <div className="relative flex min-w-0 flex-1 flex-col">
+    <div className="relative flex min-w-0 flex-1 flex-col" {...attach.dropProps}>
+      <DropOverlay active={attach.dragging} rounded="rounded-lg" />
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]">
         <div className="mx-auto flex w-full max-w-[52rem] flex-col gap-7 px-8 py-8 max-[700px]:px-4">
           {loading && <Skeleton rows={5} />}
@@ -200,6 +211,11 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
       )}
       <div className="border-t border-seam bg-hull/60 px-8 py-4 max-[700px]:px-4">
         <div className="mx-auto mb-2 flex w-full max-w-[52rem]"><ModelPicker placement="up" /></div>
+        {attach.items.length > 0 && (
+          <div className="mx-auto mb-2 w-full max-w-[52rem]">
+            <AttachmentTray items={attach.items} onRemove={attach.remove} disabled={sending} />
+          </div>
+        )}
         <form
           className="relative mx-auto flex w-full max-w-[52rem] items-end gap-2"
           onSubmit={(e) => {
@@ -208,8 +224,10 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
           }}
         >
           {slash.menu}
+          <AttachButton onFiles={attach.add} disabled={sending} className="mb-1 size-8 shrink-0" />
           <textarea
             value={draft}
+            onPaste={attach.onPaste}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (slash.onKeyDown(e)) return;
@@ -234,7 +252,13 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
               Unterbrechen
             </Button>
           )}
-          <Button type="submit" variant="primary" busy={sending} disabled={!draft.trim()} icon={<SendHorizontal className="size-4" />}>
+          <Button
+            type="submit"
+            variant="primary"
+            busy={sending}
+            disabled={!draft.trim() && attach.items.length === 0}
+            icon={<SendHorizontal className="size-4" />}
+          >
             Senden
           </Button>
         </form>

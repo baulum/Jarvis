@@ -1,48 +1,12 @@
 // A generated image or video inside Jarvis' answer (image_generate / video_generate). The file comes from the
-// core as an authenticated Blob (GET /api/media/{images|videos}/{file} – file name only, never a path) and is
-// shown via an object URL. Images are capped in size and open enlarged on click; videos play inline.
-import { ImageOff, Loader2, Maximize2, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+// core as an authenticated Blob (useChatFile). Images are capped in size and open enlarged on click; videos play
+// inline. Under each file: its name and "Im Finder zeigen". A file that cannot be loaded says why, with a retry.
+import { FolderOpen, ImageOff, Loader2, Maximize2, RotateCw } from "lucide-react";
+import { useCallback, useState } from "react";
+import { useChatFile, useRevealInFinder } from "../../hooks/useChatFile";
 import type { MediaDisplay } from "../../lib/timeline";
-import { api } from "../../store/app";
 import { IconButton } from "../ui";
-
-// One fetch per file, shared by every mount (re-renders, the chat dock, re-opening a chat).
-const cache = new Map<string, Promise<string>>();
-const MAX_CACHED = 60;
-
-function loadMedia(media: MediaDisplay["media"], file: string): Promise<string> {
-  const key = `${media}/${file}`;
-  let hit = cache.get(key);
-  if (!hit) {
-    hit = api.media(media, file).then((blob) => URL.createObjectURL(blob));
-    hit.catch(() => cache.delete(key)); // a failed load is retried on the next mount
-    cache.set(key, hit);
-    while (cache.size > MAX_CACHED) {
-      const [oldKey, old] = cache.entries().next().value as [string, Promise<string>];
-      cache.delete(oldKey);
-      old.then(URL.revokeObjectURL, () => undefined);
-    }
-  }
-  return hit;
-}
-
-function useMediaUrl({ media, file }: MediaDisplay): { url?: string; failed: boolean } {
-  const key = `${media}/${file}`;
-  const [state, setState] = useState<{ key: string; url?: string; failed: boolean }>({ key, failed: false });
-  useEffect(() => {
-    let alive = true;
-    loadMedia(media, file).then(
-      (url) => alive && setState({ key: `${media}/${file}`, url, failed: false }),
-      () => alive && setState({ key: `${media}/${file}`, failed: true }),
-    );
-    return () => {
-      alive = false;
-    };
-  }, [media, file]);
-  return state.key === key ? state : { failed: false }; // another file than last time: loading
-}
+import { Lightbox } from "./Lightbox";
 
 const ratio = (aspect?: string) => {
   const m = /^(\d+):(\d+)$/.exec(aspect ?? "");
@@ -50,24 +14,32 @@ const ratio = (aspect?: string) => {
 };
 
 export function GeneratedMedia({ display, compact = false }: { display: MediaDisplay; compact?: boolean }) {
-  const { url, failed } = useMediaUrl(display);
+  const { url, error, retry } = useChatFile(display.media, display.file);
   const [broken, setBroken] = useState(false); // the file arrived but could not be decoded/played
   const [zoom, setZoom] = useState(false);
   const close = useCallback(() => setZoom(false), []);
+  const reveal = useRevealInFinder();
   const image = display.kind === "image";
   const what = image ? "Bild" : "Video";
   const maxH = compact ? "max-h-48" : "max-h-[26rem]";
 
-  if (failed || broken)
+  if (error || broken)
     return (
       <div
         role="img"
         aria-label={`${what} konnte nicht geladen werden`}
-        className={`flex w-full max-w-sm flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-seam px-4 text-center text-xs text-ink-faint ${compact ? "h-24" : "h-36"}`}
+        className={`flex w-full max-w-sm flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-alarm/40 px-4 text-center text-xs text-ink-dim ${compact ? "min-h-24 py-3" : "min-h-36 py-4"}`}
       >
-        <ImageOff className="size-5" aria-hidden />
-        <span>{what} konnte nicht geladen werden</span>
-        <span className="type-data max-w-full truncate">{display.file}</span>
+        <ImageOff className="size-5 text-alarm/80" aria-hidden />
+        <span className="text-ink">{what} konnte nicht geladen werden</span>
+        <span>{broken ? "Die Datei ist beschädigt oder hat ein unbekanntes Format." : error}</span>
+        <span className="type-data max-w-full truncate text-ink-faint">{display.file}</span>
+        {!broken && (
+          <button type="button" onClick={retry} className="mt-1 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-ink-dim hover:bg-plate-hi hover:text-ink">
+            <RotateCw className="size-3.5" aria-hidden />
+            Erneut laden
+          </button>
+        )}
       </div>
     );
 
@@ -83,64 +55,47 @@ export function GeneratedMedia({ display, compact = false }: { display: MediaDis
       </div>
     );
 
+  const actions = (
+    <div className="flex max-w-full items-center gap-1 pl-1">
+      <span className="type-data min-w-0 flex-1 truncate text-ink-faint" title={display.file}>
+        {display.file}
+      </span>
+      <IconButton label="Im Finder zeigen" onClick={() => reveal(display.media, display.file)} className="size-6">
+        <FolderOpen className="size-3.5" />
+      </IconButton>
+    </div>
+  );
+
   if (!image)
     return (
-      <video
-        src={url}
-        controls
-        preload="metadata"
-        playsInline
-        aria-label={display.prompt ? `Erzeugtes Video: ${display.prompt}` : "Erzeugtes Video"}
-        onError={() => setBroken(true)}
-        className={`block w-auto max-w-full ${maxH} rounded-lg border border-seam bg-void`}
-      />
+      <figure className="flex w-fit max-w-full flex-col gap-1">
+        <video
+          src={url}
+          controls
+          preload="metadata"
+          playsInline
+          aria-label={display.prompt ? `Erzeugtes Video: ${display.prompt}` : "Erzeugtes Video"}
+          onError={() => setBroken(true)}
+          className={`block w-auto max-w-full ${maxH} rounded-lg border border-seam bg-void`}
+        />
+        {actions}
+      </figure>
     );
 
   const alt = display.prompt ? `Erzeugtes Bild: ${display.prompt}` : "Erzeugtes Bild";
   return (
-    <>
+    <figure className="flex w-fit max-w-full flex-col gap-1">
       <button
         type="button"
         onClick={() => setZoom(true)}
         aria-label="Bild vergrößern"
-        title="Bild vergrößern"
         className="group relative block w-fit max-w-full cursor-zoom-in overflow-hidden rounded-lg border border-seam bg-void hover:border-seam-hi"
       >
         <img src={url} alt={alt} draggable={false} onError={() => setBroken(true)} className={`block h-auto max-w-full ${maxH} object-contain`} />
         <Maximize2 className="absolute top-2 right-2 size-3.5 text-ink opacity-0 drop-shadow transition-opacity group-hover:opacity-80" aria-hidden />
       </button>
-      {zoom && <Lightbox url={url} alt={alt} onClose={close} />}
-    </>
-  );
-}
-
-function Lightbox({ url, alt, onClose }: { url: string; alt: string; onClose: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const prev = document.activeElement as HTMLElement | null;
-    ref.current?.querySelector<HTMLElement>("button")?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      prev?.focus();
-    };
-  }, [onClose]);
-  // portal: transformed chat containers would otherwise trap the fixed overlay
-  return createPortal(
-    <div
-      ref={ref}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Bild vergrößert"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-void/85 p-6 backdrop-blur-[2px]"
-      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
-    >
-      <IconButton label="Schließen" onClick={onClose} className="absolute top-4 right-4 bg-plate/80">
-        <X className="size-4" />
-      </IconButton>
-      <img src={url} alt={alt} className="max-h-full max-w-full rounded-lg border border-seam-hi object-contain shadow-2xl shadow-black/60" />
-    </div>,
-    document.body,
+      {actions}
+      {zoom && <Lightbox url={url} alt={alt} caption={display.prompt} onClose={close} onReveal={() => reveal(display.media, display.file)} />}
+    </figure>
   );
 }

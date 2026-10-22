@@ -2,6 +2,7 @@
 import { create } from "zustand";
 import { useBrain } from "../holo/store";
 import { ApiError, CORE_URL, createApi } from "../lib/api";
+import { attachmentKey, type AttachmentInfo } from "../lib/attachments";
 import { nativeLog, nativeNotify } from "../lib/native";
 import { RealtimeClient, type ConnectionState } from "../lib/realtime";
 import { applyToolEvent, applyVoiceStatus, pushBounded, type LiveToolCall } from "../lib/reducers";
@@ -14,6 +15,7 @@ import {
   mergeServer,
   setCheck,
   type ChatThread,
+  type MessageData,
 } from "../lib/timeline";
 import { notificationTarget } from "../lib/targets";
 import type { Approval, BusEvent, CodingLogLine, LogEntry, SystemStatus, VoiceState } from "../lib/types";
@@ -105,8 +107,8 @@ interface AppState {
   refreshUnread: () => Promise<void>;
   /** Loads the newest turns of a conversation (or, with `older`, the page before the oldest shown). */
   loadThread: (sid: string, older?: boolean) => Promise<void>;
-  /** Sends a message; returns the session id it went to. */
-  sendMessage: (text: string, sid: string | null) => Promise<string>;
+  /** Sends a message (with already uploaded attachments); returns the session id it went to. */
+  sendMessage: (text: string, sid: string | null, attachments?: AttachmentInfo[]) => Promise<string>;
   toggleCheck: (sid: string, eventId: string, index: number, checked: boolean) => Promise<void>;
 }
 
@@ -196,13 +198,17 @@ export const useApp = create<AppState>((set, get) => ({
     const latest = get().threads[sid] ?? emptyThread(sid);
     get().setThread(mergeServer(latest, res.events, res.has_more, older));
   },
-  sendMessage: async (text, sid) => {
-    const res = await api.sendChat(text, sid);
+  sendMessage: async (text, sid, attachments = []) => {
+    const res = await api.sendChat(text, sid, attachments);
     const t = get().threads[res.session_id] ?? emptyThread(res.session_id);
     // the server's copy may already be here (fast core): then no optimistic copy, it would never be replaced
     const lastUser = [...t.events].reverse().find((e) => isMessage(e) && !e.local && e.data.role === "user");
-    const echoed = lastUser !== undefined && (lastUser.data as { text: string }).text === text && Date.now() - lastUser.ts < 15_000;
-    get().setThread(echoed ? { ...t, running: true } : addOptimisticUser(t, text));
+    const echoed =
+      lastUser !== undefined &&
+      (lastUser.data as MessageData).text === text &&
+      attachmentKey((lastUser.data as MessageData).attachments) === attachmentKey(attachments) &&
+      Date.now() - lastUser.ts < 15_000;
+    get().setThread(echoed ? { ...t, running: true } : addOptimisticUser(t, text, attachments));
     return res.session_id;
   },
   toggleCheck: async (sid, eventId, index, checked) => {

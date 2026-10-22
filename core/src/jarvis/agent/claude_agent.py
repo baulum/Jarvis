@@ -66,6 +66,14 @@ def _result_text(content: Any) -> str:
     return ""
 
 
+def user_content(text: str, context: str, images: list[dict[str, Any]] | None = None) -> str | list[dict[str, Any]]:
+    """The user turn for stream-json: plain text, or text plus image blocks (attachments Claude should see)."""
+    content = f"<kontext>\n{context}\n</kontext>\n\n{text}" if context else text
+    if not images:
+        return content
+    return [{"type": "text", "text": content}, *images]
+
+
 def friendly_error(text: str) -> str:
     low = text.lower()
     if "limit" in low and ("reset" in low or "usage" in low or "session" in low or "rate" in low):
@@ -294,7 +302,13 @@ class ClaudeCodeAgent:
                     return
 
     async def chat_stream(
-        self, session_id: uuid.UUID, resume_id: str | None, text: str, context: str, model: str | None = None
+        self,
+        session_id: uuid.UUID,
+        resume_id: str | None,
+        text: str,
+        context: str,
+        model: str | None = None,
+        images: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         p = await self._proc_for(session_id, resume_id)
         if p.effort != self._effort():
@@ -315,8 +329,7 @@ class ClaudeCodeAgent:
                 p.busy = False
                 yield AgentEvent("failed", text=f"Modellwechsel fehlgeschlagen: {e}")
                 return
-        content = f"<kontext>\n{context}\n</kontext>\n\n{text}" if context else text
-        msg = {"type": "user", "message": {"role": "user", "content": content}}
+        msg = {"type": "user", "message": {"role": "user", "content": user_content(text, context, images)}}
         assert p.proc.stdin is not None and p.proc.stdout is not None
         finished = False
         deadline = time.monotonic() + self.cfg.turn_timeout_s

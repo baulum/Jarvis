@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
+import shutil
+import sys
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
 
+from jarvis.agent import attachments as att
 from jarvis.agent.persona import time_of_day_greeting
 from jarvis.agent.timeline import redact_for_mobile
 from jarvis.api.deps import current_principal, get_state, require, require_owner
@@ -80,27 +85,73 @@ async def killswitch(
 
 
 # ------------------------------------------------------------------ chat
+class AttachmentRef(BaseModel):
+    file: str = Field(min_length=4, max_length=110)  # stored name from POST /api/attachments
+    name: str = Field(default="", max_length=255)  # display name (sanitised again)
+
+
 class ChatBody(BaseModel):
-    message: str = Field(min_length=1, max_length=20000)
+    message: str = Field(default="", max_length=20000)
     session_id: str | None = None
     channel: str = "desktop"
     wait: bool = False
     images: list[str] | None = None
+    attachments: list[AttachmentRef] | None = Field(default=None, max_length=att.MAX_PER_MESSAGE)
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> ChatBody:
+        if not self.message and not self.attachments:
+            raise ValueError("Die Nachricht ist leer.")
+        return self
 
 
 @router.post("/chat")
 async def chat(body: ChatBody, st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
     channel = body.channel if body.channel in ("desktop", "voice", "api", "mobile") else "desktop"
     sid = _uuid(body.session_id) if body.session_id else None
+    try:  # every attachment must exist in the attachments folder before anything starts
+        files = [att.load_attachment(att.attachments_dir(st), a.file, a.name) for a in body.attachments or []]
+    except att.AttachmentError as e:
+        raise HTTPException(e.status, str(e)) from e
     try:
         sess = await st.orchestrator.get_or_create_session(p, channel, sid)
     except PermissionError as e:
         raise HTTPException(403, str(e)) from e
+    turn = st.orchestrator.handle(
+        p, channel, body.message, session_id=sess.id, images=body.images, attachments=files or None
+    )
     if body.wait:
-        res = await st.orchestrator.handle(p, channel, body.message, session_id=sess.id, images=body.images)
+        res = await turn
         return {"session_id": str(res.session_id), "text": res.text, "error": res.error, "tools": res.tools}
-    spawn(st.orchestrator.handle(p, channel, body.message, session_id=sess.id, images=body.images), name="chat")
+    spawn(turn, name="chat")
     return {"session_id": str(sess.id), "accepted": True}
+
+
+@router.post("/attachments", status_code=201)
+async def upload_attachment(
+    request: Request,
+    name: str = Query(min_length=1, max_length=255),
+    st: AppState = StateDep,
+    p: Principal = Actor,
+) -> dict[str, Any]:
+    """One chat attachment as the raw request body (``?name=`` = original file name). Size, type and file
+    signature are checked; the file is stored under a new unique name – existing files are never replaced."""
+    shown = att.display_name(name)
+    too_big = f"„{shown}“ ist zu groß – erlaubt sind höchstens {att.format_size(att.MAX_BYTES)} je Datei."
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > att.MAX_BYTES:
+        raise HTTPException(413, too_big)
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > att.MAX_BYTES:
+            raise HTTPException(413, too_big)
+    try:
+        info = await asyncio.to_thread(att.save_attachment, att.attachments_dir(st), name, bytes(data))
+    except att.AttachmentError as e:
+        raise HTTPException(e.status, str(e)) from e
+    await audit(p.label, "chat.attachment", target=info.file, details={"type": info.ext, "size": info.size})
+    return info.public()
 
 
 @router.get("/commands")
@@ -223,22 +274,54 @@ async def session_events(
     return out
 
 
-@router.get("/media/{kind}/{name}")
-async def media_file(kind: str, name: str, st: AppState = StateDep, p: Principal = Reader) -> FileResponse:
-    """A generated image/video shown in the chat. Only a bare file name from generated-images/-videos is
-    accepted (``resolve_media_file``); everything else – paths, other folders, other types – is 404."""
-    path = resolve_media_file(st, kind, name)
+def _chat_file(st: AppState, kind: str, name: str, *, images_only: bool) -> Path:
+    """A file the chat shows: generated images/videos or an attachment – by bare file name only."""
+    if kind == "attachments":
+        path = att.resolve_attachment(att.attachments_dir(st), name, images_only=images_only)
+    else:
+        path = resolve_media_file(st, kind, name)
     if path is None:
         raise HTTPException(404, "not found")
+    return path
+
+
+@router.get("/media/{kind}/{name}")
+async def media_file(kind: str, name: str, st: AppState = StateDep, p: Principal = Reader) -> FileResponse:
+    """A generated image/video or an image attachment shown in the chat. Only a bare file name from
+    generated-images/-videos or chat-attachments is accepted; everything else – paths, other folders, other
+    types – is 404. Document attachments are not served (they are opened in the Finder)."""
+    path = _chat_file(st, kind, name, images_only=True)
+    ext = path.suffix.lower()
+    known = att.TYPES.get(ext[1:])
     return FileResponse(
         path,
-        media_type=MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream"),
+        media_type=MEDIA_TYPES.get(ext) or (known.mime if known else "application/octet-stream"),
         headers={
             "Cache-Control": "private, max-age=86400",
             "X-Content-Type-Options": "nosniff",
             "Content-Security-Policy": "default-src 'none'; sandbox",
         },
     )
+
+
+@router.post("/media/{kind}/{name}/reveal")
+async def media_reveal(kind: str, name: str, st: AppState = StateDep, p: Principal = Owner) -> dict[str, bool]:
+    """Shows a generated file or an attachment in the Finder (``open -R``) – same name-only rule as above."""
+    path = _chat_file(st, kind, name, images_only=False)
+    exe = shutil.which("open")
+    if sys.platform != "darwin" or exe is None:
+        raise HTTPException(501, "„Im Finder zeigen“ gibt es nur auf dem Mac.")
+    proc = await asyncio.create_subprocess_exec(
+        exe, "-R", str(path), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+    )
+    try:
+        code = await asyncio.wait_for(proc.wait(), 10)
+    except TimeoutError:
+        proc.kill()
+        code = -1
+    if code != 0:
+        raise HTTPException(500, "Der Finder konnte die Datei nicht zeigen.")
+    return {"ok": True}
 
 
 class CheckBody(BaseModel):

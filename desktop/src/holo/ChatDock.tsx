@@ -2,10 +2,12 @@
 // conversation and when Sir focuses it, and shrinks again when the brain is in use.
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUp, CircleStop, Loader2, Mic, MicOff } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalCard } from "../components/ApprovalCard";
+import { AttachButton, AttachmentTray, DropOverlay } from "../components/chat/Attachments";
 import { ChatTimeline } from "../components/chat/ChatTimeline";
 import { ModelPicker } from "../components/ModelPicker";
+import { useAttachmentDraft } from "../hooks/useAttachmentDraft";
 import { useSlash } from "../hooks/useSlash";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { buildRows } from "../lib/timeline";
@@ -64,6 +66,12 @@ export function ChatDock() {
   const [chatUsedAt, setChatUsedAt] = useState(0);
   const brainUsedAt = useBrain((s) => s.lastInteraction);
   const input = useRef<HTMLTextAreaElement>(null);
+  const onAttachErrors = useCallback(
+    (errors: string[]) => pushToast({ tone: "bad", title: errors.length > 1 ? "Dateien nicht angehängt" : "Datei nicht angehängt", body: errors.join(" ") }),
+    [pushToast],
+  );
+  // the dock is the chat of the main window: files dropped anywhere on the window are attached here
+  const attach = useAttachmentDraft({ onErrors: onAttachErrors, scope: "window" });
 
   useEffect(() => {
     if (!sessionId || useApp.getState().threads[sessionId]?.loaded) return;
@@ -95,17 +103,20 @@ export function ChatDock() {
 
   async function send() {
     const text = draft.trim();
-    if (!text || sending) return;
-    if (await slash.tryRun(text)) return;
+    const withFiles = attach.items.length > 0;
+    if ((!text && !withFiles) || sending) return;
+    if (!withFiles && (await slash.tryRun(text))) return;
     setDraft("");
-    await sendText(text);
+    await sendText(text, withFiles);
   }
 
-  async function sendText(text: string) {
+  async function sendText(text: string, withFiles = false) {
     setSending(true);
     toBottom(false);
     try {
-      const sid = await sendMessage(text, sessionId);
+      const files = withFiles ? await attach.upload() : [];
+      const sid = await sendMessage(text, sessionId, files);
+      if (withFiles) attach.clear();
       if (sid !== sessionId) setActive(sid);
     } catch (e) {
       setDraft(text);
@@ -133,7 +144,7 @@ export function ChatDock() {
     <motion.section
       layout
       transition={{ type: "spring", stiffness: 380, damping: 38 }}
-      className="holo-dock pointer-events-auto mx-auto flex w-[min(44rem,calc(100vw-2rem))] flex-col"
+      className="holo-dock pointer-events-auto relative mx-auto flex w-[min(44rem,calc(100vw-2rem))] flex-col"
       aria-label="Gespräch mit J.A.R.V.I.S."
       onFocus={() => {
         setFocused(true);
@@ -166,6 +177,7 @@ export function ChatDock() {
           </motion.div>
         )}
       </AnimatePresence>
+      <DropOverlay active={attach.dragging} />
       <form
         className="relative flex flex-col gap-1 px-3 pb-2.5 pt-2"
         onSubmit={(e) => {
@@ -174,10 +186,16 @@ export function ChatDock() {
         }}
       >
         {slash.menu}
+        {attach.items.length > 0 && (
+          <div className="px-1 pt-1">
+            <AttachmentTray items={attach.items} onRemove={attach.remove} disabled={sending} />
+          </div>
+        )}
         <textarea
           ref={input}
           rows={1}
           value={draft}
+          onPaste={attach.onPaste}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (slash.onKeyDown(e)) return;
@@ -192,6 +210,7 @@ export function ChatDock() {
           className="max-h-40 min-h-9 w-full resize-none bg-transparent px-2 py-2 text-[0.9rem] text-ink placeholder:text-ink-faint focus:outline-none"
         />
         <div className="flex items-center gap-2">
+          <AttachButton onFiles={attach.add} disabled={sending} className="size-8" />
           <ModelPicker placement="up" />
           <div className="ml-auto flex items-center gap-2">
             {(listening || speaking) && <Waveform active source={speaking ? "output" : "input"} />}
@@ -222,7 +241,7 @@ export function ChatDock() {
             ) : (
               <button
                 type="submit"
-                disabled={!draft.trim() || sending}
+                disabled={(!draft.trim() && attach.items.length === 0) || sending}
                 aria-label="Senden"
                 className="flex size-9 shrink-0 items-center justify-center rounded-full bg-arc text-void transition-opacity disabled:opacity-25"
               >

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
+from jarvis.agent.attachments import AttachmentInfo, build_agent_input, summary_line
 from jarvis.agent.claude_agent import ClaudeUnavailable
 from jarvis.agent.llm import AgentEvent, HermesError
 from jarvis.agent.model_router import MODELS, parse_command
@@ -30,13 +31,15 @@ from jarvis.agent.timeline import (
     TimelineStore,
     TurnRecorder,
     append_message,
+    append_tool_display,
     load_timeline,
 )
 from jarvis.db import session_scope
 from jarvis.db.models import ChatMessage, ChatSession
-from jarvis.events import activity, bus, spawn
+from jarvis.events import Event, activity, bus, spawn
 from jarvis.security.audit import audit
 from jarvis.security.auth import OWNER_ROLES, Principal
+from jarvis.tools.artifacts import artifacts
 
 if TYPE_CHECKING:
     from jarvis.app_state import AppState
@@ -169,6 +172,23 @@ class Orchestrator:
         await bus.publish("chat.check", session_id=str(session_id), event_id=item_id, index=index, checked=checked)
         return True
 
+    async def on_approval_decided(self, ev: Event) -> None:
+        """An action that ran after Sir's approval: what it shows (e.g. a generated image) belongs into the
+        conversation that asked for it – the turn that requested it has long finished."""
+        d = ev.data
+        sid = d.get("session_id")
+        result = d.get("result")
+        if d.get("status") != "executed" or not isinstance(sid, str) or not isinstance(result, dict):
+            return
+        if result.get("status") != "ok":  # "duplicate": already shown when it ran the first time
+            return
+        display = artifacts.display_for(result)
+        if display is None:
+            return
+        await append_tool_display(
+            self.timeline_store, self.seq, sid, str(d.get("tool") or "werkzeug"), display, publish=bus.publish
+        )
+
     async def record_turn(
         self, session_id: uuid.UUID, text: str, reply: str, meta: dict[str, Any] | None = None
     ) -> None:
@@ -202,10 +222,13 @@ class Orchestrator:
         on_event: EventCallback | None = None,
         images: list[str] | None = None,
         call_context: str = "",
+        attachments: list[AttachmentInfo] | None = None,
     ) -> TurnResult:
         sess = await self.get_or_create_session(principal, channel, session_id)
         with activity(session_id=str(sess.id)):
-            return await self._handle_turn(sess, principal, channel, text, on_event, images, call_context)
+            return await self._handle_turn(
+                sess, principal, channel, text, on_event, images, call_context, attachments or []
+            )
 
     async def _handle_turn(
         self,
@@ -216,9 +239,14 @@ class Orchestrator:
         on_event: EventCallback | None,
         images: list[str] | None,
         call_context: str = "",
+        attachments: list[AttachmentInfo] | None = None,
     ) -> TurnResult:
         t0 = time.perf_counter()
         timings: dict[str, float] = {}
+        attachments = attachments or []
+        shown = [a.public() for a in attachments]
+        # transcript, title, memory and model choice need words even when Sir only sent files
+        said = text if text.strip() or not attachments else summary_line(attachments)
         turn = TurnRecorder(
             self.timeline_store, self.seq, str(sess.id), publish=bus.publish, plan_steps=self._plan_steps
         )
@@ -226,9 +254,12 @@ class Orchestrator:
             bus.subscribe(pattern, turn.on_bus_event)
         try:
             # Memory recall runs while the user message is stored and the model is chosen (critical path for voice).
-            recall = asyncio.create_task(self._recall(text, principal, channel))
-            user_msg_id = await self._store(sess.id, "user", text, {"channel": channel, "turn_id": turn.turn_id})
-            user_item = await turn.start(text, channel)
+            recall = asyncio.create_task(self._recall(said, principal, channel))
+            meta: dict[str, Any] = {"channel": channel, "turn_id": turn.turn_id}
+            if shown:
+                meta["attachments"] = shown
+            user_msg_id = await self._store(sess.id, "user", said, meta)
+            user_item = await turn.start(text, channel, attachments=shown)
             await bus.publish(
                 "chat.user",
                 session_id=str(sess.id),
@@ -237,7 +268,13 @@ class Orchestrator:
                 event_id=user_item.id if user_item else None,
                 turn_id=turn.turn_id,
             )
-            model, model_reason, confirmation, agent_text = await self._model_for_turn(sess, principal, channel, text)
+            model, model_reason, confirmation, agent_text = await self._model_for_turn(sess, principal, channel, said)
+            if attachments and agent_text == said and not text.strip():
+                agent_text = ""  # only files: the agent gets them without the summary line as "text"
+            agent_input = await build_agent_input(agent_text, attachments)
+            if agent_input.suspicious:  # a document tries to give orders: side effects need approval from now on
+                await self.state.executor.taint(sess.id, "chat_attachment")
+                sess.tainted = True
             memory_context = await recall
             timings["recall_ms"] = round((time.perf_counter() - t0) * 1000, 1)
             instructions = turn_instructions(
@@ -265,10 +302,14 @@ class Orchestrator:
             elif self.state.agent is not None and self.state.agent.available():
                 await bus.publish("chat.model", session_id=str(sess.id), model=model, reason=model_reason)
                 await turn.set_model(model, _model_label(model), model_reason)
-                result = await self._run_claude(sess, principal, agent_text, instructions, emit, model)
+                result = await self._run_claude(
+                    sess, principal, agent_input.text, instructions, emit, model, images=agent_input.images
+                )
                 result.model = model
             elif self.state.hermes is not None and await self._hermes_ready():
-                result = await self._run_hermes(sess, principal, text, instructions, emit, images)
+                hermes_text = agent_input.text if attachments else text
+                hermes_images = [*(images or []), *agent_input.data_urls] or None
+                result = await self._run_hermes(sess, principal, hermes_text, instructions, emit, hermes_images)
             else:
                 result = await self._run_fallback(sess, text, instructions, emit)
 
@@ -305,7 +346,7 @@ class Orchestrator:
         )
         if result.text and not result.error and principal.role in OWNER_ROLES and not await self._is_tainted(sess.id):
             # a session that read untrusted content (web/mail) must not write "facts" into the long-term memory
-            spawn(self._queue_extraction(sess.id, channel, text, result.text, user_msg_id), name="memory-extract")
+            spawn(self._queue_extraction(sess.id, channel, said, result.text, user_msg_id), name="memory-extract")
         return result
 
     async def _plan_steps(self, task_id: str) -> list[str]:
@@ -460,9 +501,11 @@ class Orchestrator:
         instructions: str,
         emit: EventCallback,
         model: str | None = None,
+        images: list[dict[str, Any]] | None = None,
     ) -> TurnResult:
         agent = self.state.agent
         assert agent is not None
+        extra: dict[str, Any] = {"images": images} if images else {}  # image content blocks of attachments
         tools: list[dict[str, Any]] = []
         chunks: list[str] = []
         final_text = ""
@@ -477,7 +520,7 @@ class Orchestrator:
             ctx = RunContext(principal=principal, session_id=sess.id)
             self.active_run = ctx
             try:
-                async for ev in agent.chat_stream(sess.id, sess.hermes_session_id, text, instructions, model):
+                async for ev in agent.chat_stream(sess.id, sess.hermes_session_id, text, instructions, model, **extra):
                     if ev.type == "run_started":
                         ctx.run_id = str(ev.data.get("run_id") or "") or None
                         await self._remember_agent_session(sess, ctx.run_id)

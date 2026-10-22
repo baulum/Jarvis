@@ -1,5 +1,6 @@
 // Chat timeline: the conversation as one list of items ordered by `seq` (core/src/jarvis/agent/timeline.py).
 // Pure functions only – the store folds bus events in, the views turn the list into rows.
+import { attachmentKey, type AttachmentInfo } from "./attachments";
 import type { BusEvent } from "./types";
 
 export type TimelineKind = "message" | "tool" | "process" | "turn";
@@ -7,6 +8,8 @@ export type TimelineKind = "message" | "tool" | "process" | "turn";
 export interface MessageData {
   role: "user" | "assistant" | "system";
   text: string;
+  /** files Sir sent with the message (stored names, see lib/attachments.ts) */
+  attachments?: AttachmentInfo[];
   status?: "streaming" | "done";
   /** task-list state by item index ("- [ ]"), set by clicking a checkbox */
   checks?: Record<string, boolean>;
@@ -56,6 +59,8 @@ export interface ToolData {
   display?: RouteDisplay | MediaDisplay | { kind: string };
   legacy?: boolean;
   redacted?: boolean;
+  /** "approval": ran after Sir's approval, outside the answer that asked for it */
+  via?: string;
 }
 
 export type ProcessSource = "model" | "protocol" | "summary";
@@ -117,7 +122,7 @@ export function emptyThread(sessionId: string): ChatThread {
 let localSeq = 0;
 
 /** Optimistic user message: sorts after everything the server has sent until the server's copy replaces it. */
-export function addOptimisticUser(thread: ChatThread, text: string): ChatThread {
+export function addOptimisticUser(thread: ChatThread, text: string, attachments: AttachmentInfo[] = []): ChatThread {
   localSeq += 1;
   const id = `local-${Date.now().toString(36)}-${localSeq}`;
   const ev: TimelineEvent<MessageData> = {
@@ -129,7 +134,7 @@ export function addOptimisticUser(thread: ChatThread, text: string): ChatThread 
     seq: Number.MAX_SAFE_INTEGER - 1_000_000 + localSeq,
     ts: Date.now(),
     kind: "message",
-    data: { role: "user", text, status: "done" },
+    data: { role: "user", text, status: "done", ...(attachments.length ? { attachments } : {}) },
   };
   return { ...thread, events: [...thread.events, ev], running: true };
 }
@@ -165,7 +170,10 @@ export function upsertEvent(events: TimelineEvent[], incoming: TimelineEvent): T
   }
   if (isMessage(incoming) && incoming.data.role === "user") {
     // the server's copy of an optimistic message takes its place (and keeps its key: no re-mount)
-    const local = events.findIndex((e) => e.local && isMessage(e) && e.data.role === "user" && e.data.text === incoming.data.text);
+    const files = attachmentKey(incoming.data.attachments);
+    const local = events.findIndex(
+      (e) => e.local && isMessage(e) && e.data.role === "user" && e.data.text === incoming.data.text && attachmentKey(e.data.attachments) === files,
+    );
     if (local >= 0) {
       const key = (events[local] as TimelineEvent).key;
       return insertSorted([...events.slice(0, local), ...events.slice(local + 1)], { ...incoming, key });

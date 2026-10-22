@@ -333,6 +333,7 @@ class TurnRecorder:
         self._text: TimelineItem | None = None  # open assistant text segment
         self._thinking: TimelineItem | None = None  # open reasoning block
         self._tools: dict[str, TimelineItem] = {}  # tool_use_id -> tool item
+        self._tool_args: dict[str, dict[str, Any]] = {}  # tool item id -> its arguments (for the display)
         self._tool_process: dict[str, TimelineItem] = {}  # tool item id -> its process step
         self._queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
         self._writer: asyncio.Task[None] | None = None
@@ -384,12 +385,15 @@ class TurnRecorder:
         self._writer = None
 
     # ------------------------------------------------------------------ turn start
-    async def start(self, user_text: str | None, channel: str) -> TimelineItem | None:
+    async def start(
+        self, user_text: str | None, channel: str, attachments: list[dict[str, Any]] | None = None
+    ) -> TimelineItem | None:
         user = None
         if user_text is not None:
-            user = await self._new(
-                "message", {"role": "user", "text": user_text, "status": "done", "channel": channel}, "msg"
-            )
+            data: dict[str, Any] = {"role": "user", "text": user_text, "status": "done", "channel": channel}
+            if attachments:
+                data["attachments"] = attachments
+            user = await self._new("message", data, "msg")
             await self._emit(user)
         self.turn = await self._new(
             "turn", {"status": "running", "channel": channel, "started_ts": self.clock(), "reasoning": False}, "turn"
@@ -500,6 +504,8 @@ class TurnRecorder:
             "tool",
         )
         self._tools[use_id] = item
+        if isinstance(raw_input, dict):
+            self._tool_args[item.id] = raw_input
         await self._emit(item)
         step = tool_step(name)
         proc = await self.process(
@@ -539,9 +545,9 @@ class TurnRecorder:
         if not ok:
             item.data["error"] = _clip(str(d.get("error") or preview or "Fehlgeschlagen"), 600)
         if isinstance(raw, str) and ok:
-            shown = self.artifacts.take_from_text(raw)
-            if shown:
-                item.data["display"] = shown[0]
+            display = self.artifacts.display_for(raw, self._tool_args.get(item.id))
+            if display:
+                item.data["display"] = display
         await self._emit(item)
         proc = self._tool_process.get(item.id)
         if proc is not None:
@@ -725,6 +731,36 @@ async def append_message(
         await store.upsert(item)
     except Exception:
         logger.warning("Timeline message not persisted", exc_info=True)
+    await publish("chat.event", session_id=session_id, event=item)
+    return item
+
+
+async def append_tool_display(
+    store: TimelineStore,
+    allocator: SeqAllocator,
+    session_id: str,
+    name: str,
+    display: dict[str, Any],
+    *,
+    publish: Publish,
+    via: str = "approval",
+) -> dict[str, Any]:
+    """A tool result that arrives outside its turn (e.g. an image generated after Sir's approval) as its own
+    exchange – otherwise it would only be visible in the approvals view, never in the conversation."""
+    ts = now_ms()
+    item = TimelineItem(
+        id=new_id("tool"),
+        session_id=session_id,
+        turn_id=str(uuid.uuid4()),
+        seq=await allocator.allocate(session_id),
+        ts=ts,
+        kind="tool",
+        data={"name": name, "status": "ok", "started_ts": ts, "ended_ts": ts, "display": display, "via": via},
+    ).to_dict()
+    try:
+        await store.upsert(item)
+    except Exception:
+        logger.warning("Timeline tool display not persisted", exc_info=True)
     await publish("chat.event", session_id=session_id, event=item)
     return item
 

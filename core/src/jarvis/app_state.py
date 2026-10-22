@@ -23,6 +23,7 @@ from jarvis.agent.usage import UsageTracker
 from jarvis.backup.service import BackupService
 from jarvis.coding.runner import CodingRunner
 from jarvis.config import Permissions, Personality, Settings, load_permissions, load_personality
+from jarvis.connectors.attachments import AttachmentsConnector
 from jarvis.connectors.base import ConnectorManager
 from jarvis.connectors.browser import BrowserConnector, BrowserService
 from jarvis.connectors.coding import CodingConnector
@@ -168,6 +169,7 @@ class AppState:
             KieCreativeConnector,
             TelephonyConnector,
             RoutingConnector,
+            AttachmentsConnector,
         ):
             self.connectors.add(conn_cls(self))
         self._register_phone_tool()
@@ -250,6 +252,8 @@ class AppState:
             else:
                 logger.warning("Hermes not provisioned yet – run `jarvisctl setup-hermes`")
         bus.subscribe("system.killswitch", self._on_killswitch)
+        # images/videos generated after an approval still appear in the conversation that asked for them
+        bus.subscribe("approval.decided", self.orchestrator.on_approval_decided)
         await audit("system", "core.start", details={"version": VERSION})
         if interrupted_jobs:
             spawn(self._report_interrupted_jobs(interrupted_jobs), name="coding-interrupted")
