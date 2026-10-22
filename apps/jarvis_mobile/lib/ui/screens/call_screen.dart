@@ -100,6 +100,8 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     final ended = c.status == 'ended' || c.status == 'idle';
     final orb = (MediaQuery.sizeOf(context).width * 1.1).clamp(200.0, 480.0);
     final speaker = c.endpoint?['type'] == _speaker;
+    // Jarvis is talking or working on an answer: the button silences him and drops the answer, the call stays open
+    final interruptible = c.status == 'active' && const {'speaking', 'thinking', 'tool'}.contains(c.agentState);
 
     return Scaffold(
       backgroundColor: J.void_,
@@ -125,7 +127,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
                 child: CoreOrb(
                   mode: ended ? Mode.idle : Mode.calling,
                   level: _level,
-                  size: orb.clamp(120.0, (box.maxHeight - 170).clamp(120.0, 1000.0)),
+                  size: orb.clamp(120.0, (box.maxHeight - 226).clamp(120.0, 1000.0)),
                   ringing: ringing,
                   warn: false,
                 ),
@@ -152,6 +154,15 @@ class _CallScreenState extends ConsumerState<CallScreen> {
                       : c.activity != null
                           ? _ActivityChip(text: c.activity!, key: ValueKey(c.activity))
                           : const SizedBox.shrink(),
+                ),
+              ),
+              SizedBox(
+                height: 52,
+                child: AnimatedSwitcher(
+                  duration: J.base,
+                  child: interruptible
+                      ? _StopChip(key: const ValueKey('stop'), onTap: () => _interrupt(c))
+                      : const SizedBox.shrink(),
                 ),
               ),
               if (c.error != null && ended)
@@ -207,6 +218,17 @@ class _CallScreenState extends ConsumerState<CallScreen> {
         ]),
       ),
     );
+  }
+
+  /// Stopp: the core silences Jarvis (synthesis, audio queued towards the phone) and cancels the running answer.
+  /// Speaking over him does the same; this is for noisy places and for when he rambles on.
+  Future<void> _interrupt(CallInfo c) async {
+    final id = c.callId;
+    if (id == null) return;
+    HapticFeedback.mediumImpact();
+    try {
+      await ref.read(apiProvider).post('/api/mobile/calls/$id/interrupt');
+    } catch (_) {} // the call goes on; if the request failed he simply keeps talking and Sir can tap again
   }
 
   void _toggleSpeaker(CallInfo c) {
@@ -283,6 +305,26 @@ class _ActivityChip extends StatelessWidget {
           const SizedBox(width: J.s2),
           Text(text, style: J.mono(12, color: J.cyan)),
         ]),
+      );
+}
+
+class _StopChip extends StatelessWidget {
+  const _StopChip({super.key, required this.onTap});
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) => Pressable(
+        onTap: onTap,
+        semantics: 'Jarvis unterbrechen',
+        child: Container(
+          constraints: const BoxConstraints(minHeight: J.hit),
+          padding: const EdgeInsets.symmetric(horizontal: J.s5),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(24), border: Border.all(color: J.amber.withValues(alpha: 0.6))),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.stop_rounded, size: 18, color: J.amber),
+            const SizedBox(width: J.s2),
+            Text('STOPP', style: J.mono(12, color: J.amber)),
+          ]),
+        ),
       );
 }
 

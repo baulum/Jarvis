@@ -42,6 +42,7 @@ class AssistPanel(context: Context, private val host: Host) {
     private val scroll: View = root.findViewById(R.id.assist_scroll)
     private val answer: TextView = root.findViewById(R.id.assist_answer)
     private val talk: TextView = root.findViewById(R.id.assist_talk)
+    private val stop: TextView = root.findViewById(R.id.assist_stop)
     private val openApp: TextView = root.findViewById(R.id.assist_open)
     private val session = AssistSession(context, ::render)
     private val autoClose = Runnable { host.close() }
@@ -52,6 +53,7 @@ class AssistPanel(context: Context, private val host: Host) {
         root.findViewById<View>(R.id.assist_close).setOnClickListener { host.close() }
         pulse.setOnClickListener { if (session.ui.phase == Phase.LISTENING) session.finishSpeaking() else listen() }
         talk.setOnClickListener { listen() }
+        stop.setOnClickListener { session.interrupt() }
         openApp.setOnClickListener {
             val link = session.sessionId?.let { "jarvis://chat/$it" } ?: "jarvis://chat"
             host.startActivity(
@@ -106,6 +108,7 @@ class AssistPanel(context: Context, private val host: Host) {
         scroll.visibility = if (s.answer.isEmpty()) View.GONE else View.VISIBLE
         val idle = s.phase == Phase.IDLE || s.phase == Phase.ERROR
         talk.visibility = if (idle) View.VISIBLE else View.GONE
+        stop.visibility = if (s.phase == Phase.TRANSCRIBING || s.phase == Phase.THINKING || s.phase == Phase.SPEAKING) View.VISIBLE else View.GONE
         openApp.visibility = if (idle && s.answer.isNotEmpty()) View.VISIBLE else View.GONE
         pulse.color = when (s.phase) {
             Phase.ERROR -> AMBER
@@ -114,7 +117,11 @@ class AssistPanel(context: Context, private val host: Host) {
         }
         pulse.busy = s.phase == Phase.TRANSCRIBING || s.phase == Phase.THINKING || s.phase == Phase.SPEAKING
         pulse.level = s.level
-        pulse.contentDescription = if (s.phase == Phase.LISTENING) "Fertig gesprochen" else "Erneut sprechen"
+        pulse.contentDescription = when (s.phase) {
+            Phase.LISTENING -> "Fertig gesprochen"
+            Phase.TRANSCRIBING, Phase.THINKING, Phase.SPEAKING -> "Unterbrechen und sprechen"
+            else -> "Erneut sprechen"
+        }
         root.removeCallbacks(autoClose)
         if (idle) root.postDelayed(autoClose, if (s.answer.isEmpty()) 8_000 else 45_000)
     }

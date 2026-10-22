@@ -209,11 +209,12 @@ export function ChatDock() {
             >
               {voiceOk ? <Mic className="size-4" strokeWidth={1.7} /> : <MicOff className="size-4" strokeWidth={1.7} />}
             </button>
-            {running ? (
+            {running || speaking ? (
               <button
                 type="button"
                 onClick={() => void api.interruptChat().catch(() => undefined)}
-                aria-label="Antwort abbrechen"
+                aria-label={running ? "Antwort abbrechen" : "Sprachausgabe stoppen"}
+                title={running ? "Antwort abbrechen (stoppt auch die Sprachausgabe)" : "Sprachausgabe stoppen"}
                 className="flex size-9 shrink-0 items-center justify-center rounded-full border border-seam-hi text-ink-dim hover:text-ink"
               >
                 <CircleStop className="size-4" strokeWidth={1.7} />

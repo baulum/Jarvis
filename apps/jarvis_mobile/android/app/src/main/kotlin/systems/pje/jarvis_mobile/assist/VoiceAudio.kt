@@ -9,6 +9,8 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.ToneGenerator
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
@@ -34,7 +36,9 @@ object VoiceRecorder {
 
     /**
      * Blocks until Sir stops speaking. Returns null if nothing was said within [noSpeechMs] or [active] turned
-     * false; [stopEarly] ends the utterance like a pause would.
+     * false; [stopEarly] ends the utterance like a pause would. [lead] is speech that was already heard (the words
+     * that interrupted Jarvis, see [BargeInListener]): it becomes the start of the utterance, [noiseHint] replaces
+     * the calibration that would otherwise mistake that speech for room noise.
      */
     @SuppressLint("MissingPermission") // callers check RECORD_AUDIO
     fun record(
@@ -43,6 +47,8 @@ object VoiceRecorder {
         stopEarly: () -> Boolean = { false },
         onSpeech: () -> Unit = {},
         onLevel: (Float) -> Unit = {},
+        lead: ByteArray? = null,
+        noiseHint: Double = 0.0,
     ): ByteArray? {
         val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, max(min, FRAME * 2 * 10))
@@ -52,12 +58,15 @@ object VoiceRecorder {
         val pcm = ByteArrayOutputStream()
         val preroll = ArrayDeque<ShortArray>()
         val buf = ShortArray(FRAME)
-        var frames = 0
-        var noise = 0.0
+        var frames = if (lead != null) CALIBRATION_FRAMES else 0 // a lead proves speech: nothing to calibrate
+        var noise = if (lead != null) noiseHint else 0.0
         var loudRun = 0
         var started = false
         var silenceMs = 0
         try {
+            if (lead != null) {
+                pcm.write(lead); started = true; onSpeech()
+            }
             rec.startRecording()
             while (active()) {
                 val n = rec.read(buf, 0, FRAME)
@@ -95,13 +104,13 @@ object VoiceRecorder {
         return wav(pcm.toByteArray())
     }
 
-    private fun rms(b: ShortArray, n: Int): Double {
+    internal fun rms(b: ShortArray, n: Int): Double {
         var sum = 0.0
         for (i in 0 until n) sum += b[i].toDouble() * b[i]
         return sqrt(sum / n)
     }
 
-    private fun write(out: ByteArrayOutputStream, s: ShortArray) {
+    internal fun write(out: ByteArrayOutputStream, s: ShortArray) {
         val bb = ByteBuffer.allocate(s.size * 2).order(ByteOrder.LITTLE_ENDIAN)
         s.forEach { bb.putShort(it) }
         out.write(bb.array())
@@ -112,6 +121,82 @@ object VoiceRecorder {
         put("fmt ".toByteArray()); putInt(16); putShort(1); putShort(1); putInt(RATE); putInt(RATE * 2); putShort(2); putShort(16)
         put("data".toByteArray()); putInt(pcm.size); put(pcm)
     }.array()
+}
+
+/**
+ * Barge-in for the overlay: listens while Jarvis speaks and returns as soon as Sir talks over him.
+ *
+ * The on-device voice comes out of the phone's own speaker, so it reaches the microphone. Three things keep it
+ * from interrupting itself: the VOICE_COMMUNICATION source with the platform's echo canceller and noise
+ * suppressor where the device has them; the level of Jarvis' own voice is measured first (the first 300 ms, then
+ * a slowly falling peak) and Sir must be clearly louder than that; and it has to last [NEED_MS] – a click or a
+ * cough is no interruption.
+ */
+object BargeInListener {
+    private const val RATE = 16_000
+    private const val FRAME = RATE / 50 // 20 ms
+    private const val WARMUP_FRAMES = 15 // 300 ms of Jarvis' own voice, measured before anyone is judged
+    private const val NEED_MS = 400
+    private const val KEEP_FRAMES = 40 // 800 ms: the words that interrupted are not lost
+    private const val MIN_RMS = 1_400.0
+    private const val ECHO_FLOOR = 600.0
+    private const val RATIO = 2.2
+
+    /** What Sir said so far (16 kHz mono PCM) and the quietest level in it, a stand-in for the room's noise. */
+    class Heard(val pcm: ByteArray, val noise: Double)
+
+    /** Blocks until Sir interrupts (returns what he said so far) or [active] turns false / no microphone (null). */
+    @SuppressLint("MissingPermission") // callers check RECORD_AUDIO
+    fun listen(active: () -> Boolean): Heard? {
+        val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, max(min, FRAME * 2 * 10))
+        if (rec.state != AudioRecord.STATE_INITIALIZED) {
+            rec.release(); return null // microphone busy: the answer is simply read out
+        }
+        val effects = listOfNotNull(
+            if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(rec.audioSessionId)?.also { it.enabled = true } else null,
+            if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(rec.audioSessionId)?.also { it.enabled = true } else null,
+        )
+        val recent = ArrayDeque<ShortArray>()
+        val levels = ArrayDeque<Double>()
+        val buf = ShortArray(FRAME)
+        var frames = 0
+        var echo = ECHO_FLOOR
+        var hits = 0
+        try {
+            rec.startRecording()
+            while (active()) {
+                val n = rec.read(buf, 0, FRAME)
+                if (n < 0) return null
+                if (n == 0) continue
+                frames++
+                val level = VoiceRecorder.rms(buf, n)
+                recent.addLast(buf.copyOf(n)); levels.addLast(level)
+                if (recent.size > KEEP_FRAMES) {
+                    recent.removeFirst(); levels.removeFirst()
+                }
+                if (frames <= WARMUP_FRAMES) {
+                    echo = max(echo, level); continue
+                }
+                if (level > max(MIN_RMS, echo * RATIO)) {
+                    hits++
+                } else {
+                    hits = max(0, hits - 1)
+                    echo = max(level, echo * 0.995) // follows the peaks of Jarvis' own voice
+                }
+                if (hits * 20 >= NEED_MS) {
+                    val out = ByteArrayOutputStream()
+                    recent.forEach { VoiceRecorder.write(out, it) }
+                    return Heard(out.toByteArray(), levels.minOrNull() ?: 0.0)
+                }
+            }
+            return null
+        } finally {
+            runCatching { rec.stop() }
+            rec.release()
+            effects.forEach { runCatching { it.release() } }
+        }
+    }
 }
 
 /** On-device German text-to-speech for the overlay answers (the call path keeps Jarvis' own voice). */

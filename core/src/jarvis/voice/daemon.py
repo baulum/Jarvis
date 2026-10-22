@@ -17,7 +17,10 @@ Pipeline (everything overlaps instead of running one after the other):
 * Barge-in: with echo cancellation Sir can simply start talking (``BargeInDetector``) – playback
   stops at once, the core cancels TTS and the agent run, stale chunks (old tag) are dropped and
   the interrupting words become the start of the next utterance. Without echo cancellation
-  "Hey Jarvis" interrupts.
+  "Hey Jarvis" interrupts. The detector needs sustained speech well above the residual echo (not a click),
+  and a transcript that is just Jarvis' own voice coming back is ignored (``is_echo``).
+* Stop command ("Stopp", "Jarvis, stopp", "Hör auf" …): silences Jarvis, is never sent to the agent and keeps
+  the conversation open. The same via the Stopp button in the app (``voice.command`` ``interrupt``).
 * After a reply a follow-up window allows answering without the wake word; "danke, das war's" ends.
 * Every turn is measured (end of speech → endpoint → transcript → first audio) and reported.
 """
@@ -25,6 +28,7 @@ Pipeline (everything overlaps instead of running one after the other):
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import faulthandler
 import json
@@ -43,7 +47,7 @@ import websockets
 from jarvis.config import Settings, get_settings
 from jarvis.voice.audio import BargeInDetector, Endpointer, looks_complete, pcm_to_wav, rms
 from jarvis.voice.audio_io import AudioIO, open_audio
-from jarvis.voice.commands import is_end_conversation, is_wake_up
+from jarvis.voice.commands import is_echo, is_end_conversation, is_stop_command, is_wake_up
 from jarvis.voice.wakeup import WakeupSettings, play_sound, summary
 from jarvis.voice.wakeword import RATE, WakeWordDetector
 
@@ -114,6 +118,8 @@ class VoiceDaemon:
         self._level = 0.0
         self._primed: npt.NDArray[np.int16] | None = None  # audio of a barge-in, start of the next utterance
         self._interrupt = asyncio.Event()
+        self._spoken: collections.deque[str] = collections.deque(maxlen=4)  # what Jarvis said last (echo check)
+        self._playback_ended = 0.0  # perf_counter when the last reply stopped being audible
 
     # ------------------------------------------------------------------ audio in
     def _on_mic(self, pcm: npt.NDArray[np.int16]) -> None:
@@ -300,8 +306,16 @@ class VoiceDaemon:
     async def _await_reply(self, r: Reply, listen_for_barge_in: bool) -> str:
         """Wait until the reply was spoken; watch the microphone for an interruption meanwhile.
 
-        Returns "done", "barge_in" or "error".
+        Returns "done", "barge_in" or "error". Remembers what was said (echo check) and when it stopped.
         """
+        try:
+            return await self._watch_reply(r, listen_for_barge_in)
+        finally:
+            self._playback_ended = time.perf_counter()
+            if r.pieces:
+                self._spoken.append(" ".join(r.pieces))
+
+    async def _watch_reply(self, r: Reply, listen_for_barge_in: bool) -> str:
         assert self.audio is not None
         aec = bool(self.audio.aec)
         barge = BargeInDetector(
@@ -375,7 +389,9 @@ class VoiceDaemon:
                 self._level = min(1.0, rms(pcm) / 6000)
                 collected.append(pcm)
             marks["speech_end"] = marks["endpoint"] = time.perf_counter()
-            return (np.concatenate(collected) if collected else None), None, marks
+            ptt_audio = np.concatenate(collected) if collected else None
+            marks["speech_start"] = marks["endpoint"] - (ptt_audio.size / RATE if ptt_audio is not None else 0.0)
+            return ptt_audio, None, marks
 
         ep = Endpointer(
             RATE,
@@ -430,6 +446,7 @@ class VoiceDaemon:
                 if not ep.has_speech:
                     return None, None, marks
                 audio = ep.audio()
+                marks["speech_start"] = marks["speech_end"] - audio.size / RATE
                 text: str | None = None
                 if spec is not None and spec_len == audio.size:  # nothing new since the speculative run
                     try:
@@ -471,7 +488,14 @@ class VoiceDaemon:
         if len(re.sub(r"\W", "", text)) < 3:  # fragments like "K." (tail of the wake word, a cough)
             logger.info("Ignored fragment: %r", text)
             return True
+        if is_echo(text, self._spoken) and marks.get("speech_start", 0.0) - self._playback_ended < 1.5:
+            logger.info("Ignored echo of Jarvis' own voice: %r", text)  # picked up while/right after he spoke
+            return True
         logger.info("Heard: %s", text)
+        if is_stop_command(text):  # "Stopp": whatever is still playing ends, nothing goes to the agent
+            logger.info("Stop command")
+            await self.interrupt()
+            return True
         if is_end_conversation(text):
             await self.say_text("Sehr wohl, Sir.")
             self.session_id = None  # the next "Hey Jarvis" starts a fresh conversation

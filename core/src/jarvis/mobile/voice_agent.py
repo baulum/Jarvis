@@ -4,7 +4,9 @@ Phone mic (Opus, echo-cancelled + noise-suppressed on the phone) → ``AudioStre
 (speculative Whisper in pauses, same rules as the Mac voice daemon) → orchestrator (same agent, memory and
 tools as every other channel) → ``SpeechTurn`` (Fish Audio streaming TTS, commitment guard) → 24 kHz frames
 → ``AudioSource`` → phone. Sir can interrupt (barge-in): his speech while Jarvis talks stops the speech and
-the agent run of this call. Because the phone cancels the echo, barge-in by voice works here.
+the agent run of this call, and the words that interrupted become the start of the next utterance. Because the
+phone cancels the echo, barge-in by voice works here; the Stopp button of the app (``interrupt_speech``) and the
+spoken stop command ("Stopp", see ``is_stop_command``) do the same without ending the call.
 
 State, transcript and real tool/memory activity go to the phone over the room's data channel
 (topic ``jarvis``) and onto the event bus (``call.*``) for the desktop.
@@ -19,8 +21,8 @@ import logging
 import re
 import time
 import uuid
+from collections import deque
 from collections.abc import Awaitable, Callable
-from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -37,7 +39,7 @@ from jarvis.voice.pipeline import SpeechTurn
 if TYPE_CHECKING:
     from jarvis.app_state import AppState
 
-from jarvis.voice.commands import is_end_conversation
+from jarvis.voice.commands import is_echo, is_end_conversation, is_stop_command
 
 logger = logging.getLogger(__name__)
 IN_RATE = 16000
@@ -61,10 +63,6 @@ _TOOL_LABELS: list[tuple[str, str]] = [
     ("mobile_", "Plane eine Benachrichtigung …"),
     ("system_", "Prüfe das System …"),
 ]
-
-
-def _normalise(text: str) -> str:
-    return re.sub(r"\W+", " ", text.lower()).strip()
 
 
 def tool_label(name: str) -> str:
@@ -279,23 +277,38 @@ class CallVoiceAgent:
         need_barge = max(1, vcfg.barge_in_ms // 20)
         spec: asyncio.Task[str] | None = None
         spec_len = 0
+        recent: deque[npt.NDArray[np.int16]] = deque()  # last ~600 ms while Jarvis is busy: the words that interrupt
+        recent_len = 0
         while True:
             pcm = await self._audio_q.get()
             busy = self._speaking or (self._turn_task is not None and not self._turn_task.done())
             if busy:
-                # Barge-in: sustained speech while Jarvis speaks or works (phone AEC removes his own voice)
+                recent.append(pcm)
+                recent_len += pcm.size
+                while recent_len - recent[0].size >= IN_RATE * 0.6:
+                    recent_len -= recent.popleft().size
+                # Barge-in: sustained speech (not a click or cough: ``barge_in_ms``) while Jarvis speaks or works.
+                # The phone's echo canceller removes his own voice; what remains must be clearly louder.
                 for i in range(0, len(pcm) - 319, 320):
                     if rms(pcm[i : i + 320]) > max(vcfg.vad_min_rms * 2.5, ep.floor * 3):
                         barge_frames += 1
                     else:
                         barge_frames = max(0, barge_frames - 1)
-                if barge_frames >= need_barge:
-                    barge_frames = 0
-                    self.metrics["barge_ins"] += 1
-                    await self._interrupt()
-                    ep.reset()
-                else:
+                if barge_frames < need_barge:
                     continue
+                barge_frames = 0
+                self.metrics["barge_ins"] += 1
+                heard_so_far = np.concatenate(recent)
+                recent.clear()
+                recent_len = 0
+                if spec is not None:
+                    spec.cancel()
+                    spec = None
+                await self._interrupt()
+                ep.prime(heard_so_far)  # his interrupting words are the start of the next utterance
+                continue
+            recent.clear()
+            recent_len = 0
             for ev in ep.feed(pcm):
                 if ev == "pause":
                     spec_len = ep.audio().size
@@ -331,31 +344,40 @@ class CallVoiceAgent:
 
     def _is_echo(self, text: str) -> bool:
         """The recognised text is (part of) something Jarvis said a moment ago, e.g. the greeting via speaker."""
-        heard = _normalise(text)
-        if len(heard) < 8:
-            return False
-        for entry in self.transcript[-4:]:
-            if entry["role"] != "jarvis":
-                continue
-            said = _normalise(entry["text"])
-            if heard in said or SequenceMatcher(None, heard, said).ratio() > 0.75:
-                return True
-        return False
+        said = [e["text"] for e in self.transcript[-4:] if e["role"] == "jarvis"]
+        return is_echo(text, said, min_words=1)
 
     async def _stt(self, audio: npt.NDArray[np.int16]) -> str:
         return (await self.state.stt.transcribe_wav(pcm_to_wav(audio, IN_RATE))).strip()
 
+    async def interrupt_speech(self) -> bool:
+        """Stopp button of the app: silence Jarvis and drop the running answer, the call goes on.
+        False if there was nothing to stop."""
+        if not (self._speaking or (self._turn_task is not None and not self._turn_task.done())):
+            return False
+        self.metrics["stops"] = self.metrics.get("stops", 0) + 1
+        await self._interrupt()
+        return True
+
     async def _interrupt(self) -> None:
+        """Stop speaking at once: synthesis, the audio already queued towards the phone, and the agent run."""
+        self._speaking = False  # first: nothing new may be forwarded while the rest is torn down
+        if self._prepared is not None:
+            await self._prepared.cancel()
+            self._prepared = None
         if self._speech is not None:
             await self._speech.cancel()
+        self._out_buf = b""
         if self._source is not None:
             self._source.clear_queue()
-        self._out_buf = b""
-        self._speaking = False
-        if self._turn_task is not None and not self._turn_task.done():
+        task = self._turn_task
+        if task is not None and not task.done():
             if self.session_id is not None:
                 await self.state.orchestrator.interrupt(self.session_id)
-            self._turn_task.cancel()
+            task.cancel()
+            await asyncio.wait({task}, timeout=1.0)  # the listen loop must not see it as busy any longer
+        self._out_buf = b""  # a chunk that was in flight while we tore down must not leave "speaking" behind
+        self._speaking = False
         await self.set_state("listening", "unterbrochen")
 
     async def _turn(self, audio: npt.NDArray[np.int16], text: str | None) -> None:
@@ -374,6 +396,10 @@ class CallVoiceAgent:
             await self.set_state("listening")
             return
         await self._transcript("user", text)
+        if is_stop_command(text):  # the interruption already silenced Jarvis; "Stopp" is not a request for the agent
+            logger.info("Call %s: stop command", self.call_id)
+            await self.set_state("listening")
+            return
         if is_end_conversation(text, 70):
             await self._speak_fixed("Sehr wohl, Sir. Auf Wiederhören.")
             self._ending = True
