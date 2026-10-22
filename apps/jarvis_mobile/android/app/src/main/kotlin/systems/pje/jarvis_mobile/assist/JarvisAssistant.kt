@@ -119,7 +119,7 @@ class JarvisRecognitionService : RecognitionService() {
                     safe { listener.error(SpeechRecognizer.ERROR_SPEECH_TIMEOUT) }; return@launch
                 }
                 safe { listener.endOfSpeech() }
-                val text = JarvisVoiceApi.transcribe(this@JarvisRecognitionService, wav)
+                val text = JarvisVoiceApi.transcribe(this@JarvisRecognitionService, wav).text // system voice input: just the words
                 if (text.isBlank()) {
                     safe { listener.error(SpeechRecognizer.ERROR_NO_MATCH) }
                 } else {

@@ -3,6 +3,23 @@
 > Wiedereinstiegspunkt für neue Sessions. Nach jeder größeren Änderung aktualisieren.
 > Doku: ARCHITECTURE.md (Aufbau), SETUP.md (Installation/Betrieb), SECURITY.md (Sicherheitsmodell).
 
+## Stand: 2026-10-22 – Barge-in und Stopp-Befehl in allen Sprachkanälen
+
+Beschreibung in ARCHITECTURE.md („Unterbrechen (Barge-in) und Stopp“).
+- **Stopp per Stimme** (`voice/commands.py`): „Stopp“ beendete bisher das Gespräch bzw. legte im Anruf auf – jetzt nur
+  Schweigen + Antwort verwerfen (`is_stop_command`), nichts geht an den Agenten; „Tschüss“/„Gespräch beenden“ beenden weiter
+- **Mac-Daemon:** Echo-Filter (`is_echo`) für Transkripte kurz nach/während der Wiedergabe; Stopp-Befehl; `chat/interrupt`
+  stoppt auch die Sprachausgabe
+- **Anruf (LiveKit):** Wörter, die zum Unterbrechen geführt haben, bleiben erhalten (vorher gingen die ersten ~0,3 s
+  verloren); Stopp-Button in der App; `interrupt_speech()`; Rennen „busy/speaking“ nach dem Abbruch beseitigt
+- **Telefonleitung (Twilio):** Unterbrechung erst nach `barge_in_ms` anhaltender Sprache (vorher ein einzelner lauter Frame),
+  bricht jetzt auch die laufende Agent-Antwort ab (vorher nur das Abspielen)
+- **Handy-Overlay (Kotlin):** Stopp-Button, Barge-in während des Vorlesens (`BargeInListener`), Stopp-Befehl, Echo-Prüfung;
+  „Denkt nach“ abbrechen bricht den Core-Lauf ab
+- Tests: Core 491 Unit (+`test_barge_in.py`), Flutter 53, Desktop 88; ruff-check/tsc/eslint/flutter analyze ohne Fehler.
+  Nicht ausgeführt: Kotlin (kein Gradle-Wrapper/SDK in der Umgebung) und E2E mit echtem Mikrofon/Lautsprecher – die
+  Schwellwerte des Overlays (`BargeInListener`: `MIN_RMS`, `RATIO`) und der Telefonleitung (`BARGE_IN_RMS`) sind ungemessen
+
 ## Stand: 2026-10-21 – Chat-Zeitleiste, Gedankenprozess, Routendienst
 
 - **Routendienst** (Connector `routing`, Werkzeuge `route_plan`, `route_geocode`): Auto/Fahrrad/Fußweg, Entfernung, Fahrzeit,

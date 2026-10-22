@@ -1,0 +1,11 @@
+{
+  "name": "jarvis-workspace",
+  "private": true,
+  "description": "Repo root: the only Node project is desktop/ (Tauri + React); these scripts just forward to it.",
+  "scripts": {
+    "build": "npm --prefix desktop run build",
+    "test": "npm --prefix desktop run test",
+    "lint": "npm --prefix desktop run lint",
+    "typecheck": "npm --prefix desktop run typecheck"
+  }
+}

@@ -308,7 +308,10 @@ nicht möglich
 | Lautsprecher/Hörer/Bluetooth-Auswahl | 📱 / ⬜ / ⬜ | Emulator kennt nur „Speaker“ |
 | Stummschalten | ⬜ | implementiert (LiveKit-Mikro + Telecom-Mute-Sync) |
 | Mikrofon des Telefons im Gespräch | ✅ / ⬜ | E2E mit simuliertem Telefon; echtes Gerätemikro ungetestet |
-| Barge-in per Stimme | ⬜ | implementiert; im E2E nicht ausgelöst |
+| Barge-in per Stimme | ✅ / ⬜ | Unit-Tests (Wörter des Unterbrechers bleiben erhalten, Klick löst nichts aus); im E2E/auf dem Gerät nicht ausgelöst |
+| Stopp-Button im Anruf (`POST /api/mobile/calls/{id}/interrupt`) | ✅ / ⬜ | Unit-Test Core + Widget-Test; auf dem Gerät nicht probiert |
+| „Stopp“ per Stimme (Anruf, Overlay, Mac): Jarvis schweigt, Gespräch bleibt offen | ✅ | Unit-Tests; „Gespräch beenden“/„Tschüss“ legen weiterhin auf |
+| Overlay („Hey Jarvis“): Stopp-Button, Barge-in während des Vorlesens | ⬜ | Kotlin in der Entstehungssitzung nicht gebaut/ausgeführt |
 | Halten bei Mobilfunkanruf | ⬜ | implementiert (`onSetInactive`) |
 | Netzwechsel WLAN ↔ mobil / Reconnect | ⬜ | LiveKit-Reconnect + Adress-Neuauswahl implementiert |
 | Unterwegs über Tailscale | ⬜ | Tailscale nicht installiert |

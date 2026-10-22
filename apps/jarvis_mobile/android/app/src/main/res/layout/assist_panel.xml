@@ -107,6 +107,13 @@
                 android:visibility="gone" />
 
             <TextView
+                android:id="@+id/assist_stop"
+                style="@style/AssistAction"
+                android:contentDescription="Jarvis unterbrechen"
+                android:text="STOPP"
+                android:visibility="gone" />
+
+            <TextView
                 android:id="@+id/assist_talk"
                 style="@style/AssistAction"
                 android:text="SPRECHEN"

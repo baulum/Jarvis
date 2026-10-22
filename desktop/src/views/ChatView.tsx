@@ -96,6 +96,7 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
 
   const slash = useSlash({ draft, setDraft, sessionId, sendText, onNew: () => setActive(null) });
   const running = Boolean(thread?.running);
+  const speaking = useApp((s) => s.voice.state === "speaking");
   const empty = !events || events.length === 0;
   const sessionApprovals = useMemo(
     () => pending.filter((a) => sessionId && approvalSessions[a.id] === sessionId),
@@ -140,8 +141,8 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
   async function interrupt() {
     setInterrupting(true);
     try {
-      const r = await api.interruptChat();
-      if (!r.interrupted) pushToast({ tone: "info", title: "Es läuft gerade keine Antwort." });
+      const r = await api.interruptChat(); // also silences the voice daemon if it is reading the answer out
+      if (!r.interrupted && !speaking) pushToast({ tone: "info", title: "Es läuft gerade keine Antwort." });
     } catch (e) {
       pushToast({ tone: "bad", title: "Unterbrechen fehlgeschlagen", body: (e as Error).message });
     } finally {
@@ -222,13 +223,13 @@ function Conversation({ sessionId }: { sessionId: string | null }) {
             aria-label="Nachricht"
             className="field min-h-[2.4rem] flex-1 resize-none py-2 text-sm leading-relaxed"
           />
-          {running && (
+          {(running || speaking) && (
             <Button
               variant="danger"
               onClick={() => void interrupt()}
               busy={interrupting}
               icon={<CircleStop className="size-4" />}
-              title="Laufende Antwort abbrechen"
+              title={running ? "Laufende Antwort abbrechen (stoppt auch die Sprachausgabe)" : "Sprachausgabe stoppen"}
             >
               Unterbrechen
             </Button>

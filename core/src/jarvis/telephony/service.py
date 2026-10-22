@@ -45,7 +45,7 @@ from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
 from jarvis.security.guards import rate_limiter
 from jarvis.voice.audio import EnergyVAD, resample, rms, ulaw_decode, ulaw_encode
-from jarvis.voice.commands import is_end_conversation
+from jarvis.voice.commands import is_end_conversation, is_stop_command
 from jarvis.voice.speech import speakable
 
 if TYPE_CHECKING:
@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 RATE = 8000
 FRAME_BYTES = 160  # 20 ms of µ-law @ 8 kHz
+BARGE_IN_RMS = 1200  # a 20 ms frame of the caller this loud counts towards an interruption (line noise stays below)
 _WORD_DIGITS = {
     "null": "0",
     "eins": "1",
@@ -194,6 +195,8 @@ class CallState:
     session_id: uuid.UUID | None = None
     speaking: bool = False
     speak_task: asyncio.Task[None] | None = None
+    turn_task: asyncio.Task[None] | None = None  # agent run + answer of the current turn (cancelled by a barge-in)
+    barge_frames: int = 0
     stream_sid: str = ""
     local_test: bool = False
 
@@ -376,8 +379,8 @@ class TelephonyService:
                     worker = asyncio.create_task(self._conversation(ws, state, utter_q))
                 elif ev == "media" and state is not None:
                     pcm = ulaw_decode(base64.b64decode(msg["media"]["payload"]))
-                    if state.speaking and rms(pcm) > 1200:  # barge-in: caller talks over Jarvis
-                        await self._stop_speaking(ws, state)
+                    if self._barge_in_heard(state, pcm):  # the caller talks over Jarvis (or while he is working)
+                        await self._barge_in(ws, state)
                     for utt in vad.feed(pcm):
                         await utter_q.put(utt)
                 elif ev == "dtmf" and state is not None:
@@ -391,6 +394,8 @@ class TelephonyService:
         finally:
             if worker:
                 worker.cancel()
+            if state is not None and state.turn_task is not None:
+                state.turn_task.cancel()
             if state is not None:
                 self.active.pop(state.call_id, None)
                 async with session_scope() as s:
@@ -468,21 +473,37 @@ class TelephonyService:
                 continue
             if not text:
                 continue
+            if is_stop_command(text):  # "Stopp": the barge-in already silenced Jarvis; no request, the call stays open
+                continue
             if is_end_conversation(text):
                 await self._say(ws, st, "Sehr wohl, Sir. Auf Wiederhören.")
                 await self._hangup(ws, st)
                 return
-            principal = Principal(id=st.from_number or "phone", role="phone_owner", channel="phone")
+            # the turn is a task of its own so that a barge-in can drop the agent run and the answer
+            st.turn_task = asyncio.create_task(self._answer(ws, st, text), name=f"phone-turn-{st.call_id}")
             try:
-                result = await self.state.orchestrator.handle(principal, "phone", text, session_id=st.session_id)
-            except Exception:
-                logger.exception("Phone turn failed")
-                await self._say(ws, st, "Das hat leider nicht funktioniert, Sir.")
-                continue
-            st.session_id = result.session_id
-            st.transcript.append({"role": "jarvis", "text": result.text, "ts": datetime.now(UTC).isoformat()})
-            await bus.publish("telephony.transcript", call_id=str(st.call_id), role="jarvis", text=result.text)
-            await self._say(ws, st, result.text)
+                await asyncio.wait({st.turn_task})
+            finally:
+                st.turn_task = None
+
+    async def _answer(self, ws: WebSocket, st: CallState, text: str) -> None:
+        principal = Principal(id=st.from_number or "phone", role="phone_owner", channel="phone")
+        orch = self.state.orchestrator
+        try:
+            if st.session_id is None:  # known up front, so a barge-in can stop exactly this conversation's run
+                st.session_id = (await orch.get_or_create_session(principal, "phone", None)).id
+            result = await orch.handle(principal, "phone", text, session_id=st.session_id)
+        except asyncio.CancelledError:
+            st.speaking = False
+            raise
+        except Exception:
+            logger.exception("Phone turn failed")
+            await self._say(ws, st, "Das hat leider nicht funktioniert, Sir.")
+            return
+        st.session_id = result.session_id
+        st.transcript.append({"role": "jarvis", "text": result.text, "ts": datetime.now(UTC).isoformat()})
+        await bus.publish("telephony.transcript", call_id=str(st.call_id), role="jarvis", text=result.text)
+        await self._say(ws, st, result.text)
 
     async def _say(self, ws: WebSocket, st: CallState, text: str) -> None:
         text = speakable(text)
@@ -509,6 +530,32 @@ class TelephonyService:
             await ws.send_text(json.dumps({"event": "mark", "streamSid": st.stream_sid, "mark": {"name": "eos"}}))
         finally:
             st.speaking = False
+
+    def _barge_in_heard(self, st: CallState, pcm: np.ndarray) -> bool:
+        """Sustained speech of the caller (``voice.barge_in_ms``) while Jarvis speaks or works on an answer.
+        A click or a line crackle is a single loud frame and never interrupts."""
+        if not (st.speaking or st.turn_task is not None):
+            st.barge_frames = 0
+            return False
+        frames = max(1, pcm.size // FRAME_BYTES)  # one µ-law byte = one sample; 160 samples = 20 ms
+        if rms(pcm) > BARGE_IN_RMS:
+            st.barge_frames += frames
+        else:
+            st.barge_frames = max(0, st.barge_frames - frames)
+        if st.barge_frames < max(1, self.state.settings.voice.barge_in_ms // 20):
+            return False
+        st.barge_frames = 0
+        return True
+
+    async def _barge_in(self, ws: WebSocket, st: CallState) -> None:
+        """Stop the audio already queued at the provider and the agent run of this call (only this conversation's)."""
+        await self._stop_speaking(ws, st)
+        task = st.turn_task
+        if task is not None and not task.done():
+            if st.session_id is not None:
+                await self.state.orchestrator.interrupt(st.session_id)
+            task.cancel()
+        await bus.publish("telephony.barge_in", call_id=str(st.call_id))
 
     async def _stop_speaking(self, ws: WebSocket, st: CallState) -> None:
         st.speaking = False

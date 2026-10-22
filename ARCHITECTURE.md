@@ -100,6 +100,25 @@ Embeddings, TTS-Vorwärmung) → `/api/voice/speak` `turn` → Orchestrator (Rec
 Claude-Deltas → TextChunker → Commitment-Guard → Hybrid-TTS → getaggte PCM-Frames → Audiohelfer. Abbruch (`cancel`)
 stoppt Wiedergabe, Synthese und nur den Agent-Lauf dieser Sitzung.
 
+**Unterbrechen (Barge-in) und Stopp.** Gilt in allen Sprachkanälen; Sir kann Jarvis jederzeit ins Wort fallen, solange er
+spricht *oder* noch an der Antwort arbeitet:
+- *Erkennung:* anhaltende Sprache (`voice.barge_in_ms`, 320 ms) deutlich über dem Eigenecho (Mac: `BargeInDetector`, ohne
+  Echounterdrückung relativ zu den Pegelspitzen der eigenen Stimme; Anruf: Echounterdrückung des Handys; Telefonleitung:
+  `BARGE_IN_RMS` über dieselbe Mindestdauer; Handy-Overlay: AEC-Quelle + Eigenecho-Pegel). Ein Klick oder Husten genügt nicht.
+  „Hey Jarvis“ unterbricht am Mac immer.
+- *Wirkung:* Wiedergabepuffer verwerfen (Mac `flush`, Anruf `clear_queue`, Twilio `clear`), Synthese abbrechen
+  (`SpeechTurn.cancel`), nur den Agent-Lauf **dieser** Sitzung abbrechen (`Orchestrator.interrupt(session_id)`); die Wörter des
+  Unterbrechers (Puffer von ~0,6 s) sind der Anfang der nächsten Äußerung und werden ganz normal verarbeitet.
+- *Echo:* Erkennt die Transkription Jarvis' eigene Worte wieder (`voice.commands.is_echo`: Mac kurz nach/während der
+  Wiedergabe, Anruf, Overlay), wird sie nie beantwortet.
+- *Stopp-Befehl:* `voice.commands.is_stop_command` – „Stopp“, „Jarvis, stopp“, „Hör auf“, „Sei still“, „Das reicht“ … nur als
+  ganze Äußerung („stopp den Timer in zehn Minuten“ ist eine normale Anfrage). Jarvis schweigt, der Befehl geht **nicht** an den
+  Agenten, das Gespräch bleibt offen (anders als „Gespräch beenden“/„Tschüss“). `POST /api/voice/stt` liefert dafür
+  `command: "stop"`, damit das Handy-Overlay dieselbe Definition nutzt.
+- *Buttons:* Desktop (Voice-Ansicht „Stopp“; Chat „Unterbrechen“ auch während des Vorlesens – `POST /api/chat/interrupt`
+  schickt zusätzlich `voice.command interrupt` an den Daemon), Handy-Anruf („STOPP“ → `POST /api/mobile/calls/{id}/interrupt`),
+  Handy-Overlay („STOPP“; Tippen auf den Puls unterbricht und hört zu).
+
 **Gedächtnis.** Notizen im Vault (eine Erinnerung = eine Markdown-Datei, Ordner je Art). Index in `memory_items`
 (Embedding 1024-dim, HNSW cosine; tsvector für Volltext; Konfidenz, Aliase, Nutzung) und `memory_links` (Wissensgraph aus
 `[[Links]]`, Entitäten und typisierten Beziehungen). Suche hybrid (Volltext + Vektor, RRF, Graph-Erweiterung, Re-Ranking).

@@ -27,6 +27,7 @@ from jarvis.security.audit import audit, verify_chain
 from jarvis.security.auth import Principal, create_device, list_devices, revoke_device
 from jarvis.security.guards import rate_limiter
 from jarvis.voice import wakeup
+from jarvis.voice.commands import is_stop_command
 from jarvis.voice.speech import speakable
 
 router = APIRouter(prefix="/api")
@@ -160,7 +161,10 @@ async def agent_usage_refresh(st: AppState = StateDep, p: Principal = Actor) -> 
 
 @router.post("/chat/interrupt")
 async def chat_interrupt(st: AppState = StateDep, p: Principal = Actor) -> dict[str, bool]:
-    return {"interrupted": await st.orchestrator.interrupt()}
+    """Stopp button: drops the running answer and silences the Mac voice daemon too (it may be reading it out)."""
+    interrupted = await st.orchestrator.interrupt()
+    await bus.publish("voice.command", action="interrupt", text=None)
+    return {"interrupted": interrupted}
 
 
 @router.get("/sessions")
@@ -989,6 +993,8 @@ async def voice_tts(body: SpeakBody, st: AppState = StateDep, p: Principal = Rea
 
 @router.post("/voice/stt")
 async def voice_stt(request: Request, st: AppState = StateDep, p: Principal = Reader) -> dict[str, str]:
+    """Transcript of a recording. ``command: "stop"`` when it is nothing but a stop command ("Stopp", "Jarvis, stopp"):
+    the client then silences Jarvis and sends nothing to the agent (one definition for Mac, phone and overlay)."""
     limit = 20_000_000
     declared = request.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > limit:
@@ -999,7 +1005,8 @@ async def voice_stt(request: Request, st: AppState = StateDep, p: Principal = Re
         if len(buf) > limit:
             raise HTTPException(413, "too large")
     wav = bytes(buf)
-    return {"text": await st.stt.transcribe_wav(wav)}
+    text = await st.stt.transcribe_wav(wav)
+    return {"text": text, "command": "stop"} if is_stop_command(text) else {"text": text}
 
 
 class VoiceCommand(BaseModel):

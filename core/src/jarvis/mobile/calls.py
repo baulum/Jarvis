@@ -327,6 +327,12 @@ class CallService:
         else:
             await self._end(call_id, "ended", reason)
 
+    async def interrupt(self, call_id: uuid.UUID) -> bool:
+        """Stopp button in the call screen: Jarvis stops talking and drops the running answer, the call stays open.
+        False if the call has no agent or there was nothing to stop."""
+        agent = self.agents.get(call_id)
+        return await agent.interrupt_speech() if agent is not None else False
+
     def _join_info(self, call_id: uuid.UUID, room: str, principal: Principal) -> dict[str, Any]:
         identity = f"owner-{str(principal.device_id)[:8]}"
         token = self.state.livekit.mint_token(room, identity, "Sir", ttl_s=3600)

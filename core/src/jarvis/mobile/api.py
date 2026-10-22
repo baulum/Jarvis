@@ -530,6 +530,12 @@ async def call_hangup(cid: str, st: AppState = StateDep, p: Principal = Mobile) 
     return {"ok": True}
 
 
+@router.post("/calls/{cid}/interrupt")
+async def call_interrupt(cid: str, st: AppState = StateDep, p: Principal = Mobile) -> dict[str, bool]:
+    """Stopp button: Jarvis stops talking at once (the call stays open)."""
+    return {"interrupted": await st.calls.interrupt(_uuid(cid))}
+
+
 @router.get("/watches")
 async def watches(st: AppState = StateDep, p: Principal = OwnerOrMobile) -> list[dict[str, Any]]:
     return st.calls.watches()
