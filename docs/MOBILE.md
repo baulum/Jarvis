@@ -308,7 +308,8 @@ nicht möglich
 | Lautsprecher/Hörer/Bluetooth-Auswahl | 📱 / ⬜ / ⬜ | Emulator kennt nur „Speaker“ |
 | Stummschalten | ⬜ | implementiert (LiveKit-Mikro + Telecom-Mute-Sync) |
 | Mikrofon des Telefons im Gespräch | ✅ / ⬜ | E2E mit simuliertem Telefon; echtes Gerätemikro ungetestet |
-| Barge-in per Stimme | ✅ / ⬜ | Unit-Tests (Wörter des Unterbrechers bleiben erhalten, Klick löst nichts aus); im E2E/auf dem Gerät nicht ausgelöst |
+| Barge-in per Stimme | ✅ / ⬜ | Unit-Tests (Wörter des Unterbrechers bleiben erhalten, Klick und stetiges Rest-Echo lösen nichts aus); Echo-/Rauschunterdrückung des Telefon-Mikros ist im LiveKit-Track ausdrücklich eingeschaltet; im E2E/auf dem Gerät nicht ausgelöst |
+| Anrufbildschirm ohne Overflow (kleine Displays, große Systemschrift, Querformat) | ✅ | Widget-Tests mit Stopp-Button in drei Bildschirmgrößen |
 | Stopp-Button im Anruf (`POST /api/mobile/calls/{id}/interrupt`) | ✅ / ⬜ | Unit-Test Core + Widget-Test; auf dem Gerät nicht probiert |
 | „Stopp“ per Stimme (Anruf, Overlay, Mac): Jarvis schweigt, Gespräch bleibt offen | ✅ | Unit-Tests; „Gespräch beenden“/„Tschüss“ legen weiterhin auf |
 | Einstellung „Jarvis ins Wort fallen“ (Standard an; Overlay + Anruf) | ✅ / ⬜ | Widget-Test, Core-Unit-Test (Anruf: aus → keine Unterbrechung, Stopp-Button geht); Gerät nicht probiert |

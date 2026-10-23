@@ -16,11 +16,13 @@ import androidx.core.telecom.CallEndpointCompat
 import androidx.core.telecom.CallsManager
 import io.livekit.android.LiveKit
 import io.livekit.android.LiveKitOverrides
+import io.livekit.android.RoomOptions
 import io.livekit.android.AudioOptions
 import io.livekit.android.audio.NoAudioHandler
 import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
 import io.livekit.android.room.Room
+import io.livekit.android.room.track.LocalAudioTrackOptions
 import io.livekit.android.room.track.RemoteAudioTrack
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -246,6 +248,12 @@ class CallService : Service() {
         else info.getString("url")
         val r = LiveKit.create(
             applicationContext,
+            // Barge-in by voice depends on the phone removing Jarvis' own voice from the microphone: keep all of it on, explicitly
+            options = RoomOptions(
+                audioTrackCaptureDefaults = LocalAudioTrackOptions(
+                    echoCancellation = true, noiseSuppression = true, autoGainControl = true, highPassFilter = true,
+                ),
+            ),
             overrides = LiveKitOverrides(
                 okHttpClient = Http.client(gw.pin),
                 audioOptions = AudioOptions(audioHandler = NoAudioHandler()),

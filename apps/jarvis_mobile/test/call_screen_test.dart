@@ -67,6 +67,29 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
   });
 
+  // Regression: "BOTTOM OVERFLOWED BY 21 PIXELS" as soon as the Stopp button showed up on a small display.
+  for (final (name, size, scale) in const [
+    ('small phone', Size(320, 480), 1.0),
+    ('small phone, large system font', Size(360, 560), 1.6),
+    ('landscape', Size(640, 320), 1.0),
+  ]) {
+    testWidgets('call screen with Stopp button does not overflow: $name', (tester) async {
+      tester.view.physicalSize = size * 2;
+      tester.view.devicePixelRatio = 2;
+      tester.platformDispatcher.textScaleFactorTestValue = scale;
+      addTearDown(tester.view.reset);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await pumpActive(tester, 'speaking');
+      expect(find.text('STOPP'), findsOneWidget);
+      await tester.ensureVisible(find.text('STOPP')); // on a tiny screen the block scrolls
+      await tester.tap(find.text('STOPP'));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 2));
+    });
+  }
+
   testWidgets('no Stopp button while Jarvis is listening', (tester) async {
     await pumpActive(tester, 'listening');
     expect(find.text('STOPP'), findsNothing);

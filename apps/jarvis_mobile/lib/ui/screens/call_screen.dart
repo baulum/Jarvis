@@ -17,6 +17,9 @@ import '../widgets/hud.dart';
 /// Endpoint types from androidx.core.telecom.CallEndpointCompat.
 const _earpiece = 1, _bluetooth = 2, _wired = 3, _speaker = 4;
 
+/// Fixed slots of the call block (the Stopp slot is reserved so the layout does not jump when the button appears).
+const _activitySlot = 34.0, _stopSlot = 52.0, _minOrb = 72.0;
+
 class CallScreen extends ConsumerStatefulWidget {
   const CallScreen({super.key});
   @override
@@ -121,13 +124,19 @@ class _CallScreenState extends ConsumerState<CallScreen> {
             ]),
           ),
           Expanded(
-            child: LayoutBuilder(builder: (context, box) => Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            // The orb takes what is left after the fixed lines; if even that is not enough (small display, large system
+            // font, open transcript) the block scrolls instead of overflowing.
+            child: LayoutBuilder(builder: (context, box) => SingleChildScrollView(
+              physics: const ClampingScrollPhysics(),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: box.maxHeight),
+                child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
               Hero(
                 tag: 'core',
                 child: CoreOrb(
                   mode: ended ? Mode.idle : Mode.calling,
                   level: _level,
-                  size: orb.clamp(120.0, (box.maxHeight - 226).clamp(120.0, 1000.0)),
+                  size: math.min(orb, math.max(_minOrb, box.maxHeight - _chromeHeight(context, c))),
                   ringing: ringing,
                   warn: false,
                 ),
@@ -142,7 +151,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
               Text(_elapsed(c), style: J.mono(13, color: J.text3)),
               const SizedBox(height: J.s4),
               SizedBox(
-                height: 34,
+                height: _activitySlot,
                 child: AnimatedSwitcher(
                   duration: J.base,
                   child: ringing && c.subject.isNotEmpty
@@ -157,7 +166,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
                 ),
               ),
               SizedBox(
-                height: 52,
+                height: _stopSlot,
                 child: AnimatedSwitcher(
                   duration: J.base,
                   child: interruptible
@@ -170,7 +179,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: J.s6, vertical: J.s2),
                   child: Text(c.error!, textAlign: TextAlign.center, style: J.mono(12, color: J.amber)),
                 ),
-            ])),
+            ]))))),
           ),
           if (!ringing && c.transcript.isNotEmpty) _Transcript(lines: c.transcript, open: _transcriptOpen, onToggle: () => setState(() => _transcriptOpen = !_transcriptOpen)),
           Padding(
@@ -189,7 +198,9 @@ class _CallScreenState extends ConsumerState<CallScreen> {
                       child: const Icon(Icons.call_rounded),
                     ),
                   ])
-                : Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+                : Row(children: [
+                  // equal slots: the labels shrink with the slot instead of pushing the row out of the screen
+                  for (final button in <Widget>[
                     RingButton(
                       active: c.muted,
                       label: c.muted ? 'Stumm' : 'Mikrofon',
@@ -213,11 +224,22 @@ class _CallScreenState extends ConsumerState<CallScreen> {
                       onTap: ended ? null : native.hangup,
                       child: const Icon(Icons.call_end_rounded),
                     ),
-                  ]),
+                  ])
+                    Expanded(child: Center(child: button)),
+                ]),
           ),
         ]),
       ),
     );
+  }
+
+  /// Height of everything under the orb: wordmark, status, clock, activity line, Stopp slot (+ error line), gaps.
+  /// Text sizes follow the system font scale, so it is measured with the current scaler.
+  double _chromeHeight(BuildContext context, CallInfo c) {
+    final scaler = MediaQuery.textScalerOf(context);
+    final text = scaler.scale(18) + 2 * scaler.scale(13 * 1.35); // wordmark, status, clock
+    final error = c.error != null && (c.status == 'ended' || c.status == 'idle') ? scaler.scale(12 * 1.35) * 2 + J.s2 * 2 : 0;
+    return text + J.s3 + J.s2 + J.s4 + _activitySlot + _stopSlot + error;
   }
 
   /// Stopp: the core silences Jarvis (synthesis, audio queued towards the phone) and cancels the running answer.

@@ -174,6 +174,35 @@ async def test_call_ignores_a_click_while_jarvis_speaks() -> None:
     assert called == [] and agent.metrics["barge_ins"] == 0
 
 
+async def test_call_residual_echo_of_jarvis_voice_never_interrupts_him() -> None:
+    """The phone's echo canceller leaves a faint, steady trace of Jarvis' own voice: that is not Sir talking."""
+    agent = _agent()
+    agent._audio_q = asyncio.Queue()
+    agent.state.settings = SimpleNamespace(
+        voice=SimpleNamespace(
+            vad_min_rms=180,
+            speculative_stt_ms=280,
+            barge_in_ms=320,
+            end_of_turn_silence_ms=1100,
+            min_end_of_turn_silence_ms=400,
+        )
+    )
+    called: list[int] = []
+
+    async def interrupt() -> None:
+        called.append(1)
+
+    agent._interrupt = interrupt
+    loop = asyncio.create_task(agent._listen_loop())
+    try:
+        for chunk in chunks(tone(5000, amp=300)):  # five seconds of residual echo
+            agent._audio_q.put_nowait(chunk)
+        await asyncio.sleep(0.3)
+    finally:
+        loop.cancel()
+    assert called == [] and agent.metrics["barge_ins"] == 0
+
+
 async def test_call_barge_in_switched_off_in_the_app_never_interrupts() -> None:
     agent = _agent()
     agent.barge_in = False  # setting "Jarvis ins Wort fallen" off: only the Stopp button interrupts

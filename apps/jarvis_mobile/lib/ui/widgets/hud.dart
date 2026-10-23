@@ -132,7 +132,8 @@ class RingButton extends StatelessWidget {
           : Column(mainAxisSize: MainAxisSize.min, children: [
               circle,
               const SizedBox(height: J.s2),
-              Text(label!, style: J.mono(11, color: J.text2)),
+              // shrinks with a narrow slot (small display, large system font) instead of overflowing
+              FittedBox(fit: BoxFit.scaleDown, child: Text(label!, style: J.mono(11, color: J.text2))),
             ]),
     );
   }
