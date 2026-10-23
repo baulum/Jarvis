@@ -330,7 +330,8 @@ class NominatimReverser:
             raise RoutingError("bad_response", "Die Adresssuche lieferte eine unerwartete Antwort.")
         if data.get("error") or not data.get("display_name"):
             raise RoutingError("not_found", "Zu diesem Standort wurde keine Adresse gefunden.")
-        a = data.get("address") if isinstance(data.get("address"), dict) else {}
+        raw_address = data.get("address")
+        a: dict[str, Any] = raw_address if isinstance(raw_address, dict) else {}
         town = next((a[k] for k in ("city", "town", "village", "municipality", "hamlet", "suburb") if a.get(k)), "")
         result = {
             "display_name": str(data["display_name"])[:300],

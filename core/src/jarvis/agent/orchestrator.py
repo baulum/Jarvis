@@ -10,10 +10,12 @@ anyway, and serialisation lets the MCP server attribute tool calls to the right 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections import Counter
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -76,6 +78,7 @@ class Orchestrator:
         self._run_lock = asyncio.Lock()
         self.active_run: RunContext | None = None
         self._cancel_pending: set[uuid.UUID] = set()
+        self._waiting: Counter[uuid.UUID] = Counter()  # sessions whose turn waits for the run lock
         self.timeline_store: TimelineStore = DbTimelineStore()
         self.seq = SeqAllocator(self.timeline_store)
 
@@ -395,7 +398,10 @@ class Orchestrator:
         tools: list[dict[str, Any]] = []
         chunks: list[str] = []
         final_text = ""
-        async with self._run_lock:
+        async with self._turn_slot(sess.id):
+            if sess.id in self._cancel_pending:  # interrupted while waiting for its turn
+                self._cancel_pending.discard(sess.id)
+                return TurnResult(sess.id, "Abgebrochen, Sir.", tools, error="cancelled")
             ctx = RunContext(principal=principal, session_id=sess.id)
             self.active_run = ctx
             try:
@@ -513,40 +519,52 @@ class Orchestrator:
             # another channel's turn is running: say so instead of leaving Sir in silence
             busy = "Einen Moment, Sir, ich bin noch mit einer anderen Aufgabe beschäftigt. "
             await emit(AgentEvent("delta", text=busy))
-        async with self._run_lock:
+        async with self._turn_slot(sess.id):
             if sess.id in self._cancel_pending:  # interrupted while waiting for its turn
                 self._cancel_pending.discard(sess.id)
                 return TurnResult(sess.id, "Abgebrochen, Sir.", tools, error="cancelled", provider="claude_code")
             ctx = RunContext(principal=principal, session_id=sess.id)
             self.active_run = ctx
+            stream = agent.chat_stream(sess.id, sess.hermes_session_id, text, instructions, model, **extra)
             try:
-                async for ev in agent.chat_stream(sess.id, sess.hermes_session_id, text, instructions, model, **extra):
-                    if ev.type == "run_started":
-                        ctx.run_id = str(ev.data.get("run_id") or "") or None
-                        await self._remember_agent_session(sess, ctx.run_id)
-                        continue
-                    if ev.type == "delta":
-                        chunks.append(ev.text)
-                    elif ev.type == "assistant_completed":
-                        final_text = ev.text or final_text
-                        continue
-                    elif ev.type in ("tool_started", "tool_completed", "tool_failed"):
-                        tools.append(
-                            {"event": ev.type, "name": ev.data.get("name"), "ts": datetime.now(UTC).isoformat()}
-                        )
-                    elif ev.type == "failed":
-                        reply = self._error_reply(ev.text)
-                        await emit(AgentEvent("delta", text=reply))
-                        return TurnResult(sess.id, reply, tools, error=ev.text, provider="claude_code")
-                    elif ev.type == "completed":
-                        await self._remember_agent_session(sess, ev.data.get("session_id"))
-                        break
-                    await emit(ev)
+                async with contextlib.aclosing(stream):  # closed right away: the process is free for the next turn
+                    async for ev in stream:
+                        if ev.type == "run_started":
+                            ctx.run_id = str(ev.data.get("run_id") or "") or None
+                            await self._remember_agent_session(sess, ctx.run_id)
+                            continue
+                        if ev.type == "delta":
+                            chunks.append(ev.text)
+                        elif ev.type == "assistant_completed":
+                            final_text = ev.text or final_text
+                            continue
+                        elif ev.type in ("tool_started", "tool_completed", "tool_failed"):
+                            tools.append(
+                                {"event": ev.type, "name": ev.data.get("name"), "ts": datetime.now(UTC).isoformat()}
+                            )
+                        elif ev.type == "retry":  # Claude Code died on its own; the agent tries once more
+                            logger.warning("Claude Code turn retried: %s", ev.text)
+                            chunks.clear()
+                            final_text = ""
+                        elif ev.type == "cancelled" or (ev.type == "failed" and ctx.cancelled):
+                            ctx.cancelled = True  # stopped by Sir / a barge-in – not an error
+                            break
+                        elif ev.type == "failed":
+                            reply = self._error_reply(ev.text)
+                            await emit(AgentEvent("delta", text=reply))
+                            return TurnResult(sess.id, reply, tools, error=ev.text, provider="claude_code")
+                        elif ev.type == "completed":
+                            await self._remember_agent_session(sess, ev.data.get("session_id"))
+                            break
+                        await emit(ev)
             except (ClaudeUnavailable, OSError) as e:
-                logger.exception("Claude Code run failed")
-                reply = self._error_reply(str(e))
-                await emit(AgentEvent("delta", text=reply))
-                return TurnResult(sess.id, reply, tools, error=str(e)[:500], provider="claude_code")
+                if ctx.cancelled:
+                    logger.info("Claude Code run ended after an interrupt: %s", e)
+                else:
+                    logger.exception("Claude Code run failed")
+                    reply = self._error_reply(str(e))
+                    await emit(AgentEvent("delta", text=reply))
+                    return TurnResult(sess.id, reply, tools, error=str(e)[:500], provider="claude_code")
             finally:
                 self.active_run = None
         if ctx.cancelled:
@@ -581,15 +599,37 @@ class Orchestrator:
 
     def _error_reply(self, detail: str) -> str:
         base = (self.state.personality.error_phrases or ["Das hat leider nicht funktioniert, Sir."])[0]
-        return f"{base} ({detail[:160]})" if detail else base
+        return f"{base} ({detail[:240]})" if detail else base
+
+    @contextlib.asynccontextmanager
+    async def _turn_slot(self, session_id: uuid.UUID) -> AsyncIterator[None]:
+        """The global run lock; while waiting for it the session counts as queued (for a targeted interrupt)."""
+        self._waiting[session_id] += 1
+        acquired = False
+        try:
+            await self._run_lock.acquire()
+            acquired = True
+        finally:
+            self._waiting[session_id] -= 1
+            if self._waiting[session_id] <= 0:
+                del self._waiting[session_id]
+                if not acquired:  # the queued turn was itself cancelled: its stop request must not outlive it
+                    self._cancel_pending.discard(session_id)
+        try:
+            yield
+        finally:
+            self._run_lock.release()
 
     async def interrupt(self, session_id: uuid.UUID | None = None) -> bool:
         """Stop the running agent turn. With ``session_id`` only that conversation's turn is stopped (a voice
         barge-in must never cancel what another channel is doing); a turn of that session that is still
-        waiting for its slot is skipped when it gets there."""
+        waiting for its slot is skipped when it gets there. Nothing is remembered when no turn of that session
+        runs or waits: a late barge-in (answer already finished, only speech playing) must not cancel the
+        follow-up question that Sir is just asking."""
         run = self.active_run
         if session_id is not None and (run is None or run.session_id != session_id):
-            self._cancel_pending.add(session_id)
+            if session_id in self._waiting:
+                self._cancel_pending.add(session_id)
             return False
         if run is None:
             return False

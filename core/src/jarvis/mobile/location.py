@@ -127,7 +127,7 @@ class LocationStore:
             return {"address": await self._reverser().reverse(fix.latitude, fix.longitude)}
         except RoutingError as e:
             reason = str(e)
-        except Exception as e:  # noqa: BLE001 - the address is a bonus, the location must still be returned
+        except Exception as e:  # the address is a bonus, the location must still be returned
             reason = f"Rückwärtssuche fehlgeschlagen ({type(e).__name__})."
         return {"address": None, "address_error": reason}
 
