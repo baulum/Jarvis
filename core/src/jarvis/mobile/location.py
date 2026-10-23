@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     from jarvis.mobile.push import PushService
 
 logger = logging.getLogger(__name__)
+# httpx logs full request URLs at INFO; the Nominatim URL contains the coordinates, which must never be logged.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 STALE_AFTER_MIN = 10
 FRESH_ENOUGH_S = 120  # younger fixes are used as they are, older ones trigger a request to the phone
 REQUEST_WAIT_S = 12.0
