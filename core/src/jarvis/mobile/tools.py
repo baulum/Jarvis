@@ -148,7 +148,9 @@ def mobile_tools(state: AppState) -> list[ToolSpec]:
         ToolSpec(
             "mobile_get_location",
             "Liefert Sirs zuletzt vom Handy (J.A.R.V.I.S.-App) gemeldeten Standort: Breiten-/Längengrad, Genauigkeit "
-            "in Metern, Messzeitpunkt und Alter in Minuten; fragt das Handy bei Bedarf nach einem frischen Standort. "
+            "in Metern, Messzeitpunkt und Alter in Minuten sowie die Adresse dazu ('address': display_name, street, "
+            "house_number, postcode, city, country; per Rückwärtssuche über OpenStreetMap/Nominatim – bei Fehlern "
+            "leer, Grund in 'address_error'), also kein zweiter Aufruf für die Adresse nötig; fragt das Handy bei Bedarf nach einem frischen Standort. "
             "Für Fragen wie „wie lange brauche ich zu X?“ oder „mach mir eine Route dahin“ – nur abrufen, wenn der "
             "Standort für Sirs Anfrage nötig ist. Ist er älter als 10 Minuten oder fehlt er, steht das in 'note': "
             "Sir darauf hinweisen. Koordinaten vertraulich behandeln: nicht im Gedächtnis/in Notizen speichern, "

@@ -281,6 +281,69 @@ class NominatimGeocoder:
         return places
 
 
+@dataclass
+class NominatimReverser:
+    """Koordinate → Adresse (Nominatim ``/reverse``). Gleiche Regeln wie beim Geocoder: Limiter und Cache.
+
+    Der Cache-Schlüssel sind auf 5 Nachkommastellen (~1 m) gerundete Koordinaten; Koordinaten werden weder
+    geloggt noch in Fehlermeldungen übernommen."""
+
+    client: httpx.AsyncClient
+    base_url: str = DEFAULT_NOMINATIM
+    email: str = ""
+    language: str = "de"
+    limiter: MinInterval = field(default_factory=lambda: MinInterval(1.0))
+    cache: TTLCache = field(default_factory=lambda: TTLCache(max_items=32, ttl_s=300))
+    timeout_s: float = 5.0
+    name: str = "nominatim"
+
+    async def reverse(self, lat: float, lon: float) -> dict[str, str]:
+        key = f"{lat:.5f},{lon:.5f}|{self.language}"
+        cached = self.cache.get(key)
+        if cached is not None:
+            return dict(cached)
+        params: dict[str, str | int] = {
+            "lat": f"{lat:.6f}",
+            "lon": f"{lon:.6f}",
+            "format": "json",
+            "addressdetails": 1,
+            "zoom": 18,
+            "accept-language": self.language,
+        }
+        if self.email:
+            params["email"] = self.email
+        await self.limiter.wait()
+        r = await _request(
+            self.client,
+            "GET",
+            f"{self.base_url.rstrip('/')}/reverse",
+            "Die Adresssuche",
+            params=params,
+            timeout=self.timeout_s,
+        )
+        if r.status_code == 429:
+            raise RoutingError("rate_limited", "Die Adresssuche (Nominatim) drosselt gerade Anfragen.")
+        if r.status_code >= 400:
+            raise RoutingError("unreachable", f"Die Adresssuche meldet HTTP {r.status_code}.")
+        data = _json(r, "Die Adresssuche")
+        if not isinstance(data, dict):
+            raise RoutingError("bad_response", "Die Adresssuche lieferte eine unerwartete Antwort.")
+        if data.get("error") or not data.get("display_name"):
+            raise RoutingError("not_found", "Zu diesem Standort wurde keine Adresse gefunden.")
+        a = data.get("address") if isinstance(data.get("address"), dict) else {}
+        town = next((a[k] for k in ("city", "town", "village", "municipality", "hamlet", "suburb") if a.get(k)), "")
+        result = {
+            "display_name": str(data["display_name"])[:300],
+            "street": str(a.get("road") or a.get("pedestrian") or a.get("footway") or ""),
+            "house_number": str(a.get("house_number") or ""),
+            "postcode": str(a.get("postcode") or ""),
+            "city": str(town),
+            "country": str(a.get("country") or ""),
+        }
+        self.cache.put(key, result)
+        return dict(result)
+
+
 # ---------------------------------------------------------------------------------------------- routing
 @dataclass
 class OsrmRouter:

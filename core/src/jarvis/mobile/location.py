@@ -15,6 +15,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+import httpx
+
+from jarvis.routing.providers import NominatimReverser, RoutingError, TTLCache
+
 if TYPE_CHECKING:
     from jarvis.mobile.push import PushService
 
@@ -23,6 +27,8 @@ STALE_AFTER_MIN = 10
 FRESH_ENOUGH_S = 120  # younger fixes are used as they are, older ones trigger a request to the phone
 REQUEST_WAIT_S = 12.0
 MAX_CLOCK_SKEW = timedelta(minutes=5)
+REVERSE_TIMEOUT_S = 5.0
+REVERSE_USER_AGENT = "JARVIS-Standort/1.0 (persoenlicher Assistent; Reverse-Geocoding)"
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,8 +45,11 @@ class LocationFix:
 
 
 class LocationStore:
-    def __init__(self, push: PushService) -> None:
+    def __init__(self, push: PushService, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self.push = push
+        self._transport = transport  # tests inject httpx.MockTransport
+        self._client: httpx.AsyncClient | None = None
+        self._reverse: NominatimReverser | None = None
         self._fix: LocationFix | None = None
         self._sharing_off = False  # the phone said "sharing off" since the last fix (until restart)
         self._changed = asyncio.Event()
@@ -84,14 +93,43 @@ class LocationStore:
             await asyncio.wait_for(waiter.wait(), timeout_s)
         return True
 
+    def _reverser(self) -> NominatimReverser:
+        if self._reverse is None:
+            self._client = httpx.AsyncClient(
+                timeout=REVERSE_TIMEOUT_S,
+                headers={"User-Agent": REVERSE_USER_AGENT, "Accept-Language": "de"},
+                transport=self._transport,
+                follow_redirects=True,
+            )
+            self._reverse = NominatimReverser(self._client, timeout_s=REVERSE_TIMEOUT_S, cache=TTLCache(32, 300))
+        return self._reverse
+
+    async def stop(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = self._reverse = None
+
+    async def address(self, fix: LocationFix) -> dict[str, Any]:
+        """Reverse geocoding via Nominatim. Never raises; the coordinates go to Nominatim only (no logging)."""
+        try:
+            return {"address": await self._reverser().reverse(fix.latitude, fix.longitude)}
+        except RoutingError as e:
+            reason = str(e)
+        except Exception as e:  # noqa: BLE001 - the address is a bonus, the location must still be returned
+            reason = f"Rückwärtssuche fehlgeschlagen ({type(e).__name__})."
+        return {"address": None, "address_error": reason}
+
     async def current(self) -> dict[str, Any]:
-        """What ``mobile_get_location`` returns: the last fix with its age, plus a note if stale or missing."""
+        """What ``mobile_get_location`` returns: the last fix with its age and address, plus a note if stale/missing."""
         fix = self._fix
         requested = False
         if fix is None or fix.age_minutes() * 60 > FRESH_ENOUGH_S:
             requested = await self.request_fresh()
             fix = self._fix
-        return describe(fix, requested=requested, sharing_off=self._sharing_off)
+        out = describe(fix, requested=requested, sharing_off=self._sharing_off)
+        if fix is not None:
+            out.update(await self.address(fix))
+        return out
 
 
 def describe(

@@ -317,6 +317,7 @@ class AppState:
         await self.alerts.stop()
         await self.livekit.stop()
         await self.push.close()
+        await self.location.stop()
         await self.connectors.shutdown()
         await self.mcp_hub.stop()
         await self.browser.close()

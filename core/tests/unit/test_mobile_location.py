@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient
 from jarvis.mobile import api as mobile_api
 from jarvis.mobile.location import LocationStore, describe
 from jarvis.mobile.push import PushResult
+from jarvis.routing.providers import MinInterval
 from jarvis.security.auth import Principal
 
 DEV = uuid.uuid4()
@@ -33,8 +35,31 @@ class FakePush:
         return [PushResult(str(DEV), self.ok, None if self.ok else "UNREGISTERED")]
 
 
-def _store(push: FakePush | None = None) -> LocationStore:
-    return LocationStore(push or FakePush())  # type: ignore[arg-type]
+NOMINATIM_HIT = {
+    "display_name": "Alexanderplatz 1, Mitte, Berlin, 10178, Deutschland",
+    "address": {
+        "road": "Alexanderplatz",
+        "house_number": "1",
+        "postcode": "10178",
+        "city": "Berlin",
+        "country": "Deutschland",
+    },
+}
+
+
+def _ok_transport(calls: list[httpx.Request] | None = None) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if calls is not None:
+            calls.append(request)
+        return httpx.Response(200, json=NOMINATIM_HIT)
+
+    return httpx.MockTransport(handler)
+
+
+def _store(push: FakePush | None = None, transport: httpx.AsyncBaseTransport | None = None) -> LocationStore:
+    st = LocationStore(push or FakePush(), transport or _ok_transport())  # type: ignore[arg-type]
+    st._reverser().limiter = MinInterval(0.0)  # no real 1 s pauses in tests
+    return st
 
 
 def test_keeps_only_newest_fix_and_hides_coordinates_in_repr() -> None:
@@ -132,3 +157,56 @@ def test_tool_registered_without_parameters() -> None:
     spec = next(t for t in mobile_tools(SimpleNamespace()) if t.name == "mobile_get_location")  # type: ignore[arg-type]
     assert spec.parameters == {"type": "object", "properties": {}, "additionalProperties": False}
     assert spec.risk == "read" and not spec.writes
+
+
+async def test_current_adds_address_via_nominatim_and_caches() -> None:
+    calls: list[httpx.Request] = []
+    st = _store(transport=_ok_transport(calls))
+    st.update(DEV, 52.5219, 13.4132, 8.0, datetime.now(UTC))
+    res = await st.current()
+    assert res["address"] == {
+        "display_name": NOMINATIM_HIT["display_name"],
+        "street": "Alexanderplatz",
+        "house_number": "1",
+        "postcode": "10178",
+        "city": "Berlin",
+        "country": "Deutschland",
+    }
+    assert "address_error" not in res
+    q = calls[0].url.params
+    assert calls[0].url.path == "/reverse" and calls[0].url.host == "nominatim.openstreetmap.org"
+    assert (q["format"], q["addressdetails"], q["zoom"], q["accept-language"]) == ("json", "1", "18", "de")
+    assert "JARVIS" in calls[0].headers["User-Agent"]
+
+    await st.current()  # identical coordinates → cache
+    st.update(DEV, 52.521904, 13.413204, 8.0, datetime.now(UTC))  # rounds to the same 5 decimals
+    await st.current()
+    assert len(calls) == 1
+
+
+async def test_current_survives_reverse_geocoding_failures(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    def timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    cases = [
+        (timeout, "Zeitüberschreitung"),
+        (lambda r: httpx.Response(200, json={"error": "Unable to geocode"}), "keine Adresse"),
+        (lambda r: httpx.Response(503), "HTTP 503"),
+        (lambda r: httpx.Response(200, text="<html>"), "ungültige Antwort"),
+    ]
+    for handler, expected in cases:
+        st = _store(transport=httpx.MockTransport(handler))
+        st.update(DEV, 52.5219, 13.4132, 8.0, datetime.now(UTC))
+        res = await st.current()
+        assert res["available"] and res["latitude"] == 52.5219  # the location itself still works
+        assert res["address"] is None and expected in res["address_error"]
+        assert "52.52" not in res["address_error"] and "52.52" not in caplog.text
+
+
+async def test_no_address_lookup_without_fix() -> None:
+    calls: list[httpx.Request] = []
+    st = _store(FakePush(ok=False), _ok_transport(calls))
+    res = await st.current()
+    assert not res["available"] and "address" not in res and calls == []
