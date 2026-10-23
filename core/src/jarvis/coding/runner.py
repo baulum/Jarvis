@@ -1198,13 +1198,19 @@ class CodingRunner:
         deadline = asyncio.get_running_loop().time() + timeout_s
         output = ""
         code: int | None = 0
+        env = self._env()
+        src_dirs = [str(d) for d in (cwd / "core" / "src", cwd / "src") if d.is_dir()]
+        if src_dirs:
+            # Absolute paths into this worktree, ahead of any existing PYTHONPATH: `import jarvis` must not
+            # pick up another checkout (a relative `-o pythonpath=` would resolve against the pytest rootdir).
+            env["PYTHONPATH"] = os.pathsep.join([*src_dirs, *filter(None, [env.get("PYTHONPATH")])])
         for argv in steps:
             if len(steps) > 1:
                 output += f"$ {shlex.join(argv)}\n"
             proc = await asyncio.create_subprocess_exec(
                 *argv,
                 cwd=cwd,
-                env=self._env(),
+                env=env,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
@@ -1221,7 +1227,31 @@ class CodingRunner:
             code = proc.returncode
             if code != 0:
                 break
-        return {"passed": code == 0, "exit_code": code, "output": output[-8000:]}
+        output = output[-8000:]
+        if src_dirs:
+            output += await self._probe_jarvis_import(cwd, env)
+        return {"passed": code == 0, "exit_code": code, "output": output}
+
+    @staticmethod
+    async def _probe_jarvis_import(cwd: Path, env: dict[str, str]) -> str:
+        """Log line telling which ``jarvis`` package the test environment actually imports."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "python3",
+                "-c",
+                "import jarvis; print(jarvis.__file__)",
+                cwd=cwd,
+                env=env,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except (OSError, TimeoutError):
+            return "\n[jarvis-Import: Prüfung fehlgeschlagen]\n"
+        lines = out.decode(errors="replace").strip().splitlines()
+        return f"\n[jarvis geladen aus: {lines[-1] if lines else '?'}]\n"
 
     @staticmethod
     async def _stop_process(proc: asyncio.subprocess.Process, grace_s: float = 10) -> None:

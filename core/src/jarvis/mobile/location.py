@@ -31,6 +31,13 @@ REVERSE_TIMEOUT_S = 5.0
 REVERSE_USER_AGENT = "JARVIS-Standort/1.0 (persoenlicher Assistent; Reverse-Geocoding)"
 
 
+class _NoCoordinateRequestLog(logging.Filter):
+    """httpx logs every request URL at INFO; the reverse-geocoding URL carries the coordinates."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/reverse?" not in record.getMessage()
+
+
 @dataclass(frozen=True, slots=True)
 class LocationFix:
     # repr=False: an accidental log/f-string of the object never shows coordinates
@@ -95,6 +102,9 @@ class LocationStore:
 
     def _reverser(self) -> NominatimReverser:
         if self._reverse is None:
+            httpx_logger = logging.getLogger("httpx")
+            if not any(isinstance(f, _NoCoordinateRequestLog) for f in httpx_logger.filters):
+                httpx_logger.addFilter(_NoCoordinateRequestLog())
             self._client = httpx.AsyncClient(
                 timeout=REVERSE_TIMEOUT_S,
                 headers={"User-Agent": REVERSE_USER_AGENT, "Accept-Language": "de"},
