@@ -77,6 +77,8 @@ while True:
         sys.exit(2)
     if mode == "hang":
         time.sleep(60)
+    if mode == "slow":
+        time.sleep(0.5)
     delta = {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Erledigt"}}
     out({"type": "stream_event", "event": delta})
     out({"type": "result", "session_id": sid, "result": "Erledigt, Sir.", "usage": {}})
@@ -376,3 +378,93 @@ async def test_interrupt_of_a_waiting_turn_skips_it() -> None:
     res, _ = await asyncio.wait_for(task, 5)
     assert res.error == "cancelled" and agent.calls == 0
     assert not orch._cancel_pending and not orch._waiting
+
+
+# ---------------------------------------------------------------------------------------------- orchestrator + agent
+
+
+def _real_orch(agent: ClaudeCodeAgent, monkeypatch: pytest.MonkeyPatch) -> Orchestrator:
+    """Orchestrator over the real agent (fake CLI processes); the agent session id is kept in memory, not the DB."""
+    monkeypatch.setattr("jarvis.agent.orchestrator.bus.publish", _no_publish)
+    state = SimpleNamespace(
+        agent=agent, hermes=None, personality=SimpleNamespace(error_phrases=["Das hat leider nicht funktioniert, Sir."])
+    )
+    orch = Orchestrator(state)  # type: ignore[arg-type]
+
+    async def remember(sess: Any, agent_session_id: str | None) -> None:
+        if agent_session_id:
+            sess.hermes_session_id = agent_session_id
+
+    orch._remember_agent_session = remember  # type: ignore[method-assign]
+    return orch
+
+
+async def _turn_via(orch: Orchestrator, sess: Any, text: str = "Hallo") -> tuple[Any, list[AgentEvent]]:
+    emitted: list[AgentEvent] = []
+
+    async def emit(ev: AgentEvent) -> None:
+        emitted.append(ev)
+
+    return await orch._run_claude(sess, OWNER, text, "", emit, "sonnet"), emitted
+
+
+async def _until_running(orch: Orchestrator) -> None:
+    for _ in range(500):
+        if orch.active_run is not None:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("the turn never started")
+
+
+async def test_text_input_during_a_running_answer_waits_and_keeps_the_process(
+    make_agent: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sir writes in the chat while Jarvis is still answering: the new turn queues up, nothing is stopped."""
+    agent, fake = make_agent("slow")
+    orch = _real_orch(agent, monkeypatch)
+    sess = _sess()
+    first = asyncio.create_task(_turn_via(orch, sess))
+    await _until_running(orch)
+    second = asyncio.create_task(_turn_via(orch, sess, "Und noch etwas"))
+    await asyncio.sleep(0.05)
+    assert sess.id in orch._waiting  # queued behind the running answer
+    (r1, e1), (r2, e2) = await asyncio.wait_for(asyncio.gather(first, second), 20)
+    assert r1.error is None and r2.error is None and r1.text == r2.text == "Erledigt, Sir."
+    assert len(fake.spawns) == 1  # both turns on the same process: it was never ended
+    p = agent._procs[sess.id]
+    assert p.alive and p.stop_reason is None and not p.busy
+    assert not any("beendet" in ev.text for ev in [*e1, *e2])
+
+
+async def test_stopp_during_an_answer_cancels_cleanly_and_the_session_goes_on(
+    make_agent: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real interruption (Stopp button, Sir talking over Jarvis): "Abgebrochen", no error message, and the next
+    turn continues the same Claude Code conversation."""
+    agent, fake = make_agent("hang", "ok")
+    orch = _real_orch(agent, monkeypatch)
+    sess = _sess()
+    first = asyncio.create_task(_turn_via(orch, sess))
+    await _until_running(orch)
+    for _ in range(500):  # the CLI has started the turn
+        if sess.hermes_session_id:
+            break
+        await asyncio.sleep(0.01)
+    assert await orch.interrupt(sess.id) is True
+    res, emitted = await asyncio.wait_for(first, 10)
+    assert res.error == "cancelled" and res.text == "Abgebrochen, Sir."
+    assert not any("nicht funktioniert" in ev.text or "beendet" in ev.text for ev in emitted)
+
+    res, _ = await _turn_via(orch, sess)
+    assert res.error is None and res.text == "Erledigt, Sir."
+    assert [s["resume"] for s in fake.spawns] == [None, "sess-0"]  # same conversation, continued via --resume
+
+
+async def test_real_process_end_still_reaches_sir(make_agent: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    agent, fake = make_agent("crash")
+    orch = _real_orch(agent, monkeypatch)
+    res, emitted = await _turn_via(orch, _sess())
+    assert res.error and "Claude Code wurde unerwartet beendet (Exit-Code 3)" in res.error
+    shown = [ev.text for ev in emitted if ev.type == "delta"]
+    assert any("nicht funktioniert" in t and "unerwartet beendet" in t for t in shown)
+    assert len(fake.spawns) == 2  # tried once more before giving up

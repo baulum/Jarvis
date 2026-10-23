@@ -18,7 +18,9 @@ Pipeline (everything overlaps instead of running one after the other):
   stops at once, the core cancels TTS and the agent run, stale chunks (old tag) are dropped and
   the interrupting words become the start of the next utterance. Without echo cancellation
   "Hey Jarvis" interrupts. The detector needs sustained speech well above the residual echo (not a click),
-  and a transcript that is just Jarvis' own voice coming back is ignored (``is_echo``).
+  and a transcript that is just Jarvis' own voice coming back is ignored (``is_echo``). A voice barge-in
+  without echo cancellation may be his own voice (e.g. "Einen Moment, Sir."): playback stops, but the agent
+  run is only cancelled once the transcript shows that Sir spoke – otherwise the answer simply continues.
 * Stop command ("Stopp", "Jarvis, stopp", "Hör auf" …): silences Jarvis, is never sent to the agent and keeps
   the conversation open. The same via the Stopp button in the app (``voice.command`` ``interrupt``).
 * After a reply a follow-up window allows answering without the wake word; "danke, das war's" ends.
@@ -47,7 +49,7 @@ import websockets
 from jarvis.config import Settings, get_settings
 from jarvis.voice.audio import BargeInDetector, Endpointer, looks_complete, pcm_to_wav, rms
 from jarvis.voice.audio_io import AudioIO, open_audio
-from jarvis.voice.commands import is_echo, is_end_conversation, is_stop_command, is_wake_up
+from jarvis.voice.commands import is_echo, is_echo_tail, is_end_conversation, is_stop_command, is_wake_up
 from jarvis.voice.wakeup import WakeupSettings, play_sound, summary
 from jarvis.voice.wakeword import RATE, WakeWordDetector
 
@@ -67,6 +69,8 @@ class Reply:
     metrics: dict[str, Any] = field(default_factory=dict)
     pieces: list[str] = field(default_factory=list)
     error: str | None = None
+    agent_turn: bool = False  # an agent run belongs to it (not a fixed text like a notification)
+    held: list[bytes] = field(default_factory=list)  # audio that arrived while a barge-in was being checked
 
 
 def power_up(rate: int = PLAY_RATE) -> bytes:
@@ -117,6 +121,7 @@ class VoiceDaemon:
         self._prepared: int | None = None
         self._level = 0.0
         self._primed: npt.NDArray[np.int16] | None = None  # audio of a barge-in, start of the next utterance
+        self._barged: Reply | None = None  # silenced by a barge-in that may be his own voice; its run goes on
         self._interrupt = asyncio.Event()
         self._spoken: collections.deque[str] = collections.deque(maxlen=4)  # what Jarvis said last (echo check)
         self._playback_ended = 0.0  # perf_counter when the last reply stopped being audible
@@ -219,9 +224,10 @@ class VoiceDaemon:
             finally:
                 self.speak_ws = None
                 self._ws_ready.clear()
-                if self.reply is not None:  # a reply in flight cannot finish any more
-                    self.reply.error = "speech stream lost"
-                    self.reply.ended.set()
+                for r in (self.reply, self._barged):
+                    if r is not None:  # a reply in flight cannot finish any more
+                        r.error = "speech stream lost"
+                        r.ended.set()
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30)
 
@@ -234,6 +240,9 @@ class VoiceDaemon:
     async def _on_speak(self, msg: Any) -> None:
         r = self.reply
         if isinstance(msg, bytes):
+            if self._barged is not None and msg and msg[0] == self._barged.tag:
+                self._barged.held.append(msg[1:])  # played if the barge-in turns out not to be Sir
+                return
             if r is None or not msg or msg[0] != r.tag or self.audio is None:
                 return  # stale chunk of an interrupted reply
             if r.first_audio is None:
@@ -243,7 +252,9 @@ class VoiceDaemon:
             await self.audio.play(msg[1:])
             return
         data = json.loads(msg)
-        if r is None or int(data.get("tag", -1)) != r.tag:
+        tag = int(data.get("tag", -1))
+        r = next((x for x in (self.reply, self._barged) if x is not None and x.tag == tag), None)
+        if r is None:
             return
         kind = data.get("type")
         if kind == "session":
@@ -278,12 +289,38 @@ class VoiceDaemon:
         r = self.reply
         if self.audio is not None:
             await self.audio.flush()
+        await self._cancel_barged()
         if r is not None:
             with contextlib.suppress(Exception):
                 await self._send({"type": "cancel", "tag": r.tag})
             r.error = r.error or "interrupted"
             r.ended.set()
         self._interrupt.set()
+
+    async def _cancel_barged(self) -> None:
+        """Sir really spoke over Jarvis: now the answer silenced by the barge-in is cancelled (speech + agent run)."""
+        b, self._barged = self._barged, None
+        if b is not None:
+            with contextlib.suppress(Exception):
+                await self._send({"type": "cancel", "tag": b.tag})
+
+    async def _resume_barged(self) -> bool:
+        """The barge-in was not Sir (his own voice, nothing understood): the answer goes on, nothing is cancelled.
+        Returns whether the conversation stays open (as after any reply)."""
+        b, self._barged = self._barged, None
+        if b is None or self.audio is None:
+            return True
+        logger.info("Barge-in was not Sir – the answer continues")
+        self.reply = b
+        try:
+            if b.held:
+                await self.set_state("speaking")
+                await self.audio.play(b"".join(b.held))  # one write: later chunks queue up behind it
+                b.held.clear()
+            outcome = await self._await_reply(b, listen_for_barge_in=True)
+        finally:
+            self.reply = None
+        return outcome in ("done", "barge_in")
 
     def _next_tag(self) -> int:
         self.tag = (self.tag + 1) % 256
@@ -365,7 +402,13 @@ class VoiceDaemon:
                 logger.info("Barge-in (%s)", "wake word" if woke else "voice")
                 # keep what Sir said (voice barge-in) as the start of the next utterance
                 self._primed = barge.captured() if voiced else np.zeros(0, dtype=np.int16)
-                await self.interrupt()
+                if voiced and not aec and r.agent_turn:
+                    # the raw microphone also hears Jarvis himself: silence him now, but cancel the answer only
+                    # once the transcript shows that Sir spoke (``handle_turn``)
+                    await self.audio.flush()
+                    self._barged = r
+                else:
+                    await self.interrupt()
                 if drained is not None:
                     drained.cancel()
                 return "barge_in"
@@ -483,14 +526,15 @@ class VoiceDaemon:
         marks["stt_done"] = time.perf_counter()
         if not text:  # noise or mumbling: stay in the conversation instead of dropping back to "ready"
             logger.info("Nothing understood; still listening")
-            return True
+            return await self._resume_barged()
         text = strip_wake_word(text)
         if len(re.sub(r"\W", "", text)) < 3:  # fragments like "K." (tail of the wake word, a cough)
             logger.info("Ignored fragment: %r", text)
-            return True
-        if is_echo(text, self._spoken) and marks.get("speech_start", 0.0) - self._playback_ended < 1.5:
+            return await self._resume_barged()
+        if self._own_voice(text, marks):
             logger.info("Ignored echo of Jarvis' own voice: %r", text)  # picked up while/right after he spoke
-            return True
+            return await self._resume_barged()
+        await self._cancel_barged()  # Sir spoke: the answer he talked over is cancelled now
         logger.info("Heard: %s", text)
         if is_stop_command(text):  # "Stopp": whatever is still playing ends, nothing goes to the agent
             logger.info("Stop command")
@@ -505,7 +549,7 @@ class VoiceDaemon:
             if settings.enabled:
                 return await self.wake_up(settings)
             logger.info("Wake-up routine is switched off – handled as a normal request")
-        r = Reply(self._next_tag())
+        r = Reply(self._next_tag(), agent_turn=True)
         self._prepared = None
         self.reply = r
         try:
@@ -515,6 +559,12 @@ class VoiceDaemon:
             self.reply = None
         await self._report(r, marks, text, outcome)
         return outcome in ("done", "barge_in")
+
+    def _own_voice(self, text: str, marks: dict[str, float]) -> bool:
+        """Jarvis' own voice coming back: while/right after he spoke, or words of the phrase a barge-in cut off."""
+        if is_echo(text, self._spoken) and marks.get("speech_start", 0.0) - self._playback_ended < 1.5:
+            return True
+        return self._barged is not None and is_echo_tail(text, " ".join(self._barged.pieces))
 
     async def _wakeup_settings(self) -> WakeupSettings:
         """Current settings from the core (Sir changes them in the app); the YAML start values if it is unreachable."""
@@ -645,6 +695,8 @@ class VoiceDaemon:
         window = max(self.cfg.followup_window_s, self.cfg.conversation_window_s)
         audio, text, marks = await self.listen(None if first or primed else float(window))
         if audio is None or audio.size < RATE * 0.3:
+            if self._barged is not None:  # nobody spoke after the barge-in: it was not Sir
+                return await self._resume_barged()
             if audio is None:
                 logger.info("Conversation closed: no speech for %s s", window if not first else 8)
             return False

@@ -119,6 +119,9 @@ spricht *oder* noch an der Antwort arbeitet:
 - *Wirkung:* Wiedergabepuffer verwerfen (Mac `flush`, Anruf `clear_queue`, Twilio `clear`), Synthese abbrechen
   (`SpeechTurn.cancel`), nur den Agent-Lauf **dieser** Sitzung abbrechen (`Orchestrator.interrupt(session_id)`); die Wörter des
   Unterbrechers (Puffer von ~0,6 s) sind der Anfang der nächsten Äußerung und werden ganz normal verarbeitet.
+  Mac ohne Echounterdrückung, Barge-in per Stimme während einer Agent-Antwort: das Mikrofon hört auch Jarvis selbst (z. B.
+  „Einen Moment, Sir.“ beim Werkzeugstart). Die Wiedergabe stoppt sofort, Synthese und Agent-Lauf aber erst, wenn die
+  Transkription zeigt, dass Sir gesprochen hat; war es Jarvis' Echo (oder nichts), läuft die Antwort weiter und wird vorgelesen.
 - *Echo:* Erkennt die Transkription Jarvis' eigene Worte wieder (`voice.commands.is_echo`: Mac kurz nach/während der
   Wiedergabe, Anruf, Overlay), wird sie nie beantwortet.
 - *Stopp-Befehl:* `voice.commands.is_stop_command` – „Stopp“, „Jarvis, stopp“, „Hör auf“, „Sei still“, „Das reicht“ … nur als

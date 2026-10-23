@@ -113,5 +113,12 @@ def is_echo(text: str, spoken: Iterable[str], min_chars: int = 8, min_words: int
     return False
 
 
+def is_echo_tail(text: str, said: str) -> bool:
+    """Is a (short) transcript nothing but words of what Jarvis was saying when a barge-in cut him off ("Sir." after
+    "Einen Moment, Sir.")? Whole words only: Sir's "Stopp" over "… gestoppt …" is still his."""
+    heard = _normalise(text)
+    return bool(heard) and f" {heard} " in f" {_normalise(said)} "
+
+
 def is_wake_up(text: str) -> bool:
     return len(text) < 60 and WAKE_UP.match(_normalise(text)) is not None

@@ -447,3 +447,101 @@ async def test_daemon_remembers_what_it_said_for_the_echo_check(monkeypatch, tmp
     before = time.perf_counter()
     assert await vd._await_reply(r, True) == "done"
     assert list(vd._spoken) == ["Guten Abend, Sir. Alle Systeme laufen."] and vd._playback_ended >= before
+
+
+class _RawMicAudio(_FakeAudio):
+    """No echo cancellation (Sir's Mac): the barge-in detector hears the raw microphone, Jarvis' voice included."""
+
+    aec = False
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.played: list[bytes] = []
+
+    async def play(self, pcm: bytes) -> None:
+        self.played.append(pcm)
+
+    async def drained(self, wait_s: float = 120) -> bool:
+        return True
+
+    @property
+    def playing(self) -> bool:
+        return True
+
+
+async def _barged_by_own_voice(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> tuple[Any, Any]:
+    """Jarvis says "Einen Moment, Sir." while a tool runs; the raw microphone picks it up as a voice barge-in."""
+    from jarvis.voice import daemon as d
+
+    vd = _daemon(monkeypatch, tmp_path)
+    vd.audio = _RawMicAudio()
+    vd.detector = SimpleNamespace(reset=lambda: None, feed=lambda pcm: False)
+    vd.tag = 5
+    r = d.Reply(tag=5, agent_turn=True, first_audio=time.perf_counter())
+    r.pieces = ["Einen Moment, Sir."]
+    vd.reply = r
+    await vd.mic_q.put(np.concatenate([quiet(200), tone(600)]))
+    assert await vd._await_reply(r, True) == "barge_in"
+    vd.reply = None
+    return vd, r
+
+
+async def test_daemon_own_voice_barge_in_does_not_cancel_the_answer(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    vd, r = await _barged_by_own_voice(monkeypatch, tmp_path)
+    assert vd.audio.flushed == 1  # silenced at once …
+    assert vd.sent == [] and vd._barged is r  # … but the agent run is not cancelled (yet)
+
+    await vd._on_speak(bytes([5]) + b"\x01\x02")  # the answer goes on in the core meanwhile
+    await vd._on_speak(json.dumps({"type": "speech_end", "tag": 5, "metrics": {}}))
+    marks = {"speech_start": time.perf_counter() - 1.0}
+    assert await vd.handle_turn(np.ones(16000, dtype=np.int16), "Einen Moment.", marks) is True
+
+    assert [m for m in vd.sent if m.get("type") in ("cancel", "turn")] == []  # nothing cancelled, nothing answered
+    assert vd.audio.played == [b"\x01\x02"]  # the rest of the answer is spoken after all
+    assert vd._barged is None
+
+
+async def test_daemon_cut_off_tail_of_its_own_phrase_is_no_request(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    vd, _ = await _barged_by_own_voice(monkeypatch, tmp_path)
+    await vd._on_speak(json.dumps({"type": "speech_end", "tag": 5, "metrics": {}}))
+    marks = {"speech_start": time.perf_counter() + 10}  # outside the usual echo window
+    assert await vd.handle_turn(np.ones(16000, dtype=np.int16), "Sir?", marks) is True
+    assert [m for m in vd.sent if m.get("type") in ("cancel", "turn")] == []
+
+
+async def test_daemon_barge_in_by_sir_cancels_the_answer_before_his_request(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    vd, _ = await _barged_by_own_voice(monkeypatch, tmp_path)
+
+    async def reply(r: Any, listen_for_barge_in: bool) -> str:
+        return "done"
+
+    async def report(*a: Any, **k: Any) -> None:
+        return None
+
+    vd._await_reply = reply
+    vd._report = report
+    marks = {"speech_start": time.perf_counter()}
+    assert await vd.handle_turn(np.ones(16000, dtype=np.int16), "Nein, schick sie lieber morgen früh", marks)
+    assert [(m["type"], m["tag"]) for m in vd.sent] == [("cancel", 5), ("turn", 6)]
+    assert vd._barged is None
+
+
+async def test_daemon_stop_button_cancels_an_answer_held_by_a_barge_in(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    vd, _ = await _barged_by_own_voice(monkeypatch, tmp_path)
+    await vd._command("interrupt")  # Stopp in the app: Sir wants silence, the held answer is cancelled too
+    assert [(m["type"], m["tag"]) for m in vd.sent] == [("cancel", 5)]
+    assert vd._barged is None
+
+
+async def test_daemon_barge_in_with_echo_cancellation_cancels_at_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    from jarvis.voice import daemon as d
+
+    vd = _daemon(monkeypatch, tmp_path)
+    vd.detector = SimpleNamespace(reset=lambda: None, feed=lambda pcm: False)
+    r = d.Reply(tag=7, agent_turn=True)
+    vd.reply = r
+    task = asyncio.create_task(vd._await_reply(r, True))
+    await asyncio.sleep(0.05)
+    vd.aec_q.put_nowait(np.concatenate([quiet(200), tone(600)]))  # Sir's voice, Jarvis' own already removed
+    assert await asyncio.wait_for(task, 3) == "barge_in"
+    assert vd.sent == [{"type": "cancel", "tag": 7}] and vd._barged is None
