@@ -1446,7 +1446,8 @@ class CodingRunner:
         actor: str = "coding-runner",
     ) -> dict[str, Any]:
         """Green: push the job branch, open a (non-draft) PR, merge it, deploy Supabase, then delete the job branch
-        (remote and local) and the worktree. Red / error / cancelled: the job branch is pushed as a backup, but
+        (remote and local) and the worktree; after a merge the local project is fast-forwarded to origin when that is
+        safe (``result["ship"]["local_sync"]``). Red / error / cancelled: the job branch is pushed as a backup, but
         nothing reaches main or Supabase and the worktree stays. Never raises (except cancellation); the outcome
         is the returned dict, stored as ``result["ship"]``."""
         base = self.cfg.ship_base_branch
@@ -1473,7 +1474,18 @@ class CodingRunner:
             target=str(job_id),
             details={
                 k: ship.get(k)
-                for k in ("state", "stage", "pr", "merged", "pushed", "supabase", "vercel", "cleanup", "message")
+                for k in (
+                    "state",
+                    "stage",
+                    "pr",
+                    "merged",
+                    "pushed",
+                    "supabase",
+                    "vercel",
+                    "cleanup",
+                    "local_sync",
+                    "message",
+                )
             },
         )
         return ship
@@ -1518,6 +1530,60 @@ class CodingRunner:
                 except Exception as e:
                     ship.setdefault("cleanup", {}).setdefault("errors", []).append(str(e) or type(e).__name__)
                     ship["message"] = f"{ship['message']} Aufräumen fehlgeschlagen: {e}"[:900]
+            if ship["merged"]:
+                await self._ship_local_sync(ship, repo)
+
+    async def _ship_local_sync(self, ship: dict[str, Any], repo: Path) -> None:
+        """After the merge: bring Sir's local project (the main checkout, not the worktree) to the state on GitHub,
+        fast-forward only. Another branch, open changes or a diverged history are never overwritten, reset or
+        discarded – the reason is recorded instead. Only a note: never marks the delivery as failed, never raises
+        (except cancellation). The outcome is stored as ``ship["local_sync"]``."""
+        base = ship["base"]
+        sync: dict[str, Any] = {"state": "skipped", "reason": None, "head": None}
+        ship["local_sync"] = sync
+        try:
+            if not repo.is_dir() or not await self._git(repo, "rev-parse", "--git-dir", check=False):
+                sync["reason"] = f"Lokales Projekt {repo} nicht vorhanden"
+            elif not await self._git(repo, "remote", "get-url", "origin", check=False):
+                sync["reason"] = "Projekt hat kein 'origin'-Remote"
+            else:
+                await self._git(repo, "fetch", "origin")
+                sync["head"] = await self._git(repo, "rev-parse", "--verify", "--quiet", "HEAD", check=False) or None
+                current = await self._git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False)
+                if current != base:
+                    where = "losgelöstem HEAD" if current == "HEAD" else f"Branch {current or '?'}"
+                    sync["reason"] = f"Projekt steht auf {where}, nicht auf {base}"
+                elif await self._git(repo, "status", "--porcelain", "--untracked-files=no"):
+                    sync["reason"] = "Projekt hat nicht committete Änderungen"
+                elif not await self._git(
+                    repo, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{base}", check=False
+                ):
+                    sync["reason"] = f"origin/{base} nicht gefunden"
+                elif (ahead := await self._git(repo, "rev-list", "--count", f"origin/{base}..HEAD")) != "0":
+                    sync["reason"] = (
+                        f"Lokaler {base} weicht von origin/{base} ab ({ahead} lokale Commits)"
+                        " – kein Fast-Forward möglich"
+                    )
+                elif await self._git(repo, "rev-list", "--count", f"HEAD..origin/{base}") == "0":
+                    sync["state"] = "synced"
+                    sync["reason"] = "bereits aktuell"
+                else:
+                    await self._git(repo, "merge", "--ff-only", f"origin/{base}")
+                    sync["state"] = "synced"
+                    sync["head"] = await self._git(repo, "rev-parse", "HEAD")
+        except Exception as e:
+            sync["state"] = "failed"
+            sync["reason"] = (str(e) or type(e).__name__)[:300]
+        if sync["state"] == "synced":
+            short = (sync["head"] or "")[:7]
+            if sync["reason"] == "bereits aktuell":
+                ship["message"] += f" Lokales Projekt war bereits auf dem Stand von origin/{base} ({short})."
+            else:
+                ship["message"] += f" Lokales Projekt auf origin/{base} aktualisiert ({short})."
+        elif sync["state"] == "failed":
+            ship["message"] += f" Lokales Projekt nicht aktualisiert (Fehler): {sync['reason']}."
+        else:
+            ship["message"] += f" Lokales Projekt nicht aktualisiert: {sync['reason']}."
 
     async def _ship_backup(self, ship: dict[str, Any], wt: Path, branch: str, reason: str) -> None:
         """Not green: push the job branch (never main) so the work does not only exist in this worktree."""

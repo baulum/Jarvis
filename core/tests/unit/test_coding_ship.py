@@ -913,3 +913,167 @@ async def test_jobs_for_the_same_customer_site_wait_for_each_other(
         assert not waiting.done()
     await asyncio.wait_for(waiting, 5)
     assert any(t == "coding.progress" and d.get("job_id") == str(b) for t, d in env.events)
+
+
+# ---------------------------------------------------------------- local project brought to the state on GitHub
+def _local_head(env: SimpleNamespace) -> str:
+    return _git(env.repo, "rev-parse", "HEAD")
+
+
+async def test_local_project_clean_on_main_is_fast_forwarded(env: SimpleNamespace) -> None:
+    head = _commit(env, {"app.py": "print(1)\n"})
+    ship = await _flow(env)
+
+    assert ship["state"] == "shipped" and _origin_main(env) == head
+    assert ship["local_sync"] == {"state": "synced", "reason": None, "head": head}
+    assert _local_head(env) == head and (env.repo / "app.py").read_text() == "print(1)\n"
+    assert _git(env.repo, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert f"Lokales Projekt auf origin/main aktualisiert ({head[:7]})." in ship["message"]
+    assert ship["message"].startswith("Ausgeliefert:")
+    _assert_cleaned_up(env, ship)
+
+
+async def test_local_project_already_current_after_supabase_deploy(env: SimpleNamespace) -> None:
+    head = _commit(env, SUPABASE_FILES)
+    _fake_supabase(env)
+    ship = await _flow(env)  # the deploy has already fast-forwarded the checkout
+
+    assert ship["state"] == "shipped"
+    assert ship["local_sync"] == {"state": "synced", "reason": "bereits aktuell", "head": head}
+    assert "Lokales Projekt war bereits auf dem Stand von origin/main" in ship["message"]
+
+
+async def test_local_project_dirty_is_skipped_and_untouched(env: SimpleNamespace) -> None:
+    head = _commit(env, {"app.py": "print(1)\n"})
+    before = _local_head(env)
+    (env.repo / "README.md").write_text("lokale Änderung\n")
+    ship = await _flow(env)
+
+    assert ship["state"] == "shipped" and _origin_main(env) == head
+    assert ship["local_sync"]["state"] == "skipped"
+    assert ship["local_sync"]["reason"] == "Projekt hat nicht committete Änderungen"
+    assert ship["local_sync"]["head"] == before
+    assert _local_head(env) == before and not (env.repo / "app.py").exists()
+    assert (env.repo / "README.md").read_text() == "lokale Änderung\n"
+    assert "Lokales Projekt nicht aktualisiert: Projekt hat nicht committete Änderungen." in ship["message"]
+    # fetched anyway: origin/main is known locally, nothing else changed
+    assert _git(env.repo, "rev-parse", "origin/main") == head
+
+
+async def test_local_project_on_other_branch_is_skipped(env: SimpleNamespace) -> None:
+    head = _commit(env, {"app.py": "print(1)\n"})
+    before = _local_head(env)
+    _git(env.repo, "checkout", "-q", "-b", "feature")
+    ship = await _flow(env)
+
+    assert ship["state"] == "shipped" and _origin_main(env) == head
+    assert ship["local_sync"]["state"] == "skipped"
+    assert ship["local_sync"]["reason"] == "Projekt steht auf Branch feature, nicht auf main"
+    assert _git(env.repo, "rev-parse", "--abbrev-ref", "HEAD") == "feature"
+    assert _local_head(env) == before and _git(env.repo, "rev-parse", "refs/heads/main") == before
+    assert "Lokales Projekt nicht aktualisiert: Projekt steht auf Branch feature" in ship["message"]
+
+
+async def test_local_project_diverged_is_skipped_without_data_loss(env: SimpleNamespace) -> None:
+    head = _commit(env, {"app.py": "print(1)\n"})
+    (env.repo / "notes.md").write_text("nur lokal\n")
+    _git(env.repo, "add", "notes.md")
+    _git(env.repo, "commit", "-q", "-m", "lokaler Commit")
+    local = _local_head(env)
+    ship = await _flow(env)
+
+    assert ship["state"] == "shipped" and _origin_main(env) == head
+    assert ship["local_sync"]["state"] == "skipped"
+    assert "weicht von origin/main ab (1 lokale Commits)" in ship["local_sync"]["reason"]
+    assert ship["local_sync"]["head"] == local
+    assert _local_head(env) == local and (env.repo / "notes.md").read_text() == "nur lokal\n"
+    assert _git(env.repo, "status", "--porcelain") == ""
+    assert "kein Fast-Forward möglich" in ship["message"]
+
+
+async def test_local_project_without_remote_is_skipped(env: SimpleNamespace) -> None:
+    plain = env.tmp / "plain"
+    plain.mkdir()
+    _git(plain, "init", "-q", "-b", "main")
+    (plain / "a.txt").write_text("a\n")
+    _git(plain, "add", "-A")
+    _git(plain, "commit", "-q", "-m", "init")
+    before = _git(plain, "rev-parse", "HEAD")
+    ship: dict[str, Any] = {"base": "main", "message": "Ausgeliefert: Direkt nach main gemergt und gepusht."}
+    await env.runner._ship_local_sync(ship, plain)
+
+    assert ship["local_sync"] == {"state": "skipped", "reason": "Projekt hat kein 'origin'-Remote", "head": None}
+    assert ship["message"].endswith("Lokales Projekt nicht aktualisiert: Projekt hat kein 'origin'-Remote.")
+    assert _git(plain, "rev-parse", "HEAD") == before
+
+
+async def test_local_project_missing_is_skipped(env: SimpleNamespace) -> None:
+    gone = env.tmp / "gone"
+    ship: dict[str, Any] = {"base": "main", "message": "Ausgeliefert: x."}
+    await env.runner._ship_local_sync(ship, gone)
+
+    assert ship["local_sync"]["state"] == "skipped" and "nicht vorhanden" in ship["local_sync"]["reason"]
+    assert not gone.exists()
+
+
+async def test_local_sync_failure_does_not_fail_the_delivery(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    head = _commit(env, {"app.py": "print(1)\n"})
+    before = _local_head(env)
+    real_git = env.runner._git
+
+    async def git(cwd: Path, *args: str, check: bool = True) -> str:
+        if args == ("fetch", "origin"):  # only the sync fetches all of origin; the ship steps fetch the base branch
+            raise runner_mod.CodingError("git fetch origin: Netzwerk nicht erreichbar")
+        return await real_git(cwd, *args, check=check)
+
+    monkeypatch.setattr(env.runner, "_git", git)
+    ship = await _flow(env)
+
+    assert ship["state"] == "shipped" and ship["merged"] is True and _origin_main(env) == head
+    assert ship["local_sync"]["state"] == "failed" and "Netzwerk nicht erreichbar" in ship["local_sync"]["reason"]
+    assert "Lokales Projekt nicht aktualisiert (Fehler)" in ship["message"]
+    assert _local_head(env) == before
+    _assert_cleaned_up(env, ship)
+
+
+async def test_local_sync_skipped_problem_is_no_delivery_error(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (env.repo / "README.md").write_text("lokale Änderung\n")
+    jid = await _run_job(env, monkeypatch, tests_pass=True)
+    job = env.store[jid]
+
+    assert job.status == "completed" and job.result["ship"]["state"] == "shipped"
+    assert job.result["ship"]["local_sync"]["state"] == "skipped"
+    assert job.result["delivery_error"] is None
+    assert (env.repo / "README.md").read_text() == "lokale Änderung\n"
+
+
+async def test_no_local_sync_without_merge(env: SimpleNamespace) -> None:
+    _commit(env, {"app.py": "print(1)\n"})
+    before = _local_head(env)
+    env.gh.merge_error = ToolUserError("GitHub-Fehler 403: Resource not accessible by personal access token")
+    ship = await _flow(env)
+
+    assert ship["state"] == "failed" and "local_sync" not in ship
+    assert _local_head(env) == before
+
+    red = await _flow(env, green=False)
+    assert "local_sync" not in red
+
+
+async def test_ship_retry_syncs_the_local_project(env: SimpleNamespace) -> None:
+    head = _commit(env, {"app.py": "print(1)\n"})
+    env.gh.merge_error = ToolUserError("GitHub-Fehler 405: Pull Request is not mergeable")
+    jid = _store_job(env, await _flow(env))
+    assert "local_sync" not in env.store[jid].result["ship"]
+
+    env.gh.merge_error = None
+    ship = await env.runner.ship(jid, "test")  # what coding_ship_job runs
+
+    assert ship["state"] == "shipped" and ship["local_sync"]["state"] == "synced"
+    assert _local_head(env) == head and (env.repo / "app.py").exists()
+    assert env.store[jid].result["ship"]["local_sync"] == {"state": "synced", "reason": None, "head": head}
+    assert "Lokales Projekt auf origin/main aktualisiert" in ship["message"]
