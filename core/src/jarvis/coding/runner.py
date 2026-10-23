@@ -33,6 +33,7 @@ from sqlalchemy import select
 
 from jarvis.agent.model_router import EFFORTS, model_id, resolve_alias
 from jarvis.coding.monitor import build_monitor, compact_events
+from jarvis.config import CUSTOMER_SITES_DIR
 from jarvis.db import session_scope
 from jarvis.db.models import CodingJob
 from jarvis.events import bus
@@ -67,6 +68,12 @@ SYSTEM_PROMPT_HINT = (
     "(die Rechteprüfung bewertet jeden Teil eines zusammengesetzten Befehls einzeln; ein nicht freigegebener Teil "
     "blockiert den ganzen Befehl). Nutze zum Lesen bevorzugt Read, Glob und Grep."
 )
+
+
+def is_customer_site(path: Path) -> bool:
+    """True for a folder below ``CUSTOMER_SITES_DIR`` (the folder itself does not count)."""
+    resolved, root = path.resolve(), CUSTOMER_SITES_DIR.resolve()
+    return resolved != root and resolved.is_relative_to(root)
 
 
 def is_transient_error(text: str) -> bool:
@@ -704,6 +711,18 @@ class CodingRunner:
                 for k, v in fields.items():
                     setattr(job, k, v)
 
+    async def _new_worktree(self, job_id: uuid.UUID, repo: Path, title: str) -> tuple[str, str]:
+        """Where a new job works: ``(worktree path, branch)``. Customer sites (below ``CUSTOMER_SITES_DIR``) are edited
+        in place on their current branch; everything else gets its own worktree on a ``jarvis/*`` branch."""
+        if is_customer_site(repo):
+            return str(repo), await self._git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+        branch = f"jarvis/{slug(title, 30)}-{str(job_id)[:8]}"
+        wt = self.workspaces / f"{slug(repo.name, 30)}-{str(job_id)[:8]}"
+        wt.parent.mkdir(parents=True, exist_ok=True)
+        await self._commit_pending(repo)
+        await self._git(repo, "worktree", "add", "-b", branch, str(wt), "HEAD")
+        return str(wt), branch
+
     async def _run(self, job_id: uuid.UUID, resume: bool = False) -> None:
         async with self._sem:
             async with session_scope() as s:
@@ -723,12 +742,7 @@ class CodingRunner:
                     raise CodingError(auth["error"])
                 await self.ensure_repo(repo)
                 if not worktree:
-                    branch = f"jarvis/{slug(title, 30)}-{str(job_id)[:8]}"
-                    wt = self.workspaces / f"{slug(repo.name, 30)}-{str(job_id)[:8]}"
-                    wt.parent.mkdir(parents=True, exist_ok=True)
-                    await self._commit_pending(repo)
-                    await self._git(repo, "worktree", "add", "-b", branch, str(wt), "HEAD")
-                    worktree = str(wt)
+                    worktree, branch = await self._new_worktree(job_id, repo, title)
                 elif not Path(worktree).is_dir():  # removed after a backup (see _ship_backup): bring it back
                     wt = Path(worktree)
                     await self._git(repo, "worktree", "prune", check=False)

@@ -30,6 +30,11 @@ def _expand(p: str | Path) -> Path:
     return Path(os.path.expandvars(os.path.expanduser(str(p))))
 
 
+# Customer sites live here (one folder per customer). Coding jobs for a folder below it work directly in that
+# folder instead of a separate worktree under ``paths.workspaces_dir``.
+CUSTOMER_SITES_DIR = Path("/Users/paul/Documents/Kunden-Seiten")
+
+
 class ServerCfg(_Strict):
     host: str = "127.0.0.1"
     port: int = 8765
