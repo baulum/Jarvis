@@ -145,7 +145,9 @@ aktivem Connector; ist das Vercel-Projekt schon mit dem Repo verbunden, übernim
 lokal sowie Worktree löschen (nur wenn nichts Ungemergtes darin ist). Rot, Fehler oder Abbruch: Job-Branch wird gepusht
 (Sicherung), aber nichts auf `main`, kein Merge, kein Deploy, der Worktree bleibt für „Wiederholen“. Ergebnis in
 `result.ship`, Probleme in `result.delivery_error`. Erneuter Versuch: `coding_ship_job`; Draft-PR nur noch auf Wunsch über
-`coding_prepare_pr`.
+`coding_prepare_pr`. Parallelität: `CodingRunner._slot` vergibt bis zu `coding.max_parallel_jobs` Plätze (Semaphore), Jobs
+für dieselbe Kundenseite (ohne eigenen Worktree) zusätzlich nacheinander; eine Sperre je Repository (`_repo_lock`)
+serialisiert Worktree anlegen/entfernen und die ganze Auslieferung, sodass parallele Jobs nacheinander nach `main` gehen.
 
 **Agent-Monitor.** Das Coding-Log (`coding-logs/<job>.jsonl`) hält je Werkzeugaufruf Argument-Kurzfassung, Ergebnis-Kurzfassung und
 Token-Nutzung (`coding/monitor.py`); `GET /api/coding/jobs/{id}/monitor` macht daraus den Schnappschuss (aktueller Schritt, Schritte,

@@ -25,6 +25,7 @@ import shutil
 import signal
 import time
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -218,7 +219,12 @@ class CodingRunner:
         self.cfg = state.settings.coding
         self.workspaces = state.settings.paths.workspaces_dir
         self.logs_dir = state.settings.paths.data_dir / "coding-logs"
-        self._sem = asyncio.Semaphore(self.cfg.max_parallel_jobs)
+        self._sem = asyncio.Semaphore(max(1, self.cfg.max_parallel_jobs))
+        # Several jobs run at once, each in its own worktree. What touches a repository itself (creating/removing
+        # worktrees, its checkout, merging into the base branch, deploying) runs one job at a time per repository;
+        # customer sites are edited in place (no worktree), so their jobs wait for each other entirely.
+        self._repo_locks: dict[Path, asyncio.Lock] = {}
+        self._site_locks: dict[Path, asyncio.Lock] = {}
         self._procs: dict[uuid.UUID, asyncio.subprocess.Process] = {}
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._sessions: dict[uuid.UUID, str] = {}  # latest Claude session id per job (for automatic continuation)
@@ -422,6 +428,37 @@ class CodingRunner:
                 self._tasks.pop(job_id, None)
 
         task.add_done_callback(forget)
+
+    def _repo_lock(self, repo: Path) -> asyncio.Lock:
+        return self._repo_locks.setdefault(repo.resolve(), asyncio.Lock())
+
+    @contextlib.asynccontextmanager
+    async def _slot(self, job_id: uuid.UUID) -> AsyncIterator[None]:
+        """A place to run: one of ``coding.max_parallel_jobs``. Jobs of the same customer site (edited in place,
+        no own worktree) additionally wait for each other – without holding a place meanwhile."""
+        async with session_scope() as s:
+            job = await s.get(CodingJob, job_id)
+            repo = Path(job.repo_path) if job is not None else None
+        async with contextlib.AsyncExitStack() as stack:
+            if repo is not None and is_customer_site(repo):
+                site = self._site_locks.setdefault(repo.resolve(), asyncio.Lock())
+                if site.locked():
+                    await bus.publish(
+                        "coding.progress",
+                        job_id=str(job_id),
+                        type="waiting",
+                        text=f"Wartet, bis der laufende Job für {repo.name} fertig ist",
+                    )
+                await stack.enter_async_context(site)
+            if self._sem.locked():
+                await bus.publish(
+                    "coding.progress",
+                    job_id=str(job_id),
+                    type="waiting",
+                    text=f"Wartet auf einen freien Platz (höchstens {self.cfg.max_parallel_jobs} Jobs gleichzeitig)",
+                )
+            await stack.enter_async_context(self._sem)
+            yield
 
     async def resume_interrupted(self) -> list[tuple[uuid.UUID, str]]:
         """Jobs that were running (or paused) when the core stopped are marked and can be retried.
@@ -667,7 +704,8 @@ class CodingRunner:
                 raise CodingError("Worktree liegt außerhalb des Jarvis-Workspace und wird nicht entfernt")
             if wt.exists():
                 await self._commit(wt, title, wip=True)  # open changes stay on the (kept) branch
-                await self._git(Path(repo), "worktree", "remove", "--force", str(wt))
+                async with self._repo_lock(Path(repo)):
+                    await self._git(Path(repo), "worktree", "remove", "--force", str(wt))
                 worktree_removed = True
         async with session_scope() as s:
             job = await s.get(CodingJob, job_id)
@@ -724,7 +762,7 @@ class CodingRunner:
         return str(wt), branch
 
     async def _run(self, job_id: uuid.UUID, resume: bool = False) -> None:
-        async with self._sem:
+        async with self._slot(job_id):
             async with session_scope() as s:
                 job = await s.get(CodingJob, job_id)
                 if job is None or job.status == "cancelled":
@@ -740,16 +778,18 @@ class CodingRunner:
                 auth = await self.auth_status()
                 if not auth["ok"]:
                     raise CodingError(auth["error"])
-                await self.ensure_repo(repo)
-                if not worktree:
-                    worktree, branch = await self._new_worktree(job_id, repo, title)
-                elif not Path(worktree).is_dir():  # removed after a backup (see _ship_backup): bring it back
-                    wt = Path(worktree)
-                    await self._git(repo, "worktree", "prune", check=False)
-                    if await self._git(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False):
-                        await self._git(repo, "worktree", "add", str(wt), branch)
-                    else:
-                        await self._git(repo, "worktree", "add", "-b", branch, str(wt), "HEAD")
+                async with self._repo_lock(repo):
+                    await self.ensure_repo(repo)
+                    if not worktree:
+                        worktree, branch = await self._new_worktree(job_id, repo, title)
+                    elif not Path(worktree).is_dir():  # removed after a backup (see _ship_backup): bring it back
+                        wt = Path(worktree)
+                        await self._git(repo, "worktree", "prune", check=False)
+                        ref = f"refs/heads/{branch}"
+                        if await self._git(repo, "rev-parse", "--verify", "--quiet", ref, check=False):
+                            await self._git(repo, "worktree", "add", str(wt), branch)
+                        else:
+                            await self._git(repo, "worktree", "add", "-b", branch, str(wt), "HEAD")
                 self.logs_dir.mkdir(parents=True, exist_ok=True)
                 log_path = self.logs_dir / f"{job_id}.jsonl"
                 await self._update(
@@ -1357,6 +1397,34 @@ class CodingRunner:
             "pushed": bool(prior.get("pushed")),
             "supabase": None,
         }
+        # parallel jobs of one repository deliver one after another: the next one rebases onto the merged main
+        async with self._repo_lock(repo):
+            await self._ship_steps(
+                ship, repo=repo, worktree=worktree, branch=branch, title=title, body=body, green=green, reason=reason
+            )
+        await audit(
+            actor,
+            "coding.ship",
+            target=str(job_id),
+            details={
+                k: ship.get(k)
+                for k in ("state", "stage", "pr", "merged", "pushed", "supabase", "vercel", "cleanup", "message")
+            },
+        )
+        return ship
+
+    async def _ship_steps(
+        self,
+        ship: dict[str, Any],
+        *,
+        repo: Path,
+        worktree: Path,
+        branch: str,
+        title: str,
+        body: str,
+        green: bool,
+        reason: str,
+    ) -> None:
         if not green:
             await self._ship_backup(ship, worktree, branch, reason)
         elif getattr(getattr(self.state, "kill_switch", None), "engaged", False):
@@ -1385,16 +1453,6 @@ class CodingRunner:
                 except Exception as e:
                     ship.setdefault("cleanup", {}).setdefault("errors", []).append(str(e) or type(e).__name__)
                     ship["message"] = f"{ship['message']} Aufräumen fehlgeschlagen: {e}"[:900]
-        await audit(
-            actor,
-            "coding.ship",
-            target=str(job_id),
-            details={
-                k: ship.get(k)
-                for k in ("state", "stage", "pr", "merged", "pushed", "supabase", "vercel", "cleanup", "message")
-            },
-        )
-        return ship
 
     async def _ship_backup(self, ship: dict[str, Any], wt: Path, branch: str, reason: str) -> None:
         """Not green: push the job branch (never main) so the work does not only exist in this worktree."""

@@ -186,6 +186,7 @@ async def test_current_adds_address_via_nominatim_and_caches() -> None:
 
 async def test_current_survives_reverse_geocoding_failures(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.DEBUG)
+    caplog.set_level(logging.WARNING, logger="httpx")  # as in production (logging_setup): no request-URL lines
 
     def timeout(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("slow", request=request)

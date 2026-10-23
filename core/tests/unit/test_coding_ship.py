@@ -774,3 +774,140 @@ async def test_green_ships_directly_to_main_without_pr(env: SimpleNamespace) -> 
     assert env.gh.created == [] and env.gh.merged == []
     assert _origin_main(env) == head
     assert not env.wt.exists() and BRANCH not in _local_branches(env)
+
+
+# ---------------------------------------------------------------- several jobs at once
+def _job_record(env: SimpleNamespace, wt: Path, branch: str, repo: Path | None = None) -> uuid.UUID:
+    jid = uuid.uuid4()
+    env.store[jid] = SimpleNamespace(
+        id=jid,
+        status="queued",
+        title="Feature",
+        prompt="Mach etwas",
+        repo_path=str(repo or env.repo),
+        test_command="pytest",
+        worktree_path=str(wt),
+        branch=branch,
+        claude_session_id=None,
+        model="m",
+        effort=None,
+        task_id=None,
+        result=None,
+        finished_at=None,
+    )
+    return jid
+
+
+def _second_job(env: SimpleNamespace) -> tuple[uuid.UUID, Path]:
+    wt = env.wt.parent / "job2"
+    _git(env.repo, "worktree", "add", "-q", "-b", "jarvis/job2", str(wt), "HEAD")
+    return _job_record(env, wt, "jarvis/job2"), wt
+
+
+def _runner_with(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, agent: Any) -> CodingRunner:
+    """A fresh runner (the semaphore takes ``max_parallel_jobs`` on creation) with a fake agent and green tests."""
+    runner = CodingRunner(env.runner.state)
+
+    async def auth() -> dict[str, Any]:
+        return {"ok": True}
+
+    async def tests(cwd: Path, command: str) -> dict[str, Any]:
+        return {"passed": True, "exit_code": 0, "output": "ok"}
+
+    monkeypatch.setattr(runner, "auth_status", auth)
+    monkeypatch.setattr(runner, "_claude_retrying", agent)
+    monkeypatch.setattr(runner, "_run_tests", tests)
+    return runner
+
+
+async def test_jobs_run_at_the_same_time_and_ship_one_after_another(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.cfg.max_parallel_jobs = 2
+    env.cfg.ship_via_pr = False
+    inside: set[Path] = set()
+    both = asyncio.Event()
+
+    async def agent(job_id: uuid.UUID, cwd: Path, *a: Any, **k: Any) -> dict[str, Any]:
+        (cwd / f"{cwd.name}.py").write_text("x = 1\n")
+        inside.add(cwd)
+        if len(inside) == 2:
+            both.set()
+        await asyncio.wait_for(both.wait(), 10)  # only returns if the other job runs at the same time
+        return {"is_error": False, "result": "Fertig", "session_id": str(job_id)}
+
+    runner = _runner_with(env, monkeypatch, agent)
+    first = _job_record(env, env.wt, BRANCH)
+    second, wt2 = _second_job(env)
+    await asyncio.gather(runner._run(first), runner._run(second))
+
+    assert inside == {env.wt, wt2}
+    for jid in (first, second):
+        job = env.store[jid]
+        assert job.status == "completed" and job.result["ship"]["state"] == "shipped", job.result
+    # the second delivery was rebased onto the first one: main holds the work of both jobs
+    assert _git(env.origin, "show", "main:job.py") == "x = 1"
+    assert _git(env.origin, "show", "main:job2.py") == "x = 1"
+    assert not env.wt.exists() and not wt2.exists()
+    assert _local_branches(env) == ["main"]
+
+
+async def test_jobs_beyond_the_limit_wait_queued(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    env.cfg.auto_ship = False
+    started, release = asyncio.Event(), asyncio.Event()
+    order: list[Path] = []
+
+    async def agent(job_id: uuid.UUID, cwd: Path, *a: Any, **k: Any) -> dict[str, Any]:
+        order.append(cwd)
+        if len(order) == 1:
+            started.set()
+            await asyncio.wait_for(release.wait(), 10)
+        return {"is_error": False, "result": "Fertig", "session_id": str(job_id)}
+
+    runner = _runner_with(env, monkeypatch, agent)  # max_parallel_jobs=1
+    first = _job_record(env, env.wt, BRANCH)
+    second, wt2 = _second_job(env)
+    runner._start(first)
+    await asyncio.wait_for(started.wait(), 10)
+    runner._start(second)
+    tasks = list(runner._tasks.values())
+    await asyncio.sleep(0.05)
+
+    assert order == [env.wt] and env.store[second].status == "queued"
+    assert any(
+        t == "coding.progress"
+        and d["job_id"] == str(second)
+        and d.get("text", "").startswith("Wartet auf einen freien")
+        for t, d in env.events
+    )
+    release.set()
+    await asyncio.gather(*tasks)
+    assert order == [env.wt, wt2]
+    assert env.store[first].status == "completed" and env.store[second].status == "completed"
+
+
+async def test_jobs_for_the_same_customer_site_wait_for_each_other(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Customer sites are edited in place (no own worktree): two jobs there would trample each other's files."""
+    sites = env.tmp / "Kunden-Seiten"
+    site = sites / "Acme"
+    site.mkdir(parents=True)
+    monkeypatch.setattr(runner_mod, "CUSTOMER_SITES_DIR", sites)
+    env.cfg.max_parallel_jobs = 3
+    runner = CodingRunner(env.runner.state)
+    a = _job_record(env, site, "main", repo=site)
+    b = _job_record(env, site, "main", repo=site)
+    other = _job_record(env, env.wt, BRANCH)
+
+    async def enter(jid: uuid.UUID) -> None:
+        async with runner._slot(jid):
+            pass
+
+    async with runner._slot(a):
+        waiting = asyncio.create_task(enter(b))
+        await asyncio.wait_for(enter(other), 5)  # another repository is not held up
+        await asyncio.sleep(0.05)
+        assert not waiting.done()
+    await asyncio.wait_for(waiting, 5)
+    assert any(t == "coding.progress" and d.get("job_id") == str(b) for t, d in env.events)
