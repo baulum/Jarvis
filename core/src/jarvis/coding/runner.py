@@ -105,6 +105,8 @@ _STRIP_ENV = (
     "CLAUDE_CODE_USE_VERTEX",
     "CLAUDE_CODE_USE_FOUNDRY",
 )
+# Jarvis' own service tokens that may sit in the core's environment: never handed to coding jobs.
+_SECRET_ENV = ("VERCEL_TOKEN",)
 _TEST_EXECUTABLES = {
     "npm",
     "pnpm",
@@ -225,7 +227,11 @@ class CodingRunner:
 
     # ------------------------------------------------------------------ environment
     def _env(self) -> dict[str, str]:
-        env = {k: v for k, v in os.environ.items() if k not in _STRIP_ENV and not k.startswith("JARVIS_SECRET")}
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in _STRIP_ENV and k not in _SECRET_ENV and not k.startswith("JARVIS_SECRET")
+        }
         extra = [os.path.expanduser(str(p)) for p in getattr(self.cfg, "extra_path", None) or []]
         env["PATH"] = ":".join([os.environ.get("PATH", ""), *extra, "/opt/homebrew/bin", "/usr/local/bin"])
         for k, v in (getattr(self.cfg, "claude_env", None) or {}).items():
@@ -1371,7 +1377,7 @@ class CodingRunner:
             target=str(job_id),
             details={
                 k: ship.get(k)
-                for k in ("state", "stage", "pr", "merged", "pushed", "supabase", "cleanup", "message")
+                for k in ("state", "stage", "pr", "merged", "pushed", "supabase", "vercel", "cleanup", "message")
             },
         )
         return ship
@@ -1557,6 +1563,7 @@ class CodingRunner:
             ship["supabase"] = {"present": False, "note": "Supabase nicht im Projekt – übersprungen"}
             ship["state"] = "shipped"
             ship["message"] = f"Ausgeliefert: {merged_note} Supabase nicht im Projekt – Deploy übersprungen."
+            await self._ship_vercel(ship, repo, listing.splitlines())
             return
         ship["supabase"] = {"present": True, "projects": projects, "deployed": []}
         cli = _which(self.cfg.supabase_command, None)
@@ -1582,6 +1589,35 @@ class CodingRunner:
                 ship["supabase"]["deployed"].append(f"{root + ': ' if root else ''}{name}")
         ship["state"] = "shipped"
         ship["message"] = f"Ausgeliefert: {merged_note} Supabase deployt ({', '.join(ship['supabase']['deployed'])})."
+        await self._ship_vercel(ship, repo, listing.splitlines())
+
+    async def _ship_vercel(self, ship: dict[str, Any], repo: Path, listing: list[str]) -> None:
+        """After merge (and Supabase): production deploy on Vercel if the project has a ``vercel.json`` or a local
+        Vercel link (``.vercel/project.json``) and the Vercel connector is active with ``deploy_after_merge``.
+        A Vercel failure does not undo the delivery: it is reported in the result and the message."""
+        if "vercel.json" not in listing and not (repo / ".vercel" / "project.json").is_file():
+            return
+        vc: Any = self.state.connectors.connectors.get("vercel")  # VercelConnector (not imported: import cycle)
+        if vc is None or not vc.active or not vc.settings.get("deploy_after_merge", True):
+            ship["vercel"] = {"state": "skipped", "message": "Vercel-Connector nicht aktiv"}
+            ship["message"] += " Vercel-Projekt erkannt, aber der Vercel-Connector ist nicht aktiv – kein Deploy."
+            return
+        origin = await self._git(repo, "remote", "get-url", "origin", check=False)
+        repo_name = parse_github_repo(origin) if origin else None
+        if repo_name is None:
+            ship["vercel"] = {"state": "skipped", "message": "origin ist kein GitHub-Repository"}
+            return
+        try:
+            result = await vc.deploy_after_merge(repo, repo_name, ship["base"])
+        except Exception as e:
+            ship["vercel"] = {"state": "failed", "error": (str(e) or type(e).__name__)[:300]}
+            ship["message"] += f" Vercel-Deploy fehlgeschlagen: {ship['vercel']['error']} (erneut mit vercel_deploy)."
+            return
+        ship["vercel"] = {
+            k: result.get(k) for k in ("state", "project", "deployment_id", "url", "production_url", "error", "message")
+        }
+        if result.get("message"):
+            ship["message"] += f" {result['message']}"
 
     async def prepare_pr(self, job_id: uuid.UUID, repo_full_name: str, base: str = "main") -> dict[str, Any]:
         """Manual opt-in: push the job branch and open a *draft* PR (not merged, nothing deployed)."""

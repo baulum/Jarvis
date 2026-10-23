@@ -59,6 +59,8 @@ _TOOL_LABELS: list[tuple[str, str]] = [
     ("mac_", "Bediene den Mac …"),
     ("drive_", "Durchsuche Google Drive …"),
     ("github_", "Frage GitHub ab …"),
+    ("vercel_deploy", "Veröffentliche auf Vercel …"),
+    ("vercel_", "Frage Vercel ab …"),
     ("telegram_", "Telegram …"),
     ("mobile_", "Plane eine Benachrichtigung …"),
     ("system_", "Prüfe das System …"),

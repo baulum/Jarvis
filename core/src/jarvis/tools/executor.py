@@ -70,10 +70,15 @@ def args_hash(tool: str, args: dict[str, Any]) -> str:
 # Tools whose arguments are content Sir typed/pasted (could be passwords): the audit log keeps only the length.
 _CONTENT_KEYS = {"text", "value", "content", "string"}
 _CONTENT_ARG_TOOLS = {"mac_type_text", "mac_clipboard_set", "mac_ui_set_value"}
+# Tools with a NAME → value map of (possibly secret) values: the audit log keeps only names and lengths.
+_SECRET_MAP_ARGS = {"vercel_deploy": "env"}
 LEDGER_STALE_AFTER = timedelta(minutes=15)
 
 
 def audit_args(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+    if tool in _SECRET_MAP_ARGS and isinstance(args.get(_SECRET_MAP_ARGS[tool]), dict):
+        key = _SECRET_MAP_ARGS[tool]
+        args = {**args, key: {k: f"[{len(str(v))} Zeichen]" for k, v in args[key].items()}}
     if tool in _CONTENT_ARG_TOOLS:
         return {k: f"[{len(v)} Zeichen]" if k in _CONTENT_KEYS and isinstance(v, str) else v for k, v in args.items()}
     return {k: (v[:1500] + "…" if isinstance(v, str) and len(v) > 1500 else v) for k, v in args.items()}

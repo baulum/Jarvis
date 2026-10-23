@@ -1,7 +1,7 @@
 # J.A.R.V.I.S.
 
 Persönlicher KI-Assistent für macOS, der lokal auf dem eigenen Mac läuft. Jarvis spricht und hört zu („Hey Jarvis“), bedient
-den Mac, recherchiert im Web, führt mehrstufige Geschäftsabläufe aus (Lexware, Google, Telegram, GitHub), merkt sich Wissen
+den Mac, recherchiert im Web, führt mehrstufige Geschäftsabläufe aus (Lexware, Google, Telegram, GitHub, Vercel), merkt sich Wissen
 in einem Obsidian-Vault, telefoniert (Twilio, Anrufe über die eigene Android-App) und gibt Programmieraufträge an Claude Code
 weiter. Jede Aktion läuft durch ein Freigabesystem mit Audit-Log und Not-Aus.
 
@@ -17,8 +17,11 @@ Opus 5.5 nur auf Wunsch. Lokale LLMs werden nicht verwendet.
   Kurzbefehle über die native JarvisBridge (AppleScript standardmäßig deaktiviert)
 - **Recherche:** Browser über Playwright (Microsoft Edge mit eigenem Profil oder verstecktes Chromium)
 - **Connectoren:** System, Gedächtnis (Obsidian), Mac, Browser, Shell (Allowlist), Coding, Lexware Office, Google (Gmail,
-  Kalender, Drive), Telegram, GitHub, HTTP-API, Webhooks, Fish Audio, KIE.ai (Bild- und Videogenerierung), Telefonie,
-  Routen (Nominatim + OSRM/Valhalla, Kartenanzeige im Chat)
+  Kalender, Drive), Telegram, GitHub, Vercel (Deploys), HTTP-API, Webhooks, Fish Audio, KIE.ai (Bild- und
+  Videogenerierung), Telefonie, Routen (Nominatim + OSRM/Valhalla, Kartenanzeige im Chat)
+- **Veröffentlichen auf Vercel:** `vercel_deploy` bringt ein lokales Projekt oder ein GitHub-Repo live (Projekt anlegen,
+  mit GitHub verbinden, Umgebungsvariablen, Deploy, URL zurück; Risikostufe `high`, also mit Freigabe),
+  `vercel_list_projects` und `vercel_deployment_status` lesen Projekte und Build-Status – siehe [Vercel](#vercel)
 - **Externe MCP-Server:** über `config/mcp_servers.yaml`, mit derselben Freigabe-Pipeline wie eigene Werkzeuge
 - **Gedächtnis:** eine Erinnerung = eine Markdown-Datei im Obsidian-Vault; Index in PostgreSQL mit pgvector
   (Qwen3-Embedding-0.6B als ONNX im Core), hybride Suche (Volltext + Vektor + Wissensgraph), automatische
@@ -64,7 +67,9 @@ gibt es keine Freigaben. Freigabe-Modi in der Desktop-App: YOLO, „Gefährliche
 sie fehl, folgt ein zweiter Lauf mit der Testausgabe. Am Ende werden offene Änderungen committet. Bei grünem Ergebnis und
 `coding.auto_ship: true` wird ausgeliefert: Standardmäßig (`coding.ship_via_pr: false`) wird der Job-Branch auf
 `origin/main` rebased und direkt nach `main` gepusht; bei Konflikt oder geschütztem Branch geht es über einen PR, der
-anschließend gemergt wird. Danach Supabase-Deploy (falls `supabase/` im Projekt liegt) und Aufräumen von Branch und Worktree.
+anschließend gemergt wird. Danach Supabase-Deploy (falls `supabase/` im Projekt liegt), Vercel-Deploy in Produktion (falls
+das Projekt eine `vercel.json` oder einen Vercel-Link `.vercel/project.json` hat und der Vercel-Connector aktiv ist; ist das
+Vercel-Projekt bereits mit dem Repo verbunden, baut Vercel selbst über die Git-Integration) und Aufräumen von Branch und Worktree.
 Bei rotem Ergebnis, Fehler oder Abbruch wird nur der Job-Branch gesichert, nichts gemergt.
 
 Details: [ARCHITECTURE.md](ARCHITECTURE.md), Sicherheitsmodell: [SECURITY.md](SECURITY.md).
@@ -152,3 +157,33 @@ E2E-Tests laufen nur lokal.
   `JARVIS_SECRET_<NAME>`-Umgebungsvariablen.
 - Laufzeitdaten: `~/Library/Application Support/Jarvis` (Tokens, Not-Aus-Flag `KILL`, Modelle, Freigabe-Modus),
   Logs unter `~/Library/Logs/Jarvis/`, Coding-Workspaces unter `~/Developer/Jarvis-Workspaces`.
+
+### Vercel
+
+**Wo der Token hingehört:** Token unter <https://vercel.com/account/settings/tokens> erstellen (Scope: eigener Account bzw.
+das Team) und in Jarvis eintragen – entweder in der Desktop-App unter **Connectoren › Vercel › Einrichten** (Feld
+„Vercel Access Token“) oder im Terminal:
+
+```bash
+cd core
+uv run jarvisctl secret set vercel-token      # fragt den Token verdeckt ab → macOS-Schlüsselbund (Dienst "jarvis")
+uv run jarvisctl secret set vercel-team-id    # nur für Team-Projekte (team_…)
+```
+
+Ohne Schlüsselbund (Server) gehen auch `JARVIS_SECRET_VERCEL_TOKEN` / `JARVIS_SECRET_VERCEL_TEAM_ID` oder `VERCEL_TOKEN` /
+`VERCEL_TEAM_ID` in der Umgebung des Core. Danach den Connector **Aktiv** schalten und **Testen**. Der Token erscheint nie in
+Logs, Fehlermeldungen oder Ergebnissen und wird nicht an Coding-Jobs weitergegeben.
+
+| Werkzeug | Risiko | Zweck |
+|---|---|---|
+| `vercel_deploy(project_path, production=true, project_name?, env?, env_targets?, source?, ref?)` | high | Projekt bei Bedarf anlegen, mit dem GitHub-Repo verbinden, Umgebungsvariablen setzen, deployen, URL zurückgeben |
+| `vercel_list_projects(search?, limit?)` | read | Projekte mit verbundenem Repo, Produktions-URL und letztem Deploy |
+| `vercel_deployment_status(deployment? \| project?)` | read | Zustand, URL und Fehlermeldung eines Deploys bzw. die letzten Deploys eines Projekts |
+
+- `project_path` ist ein absoluter Pfad (unter `paths.projects_dir`, den Coding-Workspaces oder den in den
+  Connector-Einstellungen freigegebenen `allowed_roots`) oder ein GitHub-Repo `owner/name`.
+- Quelle (`source: auto`): Ist der lokale Stand sauber und gepusht, baut Vercel direkt aus GitHub; sonst lädt Jarvis die
+  Dateien hoch (`.gitignore` wird beachtet, `.env*`, `.git`, `node_modules` und `.vercel` nie).
+- Umgebungsvariablen: `env: {"NAME": "wert"}`; geheime Werte besser als `"secret:<schlüsselbund-name>"`. Freigabe-Text und
+  Audit-Log zeigen nur die Namen.
+- Ein abgeleiteter Projektname greift nie auf ein Vercel-Projekt zu, das mit einem anderen Repo verbunden ist.

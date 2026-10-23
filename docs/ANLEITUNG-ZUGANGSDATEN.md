@@ -96,6 +96,26 @@ Für `git push` aus Coding-Jobs nutzt git deine normalen Zugangsdaten (z. B. `gh
 
 ---
 
+## 4a. Vercel (Websites und Apps veröffentlichen)
+
+1. Token anlegen: <https://vercel.com/account/settings/tokens> › **Create Token**.
+   Name „Jarvis“, **Scope** = dein Account (oder das Team, in dem die Projekte liegen), Ablaufdatum wählen › kopieren.
+2. In Jarvis eintragen: Connector **Vercel** › *Einrichten* › Feld **Vercel Access Token**
+   – oder `uv run jarvisctl secret set vercel-token`.
+   Auf einem Server ohne Schlüsselbund alternativ `JARVIS_SECRET_VERCEL_TOKEN` oder `VERCEL_TOKEN` in der Umgebung des Core.
+3. Nur für Team-Projekte: **Team-ID** (vercel.com › Team › *Settings › General › Team ID*, beginnt mit `team_`) im Feld
+   **Team-ID (optional)** – oder `uv run jarvisctl secret set vercel-team-id` bzw. `VERCEL_TEAM_ID`.
+4. Für Deploys direkt aus GitHub der Vercel-GitHub-App Zugriff auf die Repos geben: <https://github.com/apps/vercel>
+   (ohne sie lädt Jarvis lokale Projekte per Upload hoch; reine `owner/name`-Deploys brauchen die App).
+5. **Aktiv** einschalten › **Testen** → „Angemeldet als \<dein Vercel-Name\>“.
+
+Werkzeuge: `vercel_deploy` (Risikostufe *high*, also mit Freigabe), `vercel_list_projects`, `vercel_deployment_status`.
+Geheime Umgebungsvariablen für Projekte am besten als `secret:<name>` übergeben – der Wert kommt dann aus dem Schlüsselbund
+und läuft nicht durch den Chat. Coding-Jobs deployen nach dem Merge automatisch, wenn das Projekt eine `vercel.json` oder
+einen Vercel-Link (`.vercel/project.json`) hat; abschaltbar in den Connector-Einstellungen (`deploy_after_merge`).
+
+---
+
 ## 5. Fish Audio (Stimme von J.A.R.V.I.S.)
 
 1. Konto anlegen/anmelden: <https://fish.audio>
@@ -138,6 +158,7 @@ Terminal und ohne eigene Domain; die Anleitung vergleicht auch kostenlose Altern
 | `google-oauth-client`, `google-oauth-token` (automatisch) | Google |
 | `telegram-bot-token` | Telegram |
 | `github-token` | GitHub |
+| `vercel-token`, `vercel-team-id` (optional) | Vercel |
 | `fish-audio-api-key` | Fish Audio |
 | `twilio-account-sid`, `twilio-auth-token`, `phone-pin` | Telefonie |
 | `webhook-signing-secret`, `http-api-token` | optional |

@@ -82,6 +82,8 @@ tools:
     enabled: false
   "files.delete*":
     risk: critical
+  "vercel.deploy":
+    risk: high
 
 # Shell connector allowlist: executables Jarvis may run (arguments are passed as an
 # argv list, never through a shell). Anything else is refused.

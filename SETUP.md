@@ -40,6 +40,7 @@ In der Desktop-App unter **Connectoren** oder per CLI (`cd core && uv run jarvis
 | Google | OAuth-Client JSON (Desktop-App, `google-oauth-client`), dann „Mit Google verbinden“ | Google Cloud Console; Gmail-, Calendar-, Drive-API aktivieren |
 | Telegram | Bot-Token (`telegram-bot-token`), dann „Koppeln“ und `/pair <Code>` an den Bot | @BotFather |
 | GitHub | Fine-grained PAT (`github-token`) | github.com › Settings › Developer settings |
+| Vercel | Access Token (`vercel-token`), optional Team-ID (`vercel-team-id`); Vercel-GitHub-App für Deploys aus GitHub | vercel.com › Account Settings › Tokens |
 | KIE.ai Bildgenerierung | API-Key (`kie-api-key`), Connector „KIE.ai Bildgenerierung“ aktivieren | kie.ai/api-key |
 | Fish Audio | API-Key (`fish-audio-api-key`) + `voice.tts.fish_audio.reference_id`, `voice.tts.provider: fish_audio` | fish.audio |
 | Telefonie | `twilio-account-sid`, `twilio-auth-token`, `phone-pin`; in `config/jarvis.yaml`: `telephony.twilio.from_number`, `telephony.owner_numbers`, `server.public_base_url` | Twilio Console; öffentliche HTTPS-URL z. B. per Cloudflare Tunnel |

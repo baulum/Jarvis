@@ -697,6 +697,74 @@ async def test_run_with_auto_ship_off_does_not_touch_remote(env: SimpleNamespace
     assert env.store[jid].result["commit"] == _git(env.wt, "rev-parse", "--short", "HEAD")
 
 
+# ---------------------------------------------------------------- Vercel after the merge
+class FakeVercelConn:
+    def __init__(self, active: bool = True, error: Exception | None = None) -> None:
+        self.active = active
+        self.settings: dict[str, Any] = {}
+        self.error = error
+        self.calls: list[tuple[Path, str, str]] = []
+
+    async def deploy_after_merge(self, repo: Path, repo_name: str, base: str) -> dict[str, Any]:
+        self.calls.append((repo, repo_name, base))
+        if self.error is not None:
+            raise self.error
+        return {
+            "state": "READY",
+            "project": "app",
+            "deployment_id": "dpl_1",
+            "production_url": "https://app.vercel.app",
+            "message": "Vercel app deployt: https://app.vercel.app",
+        }
+
+
+async def test_green_with_vercel_json_deploys_to_vercel_after_merge(env: SimpleNamespace) -> None:
+    head = _commit(env, {"vercel.json": "{}\n", "index.html": "<h1>hi</h1>\n"})
+    vc = FakeVercelConn()
+    env.runner.state.connectors.connectors["vercel"] = vc
+    ship = await _flow(env)
+
+    assert ship["state"] == "shipped" and _origin_main(env) == head
+    assert vc.calls == [(env.repo, "acme/app", "main")]
+    assert ship["vercel"]["state"] == "READY" and ship["vercel"]["production_url"] == "https://app.vercel.app"
+    assert "Vercel app deployt: https://app.vercel.app" in ship["message"]
+    _assert_cleaned_up(env, ship)
+
+
+async def test_vercel_failure_does_not_undo_the_delivery(env: SimpleNamespace) -> None:
+    _commit(env, {"vercel.json": "{}\n"})
+    vc = FakeVercelConn(error=ToolUserError("Vercel-Fehler 500: boom"))
+    env.runner.state.connectors.connectors["vercel"] = vc
+    ship = await _flow(env)
+
+    assert ship["state"] == "shipped" and ship["vercel"]["state"] == "failed"
+    assert "Vercel-Deploy fehlgeschlagen: Vercel-Fehler 500: boom" in ship["message"]
+    _assert_cleaned_up(env, ship)
+
+
+async def test_vercel_skipped_without_marker_or_inactive_connector(env: SimpleNamespace) -> None:
+    _commit(env, {"app.py": "print(1)\n"})
+    vc = FakeVercelConn()
+    env.runner.state.connectors.connectors["vercel"] = vc
+    ship = await _flow(env)
+    assert ship["state"] == "shipped" and "vercel" not in ship and vc.calls == []
+
+    (env.repo / ".vercel").mkdir()
+    (env.repo / ".vercel" / "project.json").write_text('{"projectId": "prj_1"}')  # local link, gitignored
+    vc.active = False
+    ship = {"base": "main", "pr": None, "merged": True}
+    await env.runner._ship_deploy(ship, env.repo)
+    assert vc.calls == [] and ship["state"] == "shipped" and ship["vercel"]["state"] == "skipped"
+    assert "Vercel-Connector ist nicht aktiv" in ship["message"]
+
+
+def test_coding_jobs_never_see_the_vercel_token(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VERCEL_TOKEN", "vcp_x")
+    monkeypatch.setenv("JARVIS_SECRET_VERCEL_TOKEN", "vcp_y")
+    job_env = env.runner._env()
+    assert "VERCEL_TOKEN" not in job_env and "JARVIS_SECRET_VERCEL_TOKEN" not in job_env
+
+
 async def test_green_ships_directly_to_main_without_pr(env: SimpleNamespace) -> None:
     head = _commit(env, {"a.py": "x = 1\n"})
     env.runner.cfg.ship_via_pr = False

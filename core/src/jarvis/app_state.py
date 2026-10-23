@@ -39,6 +39,7 @@ from jarvis.connectors.routing import RoutingConnector
 from jarvis.connectors.system import SystemConnector
 from jarvis.connectors.telegram import TelegramConnector
 from jarvis.connectors.telephony import TelephonyConnector
+from jarvis.connectors.vercel import VercelConnector
 from jarvis.db import init_engine, session_scope
 from jarvis.db.models import Approval, Task, UsageRecord
 from jarvis.events import Event, bus, spawn
@@ -163,6 +164,7 @@ class AppState:
             GoogleConnector,
             TelegramConnector,
             GitHubConnector,
+            VercelConnector,
             HttpApiConnector,
             WebhookConnector,
             FishAudioConnector,

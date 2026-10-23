@@ -2,7 +2,7 @@
 
 ## Grundsätze
 1. **Lokal zuerst:** Alle Dienste binden an `127.0.0.1`. Keine Daten verlassen den Mac außer an explizit eingerichtete Dienste
-   (Lexware, Google, Telegram, GitHub, Fish Audio, Twilio).
+   (Lexware, Google, Telegram, GitHub, Vercel, Fish Audio, Twilio).
 2. **Jede Aktion läuft durch eine Stelle:** `ToolExecutor` – unabhängig davon, ob Hermes, ein Playbook, Telegram, das Telefon
    oder der Scheduler sie auslöst.
 3. **Defense in Depth:** Die Swift-Bridge prüft Token, Not-Aus, eine eigene Policy-Datei und Rate-Limits zusätzlich.
@@ -51,6 +51,11 @@ Overrides in `permissions.yaml` können Risiken nur **erhöhen**.
 ## Zugangsdaten
 - macOS-Schlüsselbund (Dienst `jarvis`) über `keyring`; auf Servern alternativ `JARVIS_SECRET_<NAME>`-Umgebungsvariablen.
 - API liefert nur „gesetzt/fehlt“, nie Werte. Logs und Audit schwärzen token-artige Zeichenketten und sensible Schlüssel.
+- Vercel: Token (`vercel-token`) nur im Authorization-Header gegen `api.vercel.com`; Fehlermeldungen enthalten nie Request
+  oder Header, `VERCEL_TOKEN`/`JARVIS_SECRET_*` werden aus der Umgebung von Coding-Jobs und git-Aufrufen entfernt.
+  `vercel_deploy` ist `high`; Werte von Umgebungsvariablen erscheinen weder im Freigabe-Text noch im Audit-Log
+  (nur Namen), `secret:<name>` liest sie direkt aus dem Schlüsselbund. Lokale Deploys nur aus Projekten, Workspaces und
+  freigegebenen `allowed_roots`; `.env*`-Dateien werden nie hochgeladen.
 - Gerätetokens: nur SHA-256-Hash in der DB; Klartext einmalig bei der Kopplung bzw. als 0600-Datei für lokale Komponenten.
 - Agent: Claude Code läuft mit `--restricted` (keine Benutzer-/Projekt-Settings, Hooks, Plugins), `--tools ""` (kein Datei-/
   Shell-Zugriff), `--strict-mcp-config` mit ausschließlich dem Jarvis-MCP-Server und `--allowedTools mcp__jarvis`.
@@ -62,7 +67,8 @@ Overrides in `permissions.yaml` können Risiken nur **erhöhen**.
 
 ## Isolierte Coding-Jobs
 - Eigener Git-Worktree je Job, nur auf `jarvis/*`-Branches. Die Auslieferung nach einem **grünen** Job (Push des Job-Branches,
-  PR, Merge nach `main`, Supabase-Deploy) läuft als Standard automatisch im Runner (`coding.auto_ship`, abschaltbar) –
+  PR, Merge nach `main`, Supabase-Deploy, Vercel-Deploy bei `vercel.json`/Vercel-Link und aktivem Connector – abschaltbar
+  über `deploy_after_merge`) läuft als Standard automatisch im Runner (`coding.auto_ship`, abschaltbar) –
   ohne Einzelfreigabe, aber nie bei rotem Ergebnis oder Fehler, nie per Direkt-Push auf `main`, und jeder Lauf wird als
   `coding.ship` auditiert. Rote, fehlgeschlagene oder abgebrochene Jobs pushen nur ihren `jarvis/*`-Branch (Sicherung).
   Nach dem Merge löscht der Runner nur den eigenen `jarvis/*`-Branch und den Worktree im Jarvis-Workspace, und nur wenn
