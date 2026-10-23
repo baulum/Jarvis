@@ -10,6 +10,7 @@ import {
   KeyRound,
   ListChecks,
   MessagesSquare,
+  MonitorSmartphone,
   Plug,
   ScrollText,
   Settings2,
@@ -51,6 +52,7 @@ export const NAV_GROUPS: NavItem[][] = [
     { id: "logs", label: "Live-Logs", icon: ScrollText, hint: "Protokoll des Cores in Echtzeit" },
     { id: "system", label: "Systemstatus", icon: Cpu, hint: "Komponenten, Ressourcen, Verbrauch" },
     { id: "permissions", label: "Berechtigungen", icon: KeyRound, hint: "Rollen, Risikostufen, macOS-Rechte" },
+    { id: "devices", label: "Geräte & Plattform", icon: MonitorSmartphone, hint: "Device Agents, Fähigkeiten des Core-Hosts, Verbindung" },
     { id: "settings", label: "Einstellungen", icon: Settings2, hint: "Konfiguration und Geräte" },
   ],
 ];

@@ -91,6 +91,9 @@ export interface SystemStatus {
   voice?: VoiceState;
   hermes_restarts?: number;
   agent?: { provider: string; model?: string; active_sessions?: number; standby_ready?: boolean; last_error?: string | null; routing?: AgentModelStatus };
+  /** OS of the Core host (full status only; older cores omit it). */
+  platform?: PlatformInfo;
+  devices?: DeviceAgent[];
 }
 
 export interface ChatSessionInfo {
@@ -402,7 +405,9 @@ export interface PermissionsResponse {
   taint_requires_approval: boolean;
   shell_allowlist: string[];
   rate_limits: Record<string, number>;
-  tools: { name: string; connector: string; risk: Risk; enabled: boolean; auto_for_owner: boolean }[];
+  tools: { name: string; connector: string; risk: Risk; enabled: boolean; auto_for_owner: boolean; unavailable_reason?: string | null }[];
+  /** OS of the Core host (older cores: missing → treated as macOS). */
+  platform?: "mac" | "windows" | "linux";
   macos: {
     bridge?: "ok" | "offline" | string;
     accessibility?: unknown;
@@ -601,4 +606,54 @@ export interface BackupStatus {
   recent_enough: boolean;
   last: { ok?: boolean; ok_at?: string; file?: string; size?: number; duration_s?: number; error?: string; failed_at?: string };
   files: { file: string; size: number; modified: string }[];
+}
+
+export type CapabilityStatus = "available" | "degraded" | "unavailable";
+
+export interface CapabilityState {
+  status: CapabilityStatus;
+  reason: string;
+  label: string;
+}
+
+export interface PlatformInfo {
+  id: "mac" | "windows" | "linux";
+  label: string;
+  headless: boolean;
+  session: string;
+  system: string;
+  release: string;
+  machine: string;
+  hostname: string;
+  file_manager: string;
+}
+
+export interface DeviceAgent {
+  id: string;
+  name: string;
+  online: boolean;
+  platform?: string | null;
+  os?: string | null;
+  hostname?: string | null;
+  agent_version?: string | null;
+  session?: string | null;
+  connected_at?: number;
+  last_seen?: number;
+  capabilities: Record<string, { status: CapabilityStatus; reason: string; label?: string }>;
+}
+
+export interface SystemCapabilities {
+  platform: PlatformInfo;
+  capabilities: Record<string, CapabilityState>;
+  unavailable_tools: { name: string; connector: string; reason: string }[];
+  devices: DeviceAgent[];
+}
+
+export interface AgentPairing {
+  code: string;
+  expires_at: number;
+  urls: string[];
+  fingerprint: string | null;
+  protocol: number;
+  command: string;
 }

@@ -30,6 +30,7 @@ from jarvis.db.models import Approval, AuditEntry, Call, ChatSession, CodingJob,
 from jarvis.desktop_build import desktop_build_status
 from jarvis.events import bus, spawn
 from jarvis.logging_setup import ring
+from jarvis.platform import get_adapter
 from jarvis.security.audit import audit, verify_chain
 from jarvis.security.auth import Principal, create_device, list_devices, revoke_device
 from jarvis.security.guards import rate_limiter
@@ -66,6 +67,29 @@ async def system_status(st: AppState = StateDep, p: Principal = Reader) -> dict[
 async def desktop_build(commit: str = Query(default="", max_length=40), p: Principal = Reader) -> dict[str, Any]:
     """Is the desktop app older than the UI code in the repository the core runs from? (see desktop_build)"""
     return await desktop_build_status(REPO_ROOT, commit.strip().lower())
+
+
+@router.get("/system/capabilities")
+async def system_capabilities(
+    refresh: bool = False, st: AppState = StateDep, p: Principal = Reader
+) -> dict[str, Any]:
+    """What this Core host can do (capability flags with reasons), which tools are unavailable here and why,
+    and the connected Jarvis Device Agents with their own capabilities."""
+    adapter = get_adapter()
+    report = adapter.capabilities(refresh=refresh)
+    if refresh:
+        st.registry.set_capabilities(report)
+    unavailable = [
+        {"name": t.name, "connector": t.connector, "reason": why}
+        for t in st.registry.all(include_disabled=True)
+        if (why := st.registry.unavailable_reason(t)) is not None
+    ]
+    return {
+        "platform": adapter.info(),
+        "capabilities": report.to_dict(),
+        "unavailable_tools": unavailable,
+        "devices": st.device_hub.describe(),
+    }
 
 
 @router.get("/system/greeting")
@@ -315,8 +339,10 @@ async def media_file(kind: str, name: str, st: AppState = StateDep, p: Principal
 async def media_reveal(kind: str, name: str, st: AppState = StateDep, p: Principal = Owner) -> dict[str, bool]:
     """Shows a generated file or an attachment in the Finder (``open -R``) – same name-only rule as above."""
     path = _chat_file(st, kind, name, images_only=False)
+    if sys.platform != "darwin":
+        return await _reveal_elsewhere(path)
     exe = shutil.which("open")
-    if sys.platform != "darwin" or exe is None:
+    if exe is None:
         raise HTTPException(501, "„Im Finder zeigen“ gibt es nur auf dem Mac.")
     proc = await asyncio.create_subprocess_exec(
         exe, "-R", str(path), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
@@ -328,6 +354,28 @@ async def media_reveal(kind: str, name: str, st: AppState = StateDep, p: Princip
         code = -1
     if code != 0:
         raise HTTPException(500, "Der Finder konnte die Datei nicht zeigen.")
+    return {"ok": True}
+
+
+async def _reveal_elsewhere(path: Path) -> dict[str, bool]:
+    """Windows (Explorer ``/select``) and Linux (FileManager1 over D-Bus, else the folder via xdg-open)."""
+    adapter = get_adapter()
+    report = adapter.capabilities()
+    argv = adapter.reveal_command(path)
+    if argv is None or not report.usable("desktop.reveal"):
+        why = report.reason("desktop.reveal") or "kein Dateimanager gefunden"
+        raise HTTPException(501, f"„Im {adapter.file_manager} zeigen“ ist auf diesem System nicht verfügbar: {why}")
+    proc = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+    )
+    try:
+        code = await asyncio.wait_for(proc.wait(), 10)
+    except TimeoutError:
+        proc.kill()
+        code = -1
+    # explorer.exe answers 1 even when it worked – only a timeout counts as failure there
+    if code != 0 and not (adapter.id == "windows" and code == 1):
+        raise HTTPException(500, f"Der {adapter.file_manager} konnte die Datei nicht zeigen.")
     return {"ok": True}
 
 
@@ -563,6 +611,7 @@ async def tools(st: AppState = StateDep, p: Principal = Reader) -> list[dict[str
             "writes": t.writes,
             "untrusted_output": t.untrusted_output,
             "parameters": t.parameters,
+            "unavailable_reason": st.registry.unavailable_reason(t),
         }
         for t in st.registry.all(include_disabled=True)
     ]
@@ -1016,10 +1065,12 @@ async def permissions(st: AppState = StateDep, p: Principal = Reader) -> dict[st
                 "enabled": st.registry.is_enabled(t),
                 "auto_for_owner": RISK_ORDER[st.registry.effective_risk(t)]
                 <= RISK_ORDER[perms.roles["owner"].auto_approve],
+                "unavailable_reason": st.registry.unavailable_reason(t),
             }
             for t in st.registry.all(include_disabled=True)
         ],
         "macos": macos,
+        "platform": get_adapter().id,
     }
 
 

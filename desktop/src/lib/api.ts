@@ -16,7 +16,9 @@ import type {
   ConnectorHealth,
   ConnectorsResponse,
   AgentMessageResult,
+  AgentPairing,
   Device,
+  DeviceAgent,
   JobMonitor,
   KillSwitchState,
   LogEntry,
@@ -31,6 +33,7 @@ import type {
   ScheduleCreate,
   SettingsResponse,
   SkillsResponse,
+  SystemCapabilities,
   SystemStatus,
   Task,
   ToolInfo,
@@ -94,6 +97,8 @@ type Fetch = typeof fetch;
 
 export interface ApiOptions {
   baseUrl?: string;
+  /** Read on every request: the Core address can change after start (remote Core, browser client). */
+  getBaseUrl?: () => string;
   getToken: () => string | null;
   fetchImpl?: Fetch;
   timeoutMs?: number;
@@ -127,7 +132,7 @@ export function createApi(opts: ApiOptions) {
     const timer = setTimeout(() => ctrl.abort(), waitMs);
     let res: Response;
     try {
-      res = await doFetch(buildUrl(baseUrl, path, query), {
+      res = await doFetch(buildUrl(opts.getBaseUrl?.() ?? baseUrl, path, query), {
         method,
         headers,
         body: body === undefined ? undefined : binary ? body : JSON.stringify(body),
@@ -196,7 +201,7 @@ export function createApi(opts: ApiOptions) {
     /** A generated image/video or an image attachment (authenticated, so it is loaded as a Blob, not via <img src>). */
     media: async (kind: ChatFileKind, file: string): Promise<Blob> =>
       (await raw("GET", `/media/${kind}/${id(file)}`, undefined, undefined, 120_000)).blob(),
-    /** Shows the file in the Finder (the core runs `open -R` after the same name-only check). */
+    /** Shows the file in the Core host's file manager (Finder `open -R`, Explorer, …) after the same name-only check. */
     revealMedia: (kind: ChatFileKind, file: string) => post<{ ok: boolean }>(`/media/${kind}/${id(file)}/reveal`),
 
     // approvals
@@ -267,6 +272,13 @@ export function createApi(opts: ApiOptions) {
     requestMacPermission: (kind: "accessibility" | "screenRecording") =>
       post<Record<string, unknown>>(`/permissions/macos/${kind}`),
     devices: () => get<Device[]>("/devices"),
+    /** What the Core host can do (capability flags with reasons) and the connected device agents. */
+    capabilities: (refresh = false) => get<SystemCapabilities>("/system/capabilities", { refresh }),
+    deviceAgents: () => get<DeviceAgent[]>("/devices/agents"),
+    createAgentPairing: (name: string) => post<AgentPairing>("/devices/agents/pairing", { name }),
+    revokeAgent: (did: string) => del<{ revoked: boolean }>(`/devices/agents/${id(did)}`),
+    deviceCommand: (device: string, action: string, args: Record<string, unknown> = {}) =>
+      post<{ ok: boolean; data: unknown }>(`/devices/agents/${id(device)}/command`, { action, args }),
     createDevice: (name: string, role: string) => post<{ id: string; token: string }>("/devices", { name, role }),
     revokeDevice: (did: string) => del<{ revoked: boolean }>(`/devices/${id(did)}`),
     settings: () => get<SettingsResponse>("/settings"),

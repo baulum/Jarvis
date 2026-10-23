@@ -1,0 +1,56 @@
+[project]
+name = "jarvis-device"
+version = "0.1.0"
+description = "Jarvis Device Agent: lets the Jarvis Core Server control this computer (Windows, Linux, macOS)"
+requires-python = ">=3.11"
+dependencies = [
+    "websockets>=14",
+    "psutil>=6.1",
+    "mss>=9",
+    "pillow>=11",
+]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.49"]
+
+[project.scripts]
+jarvis-device = "jarvis_device.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jarvis_device"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+addopts = "--import-mode=importlib"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S", "RUF"]
+ignore = ["S101", "S603", "S607", "RUF001", "RUF002", "RUF003", "ASYNC109", "ASYNC220", "ASYNC240"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B", "E501", "RUF059", "ASYNC109"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+warn_unused_ignores = false

@@ -1,0 +1,24 @@
+# Windows overlay: loaded on top of config/jarvis.yaml when the Core Server runs on Windows
+# (never on the Mac). Only what differs from the Mac lives here; environment variables
+# JARVIS__SECTION__KEY still win over both files.
+
+paths:
+  data_dir: ~/AppData/Roaming/Jarvis
+  log_dir: ~/AppData/Local/Jarvis/Logs
+  vault_dir: ~/Documents/Jarvis Vault           # Obsidian vault (the installer checks that Obsidian is installed)
+  workspaces_dir: ~/Jarvis/Workspaces
+  projects_dir: ~/Jarvis/Projects
+
+voice:
+  tts:
+    # Piper server (scripts/local-tts/piper_server.py, model downloaded by the installer) on the same port as the
+    # Mac's Qwen3 server; while it is down Fish Audio (if active) and then the Windows SAPI voice take over.
+    provider: local
+    macos_voice: ""            # SAPI: empty = first installed German voice (Hedda/Katja)
+  native_audio: false          # the Swift audio helper only exists on macOS – sounddevice is used
+
+browser:
+  engine: edge                 # Edge ships with Windows 10/11
+
+backup:
+  directory: ~/Backups/Jarvis

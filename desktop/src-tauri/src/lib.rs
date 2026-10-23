@@ -1,7 +1,8 @@
 //! Native shell for the J.A.R.V.I.S. command center.
 //!
 //! Responsibilities kept deliberately small:
-//! - hand the owner token (read from disk, never logged) to the webview,
+//! - hand the owner token (read from disk, never logged) to the webview – or, as a client of a
+//!   remote Core (`client.json`, over Tailscale), its address and token,
 //! - menu bar (tray) icon with quick actions,
 //! - global shortcut to summon the window,
 //! - hide-to-tray on close, optional launch at login.
@@ -28,6 +29,31 @@ fn get_core_token() -> Result<String, String> {
     let token = core_client::read_token()?;
     println!("[jarvis-desktop] core token loaded ({} chars)", token.len());
     Ok(token)
+}
+
+/// Where the webview finds the Core: `{"core_url": null, "token": …}` for the local Core (always on the Mac
+/// unless a client.json exists), or the remote Core's address and token. The token is never logged.
+#[tauri::command]
+fn get_core_connection() -> Result<serde_json::Value, String> {
+    if let Some(remote) = core_client::remote_core() {
+        println!("[jarvis-desktop] remote core {} ({} chars token)", remote.core_url, remote.token.len());
+        return Ok(serde_json::json!({ "core_url": remote.core_url, "token": remote.token, "remote": true }));
+    }
+    let token = core_client::read_token()?;
+    println!("[jarvis-desktop] core token loaded ({} chars)", token.len());
+    Ok(serde_json::json!({ "core_url": null, "token": token, "remote": false }))
+}
+
+/// Saves the remote Core this app connects to (connection form in the app); effective after a restart.
+#[tauri::command]
+fn set_core_connection(core_url: String, token: String) -> Result<(), String> {
+    core_client::save_remote(&core_url, &token)
+}
+
+/// Back to the local Core (removes client.json).
+#[tauri::command]
+fn clear_core_connection() -> Result<(), String> {
+    core_client::clear_remote()
 }
 
 /// Lets the frontend write short diagnostic lines to stdout (used for headless smoke tests).
@@ -84,12 +110,25 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 });
                 let handle = app.clone();
                 let body = format!("{{\"action\":\"{action}\"}}");
+                if core_client::is_remote() {
+                    delegate(app, action, "/api/voice/command", &body);
+                    return;
+                }
                 std::thread::spawn(move || {
                     let outcome = core_client::post_json("/api/voice/command", &body);
                     report(&handle, action, outcome);
                 });
             }
             "killswitch" => {
+                if core_client::is_remote() {
+                    delegate(
+                        app,
+                        "killswitch",
+                        "/api/system/killswitch",
+                        r#"{"engaged":true,"reason":"Not-Aus über die Menüleiste"}"#,
+                    );
+                    return;
+                }
                 let handle = app.clone();
                 std::thread::spawn(move || {
                     let outcome = core_client::post_json(
@@ -116,6 +155,16 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         })
         .build(app)?;
     Ok(())
+}
+
+/// Remote Core: the webview sends the request over HTTPS (Rust here only speaks plain HTTP to the loopback core).
+fn delegate(app: &AppHandle, action: &str, path: &str, body: &str) {
+    show_main_window(app);
+    let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or(serde_json::Value::Null);
+    let _ = app.emit(
+        "tray-request",
+        serde_json::json!({ "action": action, "path": path, "body": parsed }),
+    );
 }
 
 /// Forwards the outcome of a tray action to the webview (toast + refresh) and stdout.
@@ -154,14 +203,23 @@ pub fn run() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![get_core_token, frontend_log])
+        .invoke_handler(tauri::generate_handler![
+            get_core_token,
+            get_core_connection,
+            set_core_connection,
+            clear_core_connection,
+            frontend_log
+        ])
         .setup(move |app| {
             build_tray(app)?;
             launcher::start_services(app.handle());
             if let Err(e) = app.global_shortcut().register(summon) {
                 eprintln!("[jarvis-desktop] global shortcut Cmd+Shift+J unavailable: {e}");
             }
-            println!("[jarvis-desktop] started, core at {}", core_client::CORE_ADDR);
+            match core_client::remote_core() {
+                Some(remote) => println!("[jarvis-desktop] started, remote core at {}", remote.core_url),
+                None => println!("[jarvis-desktop] started, core at {}", core_client::CORE_ADDR),
+            }
             Ok(())
         })
         .on_window_event(|window, event| {

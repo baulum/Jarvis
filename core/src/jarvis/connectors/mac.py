@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
 import time
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,9 @@ from jarvis.tools.executor import ToolUserError
 from jarvis.tools.registry import ToolContext, ToolSpec
 
 BRIDGE_URL = "http://127.0.0.1:8766"
+# Only the MacAdapter reports this capability: on Windows/Linux the mac_* tools are "nicht verfügbar" (with the
+# reason) instead of failing with "JarvisBridge läuft nicht"; there the Device Agent's device_* tools take over.
+REQUIRES = ("host.macos_bridge",)
 
 
 def _obj(props: dict[str, Any], req: list[str] | None = None) -> dict[str, Any]:
@@ -241,7 +245,7 @@ class MacConnector(Connector):
             return await b().request("POST", "/applescript", {"source": a["source"]})
 
         S = "mac"
-        return [
+        specs = [
             ToolSpec("mac_list_apps", "Listet laufende Programme.", _obj({}), list_apps, "read", S),
             ToolSpec(
                 "mac_open_app",
@@ -430,6 +434,7 @@ class MacConnector(Connector):
                 summarize=lambda a: f"AppleScript ausführen: {a['source'][:120]}",
             ),
         ]
+        return [dataclasses.replace(t, requires=REQUIRES) for t in specs]
 
 
 def _compact_tree(node: dict[str, Any], depth: int = 0) -> dict[str, Any]:

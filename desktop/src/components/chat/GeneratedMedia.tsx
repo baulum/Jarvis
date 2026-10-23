@@ -3,7 +3,7 @@
 // inline. Under each file: its name and "Im Finder zeigen". A file that cannot be loaded says why, with a retry.
 import { FolderOpen, ImageOff, Loader2, Maximize2, RotateCw } from "lucide-react";
 import { useCallback, useState } from "react";
-import { useChatFile, useRevealInFinder } from "../../hooks/useChatFile";
+import { useChatFile, useFileManager, useRevealInFinder } from "../../hooks/useChatFile";
 import type { MediaDisplay } from "../../lib/timeline";
 import { IconButton } from "../ui";
 import { Lightbox } from "./Lightbox";
@@ -19,6 +19,7 @@ export function GeneratedMedia({ display, compact = false }: { display: MediaDis
   const [zoom, setZoom] = useState(false);
   const close = useCallback(() => setZoom(false), []);
   const reveal = useRevealInFinder();
+  const manager = useFileManager();
   const image = display.kind === "image";
   const what = image ? "Bild" : "Video";
   const maxH = compact ? "max-h-48" : "max-h-[26rem]";
@@ -60,9 +61,11 @@ export function GeneratedMedia({ display, compact = false }: { display: MediaDis
       <span className="type-data min-w-0 flex-1 truncate text-ink-faint" title={display.file}>
         {display.file}
       </span>
-      <IconButton label="Im Finder zeigen" onClick={() => reveal(display.media, display.file)} className="size-6">
-        <FolderOpen className="size-3.5" />
-      </IconButton>
+      {manager && (
+        <IconButton label={`Im ${manager} zeigen`} onClick={() => reveal(display.media, display.file)} className="size-6">
+          <FolderOpen className="size-3.5" />
+        </IconButton>
+      )}
     </div>
   );
 
@@ -95,7 +98,7 @@ export function GeneratedMedia({ display, compact = false }: { display: MediaDis
         <Maximize2 className="absolute top-2 right-2 size-3.5 text-ink opacity-0 drop-shadow transition-opacity group-hover:opacity-80" aria-hidden />
       </button>
       {actions}
-      {zoom && <Lightbox url={url} alt={alt} caption={display.prompt} onClose={close} onReveal={() => reveal(display.media, display.file)} />}
+      {zoom && <Lightbox url={url} alt={alt} caption={display.prompt} onClose={close} revealLabel={manager ? `Im ${manager} zeigen` : undefined} onReveal={manager ? () => reveal(display.media, display.file) : undefined} />}
     </figure>
   );
 }

@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { IconButton } from "../ui";
 
-export function Lightbox({ url, alt, caption, onClose, onReveal }: { url: string; alt: string; caption?: string; onClose: () => void; onReveal?: () => void }) {
+export function Lightbox({ url, alt, caption, onClose, onReveal, revealLabel = "Im Finder zeigen" }: { url: string; alt: string; caption?: string; onClose: () => void; onReveal?: () => void; revealLabel?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
@@ -28,7 +28,7 @@ export function Lightbox({ url, alt, caption, onClose, onReveal }: { url: string
     >
       <div className="absolute top-4 right-4 flex items-center gap-1 rounded-md bg-plate/80">
         {onReveal && (
-          <IconButton label="Im Finder zeigen" onClick={onReveal}>
+          <IconButton label={revealLabel} onClick={onReveal}>
             <FolderOpen className="size-4" />
           </IconButton>
         )}

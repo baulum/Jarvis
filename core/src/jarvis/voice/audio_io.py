@@ -18,6 +18,7 @@ import contextlib
 import json
 import logging
 import struct
+import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -300,6 +301,38 @@ class FallbackAudio(AudioIO):
             self.stream.close()
 
 
+class SounddeviceAudio(FallbackAudio):
+    """Windows/Linux: microphone *and* speaker over sounddevice (PortAudio) – ``afplay`` only exists on macOS.
+
+    Same block-wise playback with fades as ``FallbackAudio``; ``flush`` stops the output stream at once."""
+
+    async def _afplay(self, pcm: bytes) -> None:
+        import sounddevice as sd
+
+        audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+        fade = min(int(PLAY_RATE * 0.006), len(audio) // 2)
+        if fade > 0:
+            ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+            audio[:fade] *= ramp
+            audio[-fade:] *= ramp[::-1]
+        self.out_level = float(min(1.0, np.sqrt(np.mean(audio**2)) / 8000)) if audio.size else 0.0
+        try:
+            sd.play(np.clip(audio, -32768, 32767).astype(np.int16), PLAY_RATE, blocking=False)
+            await asyncio.to_thread(sd.wait)
+        finally:
+            self.out_level = 0.0
+
+    async def flush(self) -> None:
+        self._stop.set()
+        while not self._q.empty():
+            self._q.get_nowait()
+        with contextlib.suppress(Exception):
+            import sounddevice as sd
+
+            sd.stop()
+        self._idle.set()
+
+
 def helper_path(data_dir: Path) -> Path:
     return data_dir / "bin" / "jarvis-audio"
 
@@ -315,6 +348,6 @@ async def open_audio(data_dir: Path, on_mic: MicCallback, *, native: bool = True
         except Exception as e:
             logger.warning("Native audio unavailable (%s); falling back to sounddevice/afplay", e)
             await audio.stop()
-    fb = FallbackAudio()
+    fb = FallbackAudio() if sys.platform == "darwin" else SounddeviceAudio()
     await fb.start(on_mic)
     return fb

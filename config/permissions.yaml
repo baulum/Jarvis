@@ -121,6 +121,64 @@ shell_allowlist:
   - pmset
   - networksetup
 
+# Own allowlist per Core host OS. The Mac has no entry here: shell_allowlist above stays its list.
+# Windows: no `find` (find.exe is a different program) and no Unix tools; .cmd/.bat shims (npm, pnpm, npx)
+# additionally refuse cmd.exe metacharacters in their arguments.
+shell_allowlist_by_platform:
+  windows:
+    - rg
+    - git
+    - npm
+    - pnpm
+    - node
+    - python
+    - py
+    - uv
+    - flutter
+    - dart
+    - gh
+    - supabase
+    - npx
+    - adb
+    - docker
+    - winget
+    - where
+    - whoami
+    - hostname
+    - ipconfig
+    - systeminfo
+    - tasklist
+  linux:
+    - ls
+    - pwd
+    - grep
+    - rg
+    - find
+    - cat
+    - head
+    - tail
+    - wc
+    - git
+    - npm
+    - pnpm
+    - node
+    - python3
+    - uv
+    - flutter
+    - dart
+    - gh
+    - supabase
+    - npx
+    - adb
+    - docker
+    - df
+    - du
+    - free
+    - uptime
+    - uname
+    - lsb_release
+    - xdg-open
+
 rate_limits:
   tool_calls_per_minute: 60
   high_risk_per_hour: 30

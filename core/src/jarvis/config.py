@@ -117,7 +117,8 @@ class LocalTtsCfg(_Strict):
 
 
 class TtsCfg(_Strict):
-    provider: Literal["macos", "fish_audio", "local"] = "macos"
+    # "system": the OS voice of this host (macOS say, Windows SAPI, Linux espeak-ng); "macos" means the same.
+    provider: Literal["macos", "fish_audio", "local", "system"] = "macos"
     macos_voice: str = "Anna"
     rate: int = 185
     fish_audio: FishAudioCfg = Field(default_factory=FishAudioCfg)
@@ -344,6 +345,31 @@ class CreativeCfg(_Strict):
     video_timeout_s: int = Field(default=600, ge=60, le=3600)
 
 
+class DevicesCfg(_Strict):
+    """Jarvis Device Agents (Windows/Linux/Mac computers Jarvis controls remotely, see device_agent/)."""
+
+    enabled: bool = True
+    command_timeout_s: float = Field(default=60, ge=5, le=900)  # default wait for one device command
+    pairing_ttl_s: int = Field(default=600, ge=60, le=3600)
+
+
+class ClientsCfg(_Strict):
+    """Clients that do not run next to the Core (desktop app on another PC, browser) – over Tailscale.
+
+    ``remote_api``: the TLS gateway (:8767) also serves the full client API (not only the phone paths); every
+    request still needs a device token. ``web_client``: the Core serves the browser client (``desktop/dist``)
+    at ``/app`` – sign-in with a device token. Both are off by default: the Mac setup is unchanged."""
+
+    remote_api: bool = False
+    web_client: bool = False
+    web_client_dir: Path | None = None  # default: <repo>/desktop/dist
+
+    @field_validator("web_client_dir", mode="before")
+    @classmethod
+    def _exp(cls, v: Any) -> Path | None:
+        return _expand(v) if v else None
+
+
 class Settings(_Strict):
     server: ServerCfg = Field(default_factory=ServerCfg)
     paths: PathsCfg
@@ -361,6 +387,8 @@ class Settings(_Strict):
     mobile: MobileCfg = Field(default_factory=MobileCfg)
     backup: BackupCfg = Field(default_factory=BackupCfg)
     creative: CreativeCfg = Field(default_factory=CreativeCfg)
+    devices: DevicesCfg = Field(default_factory=DevicesCfg)
+    clients: ClientsCfg = Field(default_factory=ClientsCfg)
 
 
 class Personality(_Strict):
@@ -401,6 +429,8 @@ class Permissions(_Strict):
     approval_ttl_minutes: int = 1440
     tools: dict[str, ToolOverride] = Field(default_factory=dict)
     shell_allowlist: list[str] = Field(default_factory=list)
+    # Own list per host OS ("windows", "linux"); without an entry for the host, shell_allowlist applies (the Mac).
+    shell_allowlist_by_platform: dict[str, list[str]] = Field(default_factory=dict)
     rate_limits: RateLimitsCfg = Field(default_factory=RateLimitsCfg)
 
     @field_validator("roles")
@@ -440,8 +470,35 @@ def _apply_env_overrides(data: dict[str, Any], environ: dict[str, str] | None = 
     return data
 
 
+def _deep_merge(base: dict[str, Any], top: dict[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    for key, value in top.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def platform_overlay(environ: dict[str, str] | None = None) -> Path | None:
+    """``config/platform/<windows|linux>.yaml``: paths and defaults of that OS on top of ``jarvis.yaml``.
+
+    The Mac never has an overlay – there ``jarvis.yaml`` is the whole configuration, as before."""
+    from jarvis.platform import detect_platform_id
+
+    pid = detect_platform_id(environ)
+    if pid == "mac":
+        return None
+    path = CONFIG_DIR / "platform" / f"{pid}.yaml"
+    return path if path.is_file() else None
+
+
 def load_settings(environ: dict[str, str] | None = None) -> Settings:
-    return Settings.model_validate(_apply_env_overrides(_load_yaml("jarvis.yaml"), environ))
+    data = _load_yaml("jarvis.yaml")
+    overlay = platform_overlay(environ)
+    if overlay is not None:
+        data = _deep_merge(data, _load_yaml(str(overlay.relative_to(CONFIG_DIR))))
+    return Settings.model_validate(_apply_env_overrides(data, environ))
 
 
 def load_personality() -> Personality:

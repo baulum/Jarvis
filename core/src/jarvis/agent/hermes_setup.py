@@ -163,7 +163,7 @@ class HermesSupervisor:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         log = self.log_path.open("ab")
         env = {k: v for k, v in os.environ.items() if not k.startswith("JARVIS_SECRET")}
-        env["PATH"] = f"{Path.home() / '.local/bin'}:{env.get('PATH', '')}"
+        env["PATH"] = os.pathsep.join([str(Path.home() / ".local/bin"), env.get("PATH", "")])
         return await asyncio.create_subprocess_exec(
             exe,
             "gateway",

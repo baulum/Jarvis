@@ -1,0 +1,9 @@
+# The installer is plain standard-library Python (it runs before any dependency is installed). This file only
+# carries the lint settings; its tests live in core/tests/unit/test_installer.py.
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "RUF"]
+ignore = ["S101", "S603", "S607", "S310", "RUF001", "RUF002", "RUF003"]

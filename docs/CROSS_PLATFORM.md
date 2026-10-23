@@ -5,6 +5,14 @@ Stand: 2026-10-23 · Branch `jarvis/cross-platform-audit-jarvis-au-5db89405` · 
 Ziel: Jarvis soll zusätzlich zu macOS auf Windows, Linux und später Raspberry Pi (ARM, evtl. headless) als Host laufen.
 **Das Verhalten auf macOS darf sich nicht ändern.**
 
+> **Umsetzungsstand (2026-10-23):** Sirs Entscheidungen sind umgesetzt – siehe [DISTRIBUTED.md](DISTRIBUTED.md):
+> drei Komponenten (Core Server, Client, Device Agent) über Tailscale; `PlatformAdapter` mit Capability-Flags
+> (`core/src/jarvis/platform/`, Mac = bisheriger Code, Golden-Test); Windows- und Linux-Adapter samt Behebung der
+> Absturzstellen aus Abschnitt 0 Punkt 5 (`say`-Rückfall, `os.uname`, `SIGUSR1`, `os.pathsep`, `sips`, `killpg`); Device Agent
+> für Windows/Linux/macOS (`device_agent/`); Desktop-App als Client eines entfernten Core und Browser-Client; Installer für
+> Windows/Linux. Raspberry Pi und ein Coding-Runner auf Windows bleiben bewusst offen (Fragen 3, 11). Die Tabellen unten
+> beschreiben den Stand **vor** der Umsetzung.
+
 ## Inhalt
 
 0. [Kurzfassung](#0-kurzfassung)

@@ -730,7 +730,8 @@ def spawn_bg(coro: Any) -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    faulthandler.register(signal.SIGUSR1)  # `kill -USR1 <pid>` dumps all stacks to the log (hang diagnosis)
+    if hasattr(signal, "SIGUSR1"):  # not on Windows
+        faulthandler.register(signal.SIGUSR1)  # `kill -USR1 <pid>` dumps all stacks to the log (hang diagnosis)
     asyncio.run(VoiceDaemon(get_settings()).run())
 
 

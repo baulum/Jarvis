@@ -104,6 +104,8 @@ class ToolExecutor:
         if spec is None:
             return ToolResult("error", name, message=f"Unbekanntes Werkzeug: {name}")
         if not self.registry.is_enabled(spec):
+            if (why := self.registry.unavailable_reason(spec)) is not None:
+                return ToolResult("denied", name, message=f"{name} ist auf diesem System nicht verfügbar – {why}")
             return ToolResult(
                 "denied", name, message=f"{name} ist deaktiviert oder der Connector ist nicht eingerichtet."
             )

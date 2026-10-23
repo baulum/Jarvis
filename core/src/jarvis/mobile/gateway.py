@@ -59,11 +59,34 @@ MOBILE_ROUTES: list[tuple[frozenset[str], re.Pattern[str]]] = [
     (frozenset({"POST"}), re.compile(r"^/api/voice/stt$")),
     (frozenset({"GET"}), re.compile(r"^/ws$")),
     (frozenset({"GET", "POST"}), re.compile(r"^/rtc(/.*)?$")),  # LiveKit signalling (proxied, see rtc_proxy)
+    # Jarvis Device Agents: trade the pairing code for a token, then the command WebSocket
+    (frozenset({"POST"}), re.compile(r"^/api/devices/agents/register$")),
+    (frozenset({"GET"}), re.compile(r"^/api/devices/agent/ws$")),
 ]
+
+# With ``clients.remote_api`` the gateway also serves the full client API (desktop app on another PC, browser
+# client) – every route still checks its device token. Never reachable there: webhooks without a token of their
+# own (they are for the public tunnel only) and the agent's MCP endpoint.
+REMOTE_DENIED: list[re.Pattern[str]] = [
+    re.compile(r"^/api/telephony/"),
+    re.compile(r"^/api/webhooks/"),
+    re.compile(r"^/mcp"),
+    re.compile(r"^/api/connectors/google/oauth/callback"),
+]
+REMOTE_PREFIXES = ("/api/", "/ws", "/app", "/rtc")
 
 
 def mobile_path_allowed(method: str, path: str) -> bool:
     return any(method in methods and rx.match(path) for methods, rx in MOBILE_ROUTES)
+
+
+def remote_path_allowed(method: str, path: str) -> bool:
+    """Paths of the full client API on the gateway (only with ``clients.remote_api``)."""
+    if mobile_path_allowed(method, path):
+        return True
+    if any(rx.match(path) for rx in REMOTE_DENIED):
+        return False
+    return path == "/app" or path.startswith(REMOTE_PREFIXES)
 
 
 # --------------------------------------------------------------------------- addresses
@@ -202,6 +225,7 @@ class GatewayServer:
             log_level="warning",
             access_log=False,
             ws_ping_interval=20,
+            ws_max_size=24 * 1024 * 1024,  # device agents send screenshots over their WebSocket
             proxy_headers=False,
             lifespan="off",
             **kw,

@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import base64
 import logging
+import os
 import re
 import shutil
+import struct
 import tempfile
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 import numpy as np
@@ -23,6 +27,9 @@ from jarvis.config import TtsCfg
 from jarvis.secrets import secret_store
 from jarvis.voice.audio import pcm_to_wav
 from jarvis.voice.fish_stream import FishStreamSession
+
+if TYPE_CHECKING:
+    from jarvis.platform.base import PlatformAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +226,178 @@ class MacSayTTS(TTSProvider):
             return out
 
 
+def wav_pcm(data: bytes) -> tuple[int, int, bytes]:
+    """(sample rate, channels, 16-bit PCM) of a RIFF/WAVE file. Tolerates the bogus sizes that programs write
+    when they stream WAV to stdout (espeak-ng): everything after the ``data`` header is taken as samples."""
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise ValueError("keine WAV-Daten")
+    pos, rate, channels, bits = 12, 0, 0, 0
+    while pos + 8 <= len(data):
+        cid, size = data[pos : pos + 4], struct.unpack("<I", data[pos + 4 : pos + 8])[0]
+        body = pos + 8
+        if cid == b"fmt ":
+            fmt, channels, rate = struct.unpack("<HHI", data[body : body + 8])
+            bits = struct.unpack("<H", data[body + 14 : body + 16])[0]
+            if fmt not in (1, 0xFFFE) or bits != 16:
+                raise ValueError(f"WAV-Format {fmt}/{bits} Bit wird nicht unterstützt")
+        elif cid == b"data":
+            end = len(data) if size == 0 or body + size > len(data) else body + size
+            pcm = data[body:end]
+            return rate, channels, pcm[: len(pcm) - len(pcm) % (2 * max(1, channels))]
+        pos = body + size + (size & 1)
+    raise ValueError("WAV ohne data-Block")
+
+
+def _mono_at(rate: int, channels: int, pcm: bytes, sample_rate: int) -> bytes:
+    audio = np.frombuffer(pcm, dtype=np.int16)
+    if channels > 1:
+        audio = audio.reshape(-1, channels).mean(axis=1).astype(np.int16)
+    if rate != sample_rate:
+        from jarvis.voice.audio import resample
+
+        audio = resample(audio, rate, sample_rate)
+    return audio.tobytes()
+
+
+# SAPI (System.Speech) via Windows PowerShell. The script travels as -EncodedCommand, the text on stdin and
+# voice/rate/output path in environment variables – no part of the spoken text ever becomes PowerShell code.
+_SAPI_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Speech
+$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$picked = $false
+if ($env:JARVIS_TTS_VOICE) { try { $s.SelectVoice($env:JARVIS_TTS_VOICE); $picked = $true } catch { } }
+if (-not $picked) {
+  $de = $s.GetInstalledVoices() |
+    Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.TwoLetterISOLanguageName -eq $env:JARVIS_TTS_LANG } |
+    Select-Object -First 1
+  if ($de) { $s.SelectVoice($de.VoiceInfo.Name) }
+}
+$s.Rate = [int]$env:JARVIS_TTS_RATE
+$fmt = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(
+  [int]$env:JARVIS_TTS_SAMPLE_RATE,
+  [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen,
+  [System.Speech.AudioFormat.AudioChannel]::Mono)
+$s.SetOutputToWaveFile($env:JARVIS_TTS_OUT, $fmt)
+$s.Speak([Console]::In.ReadToEnd())
+$s.Dispose()
+"""
+SAPI_RATES = (8000, 11025, 16000, 22050, 24000, 44100, 48000)
+
+
+def sapi_rate(words_per_minute: int) -> int:
+    """macOS ``say -r`` words per minute → SAPI rate (-10 … 10, 0 ≈ 180 wpm)."""
+    return max(-10, min(10, round((words_per_minute - 180) / 18)))
+
+
+class WindowsSapiTTS(TTSProvider):
+    """The Windows system voice (SAPI 5 via System.Speech) as last fallback stage, like ``say`` on the Mac."""
+
+    name = "windows_sapi"
+
+    def __init__(self, voice: str, rate: int, language: str = "de", powershell: str | None = None) -> None:
+        self.voice = voice if voice and voice != "Anna" else ""  # "Anna" is the macOS default, not a SAPI voice
+        self.rate = rate
+        self.language = language
+        self.powershell = powershell
+
+    def _exe(self) -> str | None:
+        return self.powershell or shutil.which("powershell") or shutil.which("pwsh")
+
+    async def available(self) -> bool:
+        return self._exe() is not None
+
+    def command(self) -> list[str]:
+        exe = self._exe()
+        if exe is None:
+            raise RuntimeError("PowerShell nicht gefunden (SAPI-Stimme)")
+        encoded = base64.b64encode(_SAPI_SCRIPT.encode("utf-16-le")).decode()
+        return [exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
+
+    async def synthesize(self, text: str, sample_rate: int) -> bytes:
+        rate = sample_rate if sample_rate in SAPI_RATES else 24000
+        with tempfile.TemporaryDirectory(prefix="jarvis-sapi-") as td:
+            out = Path(td) / "out.wav"
+            env = {
+                **os.environ,
+                "JARVIS_TTS_VOICE": self.voice,
+                "JARVIS_TTS_LANG": self.language,
+                "JARVIS_TTS_RATE": str(sapi_rate(self.rate)),
+                "JARVIS_TTS_SAMPLE_RATE": str(rate),
+                "JARVIS_TTS_OUT": str(out),
+            }
+            proc = await asyncio.create_subprocess_exec(
+                *self.command(),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            _, err = await proc.communicate(text.encode("utf-8"))
+            if proc.returncode != 0 or not out.is_file():
+                raise RuntimeError(f"SAPI: {err.decode(errors='replace')[:200]}")
+            wav_rate, channels, pcm = wav_pcm(out.read_bytes())
+        return _mono_at(wav_rate, channels, pcm, sample_rate)
+
+
+class EspeakTTS(TTSProvider):
+    """espeak-ng (Linux) as last fallback stage; robotic, but always offline and tiny."""
+
+    name = "espeak"
+
+    def __init__(self, voice: str, rate: int, language: str = "de") -> None:
+        self.voice = voice if voice and voice != "Anna" else language
+        self.rate = rate
+
+    def _exe(self) -> str | None:
+        return shutil.which("espeak-ng") or shutil.which("espeak")
+
+    async def available(self) -> bool:
+        return self._exe() is not None
+
+    def command(self) -> list[str]:
+        exe = self._exe()
+        if exe is None:
+            raise RuntimeError("espeak-ng ist nicht installiert")
+        return [exe, "-v", self.voice, "-s", str(max(80, min(450, self.rate))), "--stdout", "--stdin"]
+
+    async def synthesize(self, text: str, sample_rate: int) -> bytes:
+        proc = await asyncio.create_subprocess_exec(
+            *self.command(),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await proc.communicate(text.encode("utf-8"))
+        if proc.returncode != 0:
+            raise RuntimeError(f"espeak-ng: {err.decode(errors='replace')[:200]}")
+        rate, channels, pcm = wav_pcm(out)
+        return _mono_at(rate, channels, pcm, sample_rate)
+
+
+class SilentTTS(TTSProvider):
+    """No voice on this host (headless server without espeak/SAPI): replies stay text-only, nothing crashes."""
+
+    name = "none"
+
+    async def available(self) -> bool:
+        return False
+
+    async def synthesize(self, text: str, sample_rate: int) -> bytes:
+        return b""
+
+
+def system_tts(cfg: TtsCfg, adapter: PlatformAdapter, language: str = "de") -> TTSProvider:
+    """The OS voice of this host – on the Mac exactly the previous ``MacSayTTS``."""
+    if adapter.id == "mac":
+        return MacSayTTS(cfg.macos_voice, cfg.rate)
+    if adapter.id == "windows":
+        return WindowsSapiTTS(cfg.macos_voice, cfg.rate, language)
+    espeak = EspeakTTS(cfg.macos_voice, cfg.rate, language)
+    return espeak if espeak._exe() else SilentTTS()
+
+
 class FishAudioTTS(TTSProvider):
     name = "fish_audio"
     SUPPORTED_RATES = (8000, 16000, 24000, 32000, 44100)
@@ -402,16 +581,22 @@ def _fish_error(text: str) -> str:
 
 
 class TTSService:
-    """Selects the configured provider and falls back to macOS ``say`` when it is unavailable.
+    """Selects the configured provider and falls back to the system voice when it is unavailable.
 
     ``provider: local`` wins over the Fish Audio connector; while the local server is down, Fish Audio
-    (if the connector is active) and then ``say`` take over.
+    (if the connector is active) and then the system voice take over – macOS ``say`` on the Mac (unchanged),
+    SAPI on Windows, espeak-ng on Linux, silence (text-only replies) on a host without any voice.
     """
 
-    def __init__(self, cfg: TtsCfg, cache_dir: Path | None = None) -> None:
+    def __init__(self, cfg: TtsCfg, cache_dir: Path | None = None, adapter: PlatformAdapter | None = None) -> None:
+        from jarvis.platform import get_adapter
+
         self.cfg = cfg
         self.cache = PhraseCache(cache_dir, cfg.cache_max_chars)
+        self.adapter = adapter or get_adapter()
         self.macos = MacSayTTS(cfg.macos_voice, cfg.rate)
+        # the last stage; on the Mac it *is* ``self.macos`` (same object, same behaviour as before)
+        self.system: TTSProvider = self.macos if self.adapter.id == "mac" else system_tts(cfg, self.adapter)
         self.local = LocalTTS(cfg.local.server_url)
         self.fish = FishAudioTTS(
             cfg.fish_audio.api_key_secret,
@@ -434,14 +619,14 @@ class TTSService:
     def wanted(self) -> str:
         if self.cfg.provider == "local":
             return "local"
-        return "fish_audio" if self.fish_connector_active or self.cfg.provider == "fish_audio" else "macos"
+        return "fish_audio" if self.fish_connector_active or self.cfg.provider == "fish_audio" else self.system.name
 
     async def provider(self) -> TTSProvider:
         if self.wanted == "local" and await self.local.available():
             return self.local
         if (self.wanted == "fish_audio" or self.fish_connector_active) and await self.fish.available():
             return self.fish
-        return self.macos
+        return self.system
 
     def _voice_id(self, p: TTSProvider) -> str:
         if p is self.fish:
@@ -461,7 +646,7 @@ class TTSService:
 
     async def stream(self, text: str, sample_rate: int) -> AsyncIterator[bytes]:
         p = await self.provider()
-        key = self.cache.key(self._voice_id(p), text, sample_rate) if p is not self.macos else None
+        key = self.cache.key(self._voice_id(p), text, sample_rate) if p is not self.system else None
         if key and (hit := self.cache.get(key)) is not None:
             yield hit
             return
@@ -476,12 +661,13 @@ class TTSService:
             if p is self.fish:
                 self.fish_last_error = None
         except Exception as e:
-            if p is self.macos:
+            if p is self.system:
                 raise
             if p is self.fish:
                 self.fish_last_error = _fish_error(str(e))
-            logger.warning("TTS provider %s failed; falling back to macOS say", p.name, exc_info=True)
-            yield await self.macos.synthesize(text, sample_rate)
+            logger.warning("TTS provider %s failed; falling back to the system voice (%s)", p.name, self.system.name,
+                           exc_info=True)  # fmt: skip
+            yield await self.system.synthesize(text, sample_rate)
 
     async def synthesize(self, text: str, sample_rate: int) -> bytes:
         return b"".join([c async for c in self.stream(text, sample_rate)])

@@ -6,6 +6,7 @@ import { AgentsView } from "../views/AgentsView";
 import { ApprovalsView } from "../views/ApprovalsView";
 import { ChatView } from "../views/ChatView";
 import { ConnectorsView } from "../views/ConnectorsView";
+import { DevicesView } from "../views/DevicesView";
 import { LogsView } from "../views/LogsView";
 import { MemoryView } from "../views/MemoryView";
 import { NotificationsView } from "../views/NotificationsView";
@@ -33,6 +34,7 @@ export const SYSTEM_VIEWS: { id: string; label: string; keywords: string[]; view
   { id: "logs", label: "Live-Logs", keywords: ["protokoll", "log"], view: LogsView },
   { id: "system", label: "Systemstatus", keywords: ["ressourcen", "status", "cpu"], view: SystemView },
   { id: "permissions", label: "Berechtigungen", keywords: ["rollen", "risiko", "macos"], view: PermissionsView },
+  { id: "devices", label: "Geräte & Plattform", keywords: ["windows", "linux", "device agent", "tailscale", "verbindung", "fähigkeiten"], view: DevicesView },
   { id: "settings", label: "Einstellungen", keywords: ["geräte", "config"], view: SettingsView },
 ];
 

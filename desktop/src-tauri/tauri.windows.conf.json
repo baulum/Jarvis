@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "J.A.R.V.I.S.",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1080,
+        "minHeight": 680,
+        "center": true,
+        "decorations": true,
+        "backgroundColor": "#05080B",
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: https://tile.openstreetmap.org; media-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:8765 ws://127.0.0.1:8765 https://*.ts.net wss://*.ts.net; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: https://tile.openstreetmap.org; media-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:8765 ws://127.0.0.1:8765 https://*.ts.net wss://*.ts.net ws://localhost:1420; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
+    }
+  },
+  "bundle": {
+    "targets": ["nsis", "msi"],
+    "category": "Productivity",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["German"],
+        "displayLanguageSelector": false
+      },
+      "wix": {
+        "language": "de-DE"
+      }
+    }
+  }
+}

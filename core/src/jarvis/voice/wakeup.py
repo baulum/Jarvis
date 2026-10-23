@@ -173,15 +173,16 @@ async def play_sound(
     if error:
         return error
     p = Path(path.strip()).expanduser()
+    if sys.platform == "darwin":
+        argv: list[str] | None = [AFPLAY, "-v", f"{max(0.0, min(1.0, volume)):.2f}", str(p)]
+    else:  # Windows/Linux: the platform's player (MediaPlayer via PowerShell, ffplay, mpg123 …)
+        from jarvis.platform import get_adapter
+
+        argv = get_adapter().play_command(p, volume)
+    if argv is None:
+        return "Kein Audioplayer auf diesem System (z. B. ffplay oder mpg123 installieren)"
     try:
-        proc = await spawn(
-            AFPLAY,
-            "-v",
-            f"{max(0.0, min(1.0, volume)):.2f}",
-            str(p),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        proc = await spawn(*argv, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
     except OSError as e:
         return f"Wiedergabe nicht möglich: {e}"
     try:

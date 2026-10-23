@@ -30,6 +30,7 @@ dependencies = [
     "cryptography>=43",
     "google-auth>=2.35",
     "segno>=1.6",
+    "pillow>=11",  # image scaling where macOS sips is missing (Windows, Linux)
 ]
 
 [project.optional-dependencies]

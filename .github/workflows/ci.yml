@@ -31,6 +31,68 @@ jobs:
       # integration/e2e tests need Postgres + the running stack and stay local (`-m integration`)
       - run: uv run pytest -q tests/unit
 
+  core-platforms:
+    # The PlatformAdapter contract on the real operating systems (the main job above runs on Linux).
+    # Not blocking at first: Windows is new territory for the core.
+    name: Core unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: core/uv.lock
+      - run: uv sync --frozen
+      - run: uv run pytest -q tests/unit
+
+  device-agent:
+    name: Device Agent (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: device_agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: device_agent/uv.lock
+      - run: uv sync --frozen
+      - run: uv run ruff check src tests
+      - run: uv run mypy src
+      - run: uv run pytest -q
+
+  installer:
+    name: Installer + scripts (lint, PowerShell syntax)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uvx ruff check installer scripts/local-tts/piper_server.py --config installer/pyproject.toml
+      - run: bash -n scripts/linux/install.sh && bash -n scripts/linux/start.sh && bash -n scripts/linux/stop.sh
+      - name: PowerShell scripts parse
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($f in Get-ChildItem scripts/windows/*.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $errors | ForEach-Object { Write-Error "$($f.Name): $_" }; $failed = $true }
+          }
+          if ($failed) { exit 1 }
+
   desktop:
     name: Desktop (tsc, eslint, vitest)
     runs-on: ubuntu-latest

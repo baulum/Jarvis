@@ -7,7 +7,7 @@ import asyncio
 import base64
 import getpass
 import json
-import os
+import platform
 import subprocess
 import sys
 import wave
@@ -96,7 +96,7 @@ def cmd_init(args: argparse.Namespace) -> None:
             if path.exists() and not args.force:
                 print(f"✓ {name}-Token existiert bereits ({path})")
                 continue
-            _, token = await create_device(f"{name}@{os.uname().nodename}", role)
+            _, token = await create_device(f"{name}@{platform.node()}", role)
             print(f"✓ Gerät '{name}' ({role}) angelegt → {_write_token(name, token)}")
 
     asyncio.run(_with_db(run))
@@ -139,6 +139,10 @@ def cmd_pair(args: argparse.Namespace) -> None:
     async def run() -> None:
         _, token = await create_device(args.name, args.role)
         print(f"Gerät '{args.name}' ({args.role}) angelegt. Token (nur jetzt sichtbar):\n{token}")
+        print(
+            "\nFür die Desktop-App/den Browser auf einem anderen Rechner: Core-Adresse (Tailscale) und dieses Token "
+            "im Installer bzw. unter „Verbindung“ eintragen (siehe docs/WINDOWS.md)."
+        )
 
     asyncio.run(_with_db(run))
 
@@ -281,12 +285,13 @@ def cmd_doctor(_: argparse.Namespace) -> None:
     emb_cache = s.paths.data_dir / "models" / "fastembed"
     check("embedding model (memory)", any(emb_cache.glob("**/*.onnx")), "lädt beim ersten Start des Core (~1,1 GB)")
     # --- security hygiene
-    for name in ("desktop.token", "voice.token", "bridge.token", "agent-mcp.json"):
-        tf = s.paths.data_dir / name
-        if tf.exists():
-            mode = tf.stat().st_mode & 0o777
-            check(f"permissions {name}", mode & 0o077 == 0, f"chmod 600 '{tf}' (aktuell {mode:o})")
-    check("data dir private", s.paths.data_dir.stat().st_mode & 0o077 == 0, f"chmod 700 '{s.paths.data_dir}'")
+    if sys.platform != "win32":  # Windows protects the profile with ACLs; Unix modes mean nothing there
+        for name in ("desktop.token", "voice.token", "bridge.token", "agent-mcp.json"):
+            tf = s.paths.data_dir / name
+            if tf.exists():
+                mode = tf.stat().st_mode & 0o777
+                check(f"permissions {name}", mode & 0o077 == 0, f"chmod 600 '{tf}' (aktuell {mode:o})")
+        check("data dir private", s.paths.data_dir.stat().st_mode & 0o077 == 0, f"chmod 700 '{s.paths.data_dir}'")
     root = Path(__file__).resolve().parents[4]
     tracked = subprocess.run(
         ["git", "-C", str(root), "ls-files", ".env", ".env.local", "*.pem", "*.key", "*.token"],
@@ -354,6 +359,40 @@ def cmd_backup(a: argparse.Namespace) -> None:
     print(asyncio.run(svc.run("cli")))
 
 
+def cmd_devices(a: argparse.Namespace) -> None:
+    """Jarvis Device Agents: pairing code, list, capabilities of this Core host, revoke."""
+    if a.action == "pair":
+        info = _api("POST", "/api/devices/agents/pairing", json={"name": a.name or ""})
+        print("Kopplungscode für den Jarvis Device Agent (gültig 10 Minuten):\n")
+        print(f"  {info['code']}\n")
+        print("Auf dem zu steuernden Rechner ausführen:\n")
+        print(f"  {info['command']}\n")
+        if info.get("urls"):
+            print("Erreichbare Adressen des Core (Tailscale zuerst): " + ", ".join(info["urls"]))
+        return
+    if a.action == "list":
+        for d in _api("GET", "/api/devices/agents"):
+            missing = [c for c, st in (d.get("capabilities") or {}).items() if st.get("status") == "unavailable"]
+            state = "online " if d.get("online") else "offline"
+            print(f"{state}  {d['name']:<24} {d.get('platform') or '-':<8} {d['id']}"
+                  + (f"  (nicht verfügbar: {', '.join(missing)})" if missing else ""))  # fmt: skip
+        return
+    if a.action == "capabilities":
+        from jarvis.platform import create_adapter
+
+        adapter = create_adapter(data_dir=get_settings().paths.data_dir)
+        info = adapter.info()
+        print(f"Plattform: {info['label']} ({info['session']}, {info['machine']})")
+        for cap, st in adapter.capabilities().to_dict().items():
+            mark = {"available": "✓", "degraded": "~", "unavailable": "✗"}[st["status"]]
+            print(f"{mark} {cap:<22} {st['label']}" + (f"  – {st['reason']}" if st["reason"] else ""))
+        return
+    if a.action == "revoke":
+        if not a.name:
+            sys.exit("ID des Geräts angeben: jarvisctl devices revoke <id>")
+        print(_api("DELETE", f"/api/devices/agents/{a.name}"))
+
+
 def cmd_serve(_: argparse.Namespace) -> None:
     from jarvis.main import run
 
@@ -380,12 +419,17 @@ def main() -> None:
     sc.set_defaults(fn=cmd_secret)
     pr = sub.add_parser("pair", help="Weiteres Gerät koppeln")
     pr.add_argument("name")
-    pr.add_argument("--role", default="operator", choices=["operator", "viewer"])
+    pr.add_argument("--role", default="operator", choices=["operator", "viewer", "owner"],
+                    help="owner nur für Sirs eigene Rechner (Desktop-App auf dem Windows-PC)")
     pr.set_defaults(fn=cmd_pair)
     mp = sub.add_parser("mobile-pair", help="Smartphone (J.A.R.V.I.S.-App) koppeln: QR-Code anzeigen")
     mp.add_argument("--svg", help="QR-Code zusätzlich als SVG-Datei speichern")
     mp.set_defaults(fn=cmd_mobile_pair)
     sub.add_parser("mobile-status", help="Mobile-Status").set_defaults(fn=cmd_mobile_status)
+    dv = sub.add_parser("devices", help="Jarvis Device Agents: pair | list | capabilities | revoke")
+    dv.add_argument("action", choices=["pair", "list", "capabilities", "revoke"])
+    dv.add_argument("name", nargs="?", help="pair: Gerätename (Vorschlag); revoke: Geräte-ID")
+    dv.set_defaults(fn=cmd_devices)
     bk = sub.add_parser("backup", help="Sicherungen: run | list | key | restore")
     bk.add_argument("action", choices=["run", "list", "key", "restore"])
     bk.add_argument("file", nargs="?")

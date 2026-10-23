@@ -33,8 +33,9 @@ from typing import TYPE_CHECKING, Any
 
 from jarvis.agent.llm import AgentEvent
 from jarvis.agent.model_router import MODELS
-from jarvis.agent.persona import render_soul
+from jarvis.agent.persona import host_note, render_soul
 from jarvis.events import spawn
+from jarvis.platform.procs import terminate_group
 
 if TYPE_CHECKING:
     from jarvis.app_state import AppState
@@ -66,7 +67,7 @@ class _ProcessEnded(ClaudeUnavailable):
 
 def claude_env() -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k not in _STRIP_ENV and not k.startswith("JARVIS_SECRET")}
-    env["PATH"] = env.get("PATH", "") + ":/opt/homebrew/bin:/usr/local/bin"
+    env["PATH"] = os.pathsep.join([env.get("PATH", ""), "/opt/homebrew/bin", "/usr/local/bin"])
     return env
 
 
@@ -191,10 +192,15 @@ class ClaudeCodeAgent:
             "Claude Code weiter und nennst im Auftrag die passenden Skills – dort stehen dieselben Skills bereit.\n"
             f"Aktivierte Skills: {', '.join(skills[:80]) or 'keine'}."
         )
+        platform = getattr(self.state, "platform", None)
+        hub = getattr(self.state, "device_hub", None)
+        note = host_note(
+            getattr(platform, "id", None), getattr(platform, "label", ""), bool(getattr(hub, "has_paired", False))
+        )
         return render_soul(self.state.personality) + (
             "\n\n## Werkzeuge\nDeine Werkzeuge sind die Jarvis-Werkzeuge (Namen beginnen mit `mcp__jarvis__`) und "
             "das Skill-Werkzeug." + skill_note
-        )
+        ) + note
 
     async def reload(self) -> None:
         """Apply changed skills/persona: idle processes and the standby are restarted, busy ones finish first."""
@@ -290,7 +296,7 @@ class ClaudeCodeAgent:
         p.stop_reason = p.stop_reason or reason
         if p.alive:
             with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(p.proc.pid, signal.SIGTERM)
+                terminate_group(p.proc.pid, signal.SIGTERM)
 
     async def _kill(self, p: _Proc, reason: str) -> None:
         self._terminate(p, reason)

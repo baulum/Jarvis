@@ -16,11 +16,12 @@ export function PermissionsView() {
   if (q.error || !q.data) return <div className="p-8"><ErrorState message={q.error ?? "Keine Daten"} onRetry={q.refetch} /></div>;
   const p = q.data;
   const macos = p.macos;
+  const macCore = !p.platform || p.platform === "mac"; // older cores do not report the platform: they are Macs
 
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-[72rem] flex-col gap-6 px-8 py-6">
-        <Section title="macOS-Berechtigungen" meta={`Bridge: ${macos.bridge ?? "unbekannt"}`}>
+        {macCore && <Section title="macOS-Berechtigungen" meta={`Bridge: ${macos.bridge ?? "unbekannt"}`}>
           <ul className="divide-y divide-seam">
             {Object.entries(MAC_LABELS).map(([k, label]) => {
               const v = macos[k];
@@ -39,7 +40,7 @@ export function PermissionsView() {
             })}
           </ul>
           <p className="px-4 pb-3 text-xs text-ink-faint">Rechte werden in Systemeinstellungen › Datenschutz & Sicherheit für „JarvisBridge“ bzw. das Terminal des Voice-Daemons erteilt.</p>
-        </Section>
+        </Section>}
 
         <Section title="Rollen" meta={p.taint_requires_approval ? "Externe Inhalte erzwingen Freigaben" : undefined}>
           <table className="w-full text-sm">
@@ -64,10 +65,11 @@ export function PermissionsView() {
           <Section title="Werkzeuge & Risikostufen" meta="Quelle: config/permissions.yaml + Connector-Manifeste">
             <ul className="max-h-[32rem] divide-y divide-seam overflow-y-auto">
               {p.tools.map((t) => (
-                <li key={t.name} className={`flex items-center gap-3 px-4 py-1.5 text-sm ${t.enabled ? "" : "opacity-50"}`}>
+                <li key={t.name} className={`flex items-center gap-3 px-4 py-1.5 text-sm ${t.enabled ? "" : "opacity-50"}`}
+                    title={t.unavailable_reason ? `Auf diesem System nicht verfügbar: ${t.unavailable_reason}` : undefined}>
                   <RiskBadge risk={t.risk} />
                   <span className="type-data flex-1 truncate text-ink">{t.name}</span>
-                  <span className="text-xs text-ink-faint">{t.auto_for_owner ? "automatisch" : `Freigabe (${riskLabel(t.risk)})`}</span>
+                  <span className="text-xs text-ink-faint">{t.unavailable_reason ? "nicht verfügbar" : t.auto_for_owner ? "automatisch" : `Freigabe (${riskLabel(t.risk)})`}</span>
                 </li>
               ))}
             </ul>

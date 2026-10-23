@@ -121,6 +121,21 @@ Overrides in `permissions.yaml` können Risiken nur **erhöhen**.
   `DevPushReceiver` (nur System/adb, `android.permission.DUMP`) – ein simulierter Anruf ist ohne klingelnde
   Sitzung im Core wertlos.
 
+## Device Agents und entfernte Clients
+
+- **Kopplung:** Einmalcode (10 min, nur vom Besitzer erzeugbar), der Agent prüft vorher den SHA-256-Fingerabdruck des
+  Gateway-Zertifikats; erst danach gehen Code bzw. Token über die Leitung (Token im ersten WebSocket-Frame, nicht im Header).
+- **Token-Reichweite:** Rolle `device_agent` steht nicht in `permissions.yaml` → das Token öffnet nur die Agent-WebSocket,
+  keine Chats, kein Gedächtnis, keinen Event-Stream. Widerruf in der App oder mit `jarvisctl devices revoke <id>` trennt sofort.
+- **Befehle:** `device_*`-Werkzeuge laufen durch dieselbe Pipeline wie alle Werkzeuge (Risiko, Freigaben, Audit, Rate-Limits);
+  Tippen, Klicken, Terminal und Claude Code sind `high`. Eingaben mit Zielprogramm prüfen den Vordergrund vorher.
+- **Am Gerät:** nur freigegebene Ordner (Standard Benutzerordner; `.ssh`, `.gnupg`, die Agent-Konfiguration gesperrt, Symlinks
+  zählen nicht als innen), Terminal abschaltbar, lokaler Not-Aus. Der Not-Aus des Core wird an alle Agents weitergegeben –
+  dann nur noch lesende Aktionen. Windows: Fenster mit Administratorrechten nehmen keine Eingaben an (UIPI).
+- **Entfernte Clients** (`clients.remote_api`): das Gateway liefert dann die Client-API, jede Anfrage braucht ein Geräte-Token;
+  `/mcp`, Webhooks, Telefonie-Endpunkte und der OAuth-Callback bleiben dort gesperrt. Empfohlen nur über Tailscale.
+- **Windows-Secrets:** Anmeldeinformationsverwaltung; Einträge über 1200 Zeichen werden in Teilen gespeichert.
+
 ## Not-Aus
 - Desktop (immer sichtbar), Menüleiste, Telegram `/stop`, `jarvisctl killswitch on` oder `touch ~/Library/Application Support/Jarvis/KILL`.
 - Wirkung: alle nicht-lesenden Tools gesperrt, Bridge verweigert Aktionen, laufende Coding-Jobs werden beendet, Agent-Lauf

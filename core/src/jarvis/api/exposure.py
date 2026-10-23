@@ -32,18 +32,21 @@ def on_port(scope: Scope, port: int | None) -> bool:
 
 
 class PublicExposureGuard:
-    def __init__(self, app: ASGIApp, mobile_port: int | None = None) -> None:
+    def __init__(self, app: ASGIApp, mobile_port: int | None = None, remote_api: bool = False) -> None:
         self.app = app
         self.mobile_port = mobile_port
+        self.remote_api = remote_api
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in ("http", "websocket") and on_port(scope, self.mobile_port):
-            # Mobile gateway listener (LAN/Tailscale): only the paths a paired phone needs, never tunnel traffic.
-            from jarvis.mobile.gateway import mobile_path_allowed
+            # Gateway listener (LAN/Tailscale): only the paths a paired phone / device agent needs – with
+            # clients.remote_api the full client API – and never tunnel traffic.
+            from jarvis.mobile.gateway import mobile_path_allowed, remote_path_allowed
 
+            allowed = remote_path_allowed if self.remote_api else mobile_path_allowed
             headers: dict[bytes, bytes] = dict(scope.get("headers") or [])
             method = "GET" if scope["type"] == "websocket" else str(scope.get("method", "GET"))
-            if any(k.startswith(b"cf-") for k in headers) or not mobile_path_allowed(method, scope.get("path", "")):
+            if any(k.startswith(b"cf-") for k in headers) or not allowed(method, scope.get("path", "")):
                 await _reject(scope, receive, send)
                 return
             await self.app(scope, receive, send)

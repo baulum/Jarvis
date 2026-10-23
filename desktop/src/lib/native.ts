@@ -113,6 +113,18 @@ export async function onTrayAction(cb: (a: TrayAction) => void): Promise<Unliste
   return listen<TrayAction>("tray-action", (e) => cb(e.payload));
 }
 
+/** Tray action while the app is a client of a remote Core: the webview sends it over HTTPS. */
+export interface TrayRequest {
+  action: string;
+  path: string;
+  body: Record<string, unknown> | null;
+}
+
+export async function onTrayRequest(cb: (r: TrayRequest) => void): Promise<UnlistenFn> {
+  if (!inTauri()) return () => undefined;
+  return listen<TrayRequest>("tray-request", (e) => cb(e.payload));
+}
+
 export interface ServicesEvent {
   state: "starting" | "running" | "error";
   detail?: string;

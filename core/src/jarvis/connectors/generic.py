@@ -21,6 +21,18 @@ from jarvis.tools.executor import ToolUserError
 from jarvis.tools.registry import ToolContext, ToolSpec
 
 _FORBIDDEN_ARG_CHARS = set(";|&`$<>\n")
+# Windows starts .cmd/.bat (npm, pnpm, npx …) through cmd.exe, which re-parses the arguments: its own
+# metacharacters must not reach it either (BatBadBut).
+_FORBIDDEN_BATCH_CHARS = _FORBIDDEN_ARG_CHARS | set('%^"!()')
+
+
+def shell_allowlist(permissions: Any) -> list[str]:
+    """The allowlist for this host: ``shell_allowlist_by_platform[<id>]`` if present, else ``shell_allowlist``
+    (the Mac has no own entry, so its list is unchanged)."""
+    from jarvis.platform import get_adapter
+
+    by_platform: dict[str, list[str]] = getattr(permissions, "shell_allowlist_by_platform", None) or {}
+    return list(by_platform.get(get_adapter().id, permissions.shell_allowlist))
 
 
 def _obj(props: dict[str, Any], req: list[str] | None = None) -> dict[str, Any]:
@@ -39,7 +51,7 @@ class ShellConnector(Connector):
     )
 
     async def health(self) -> Health:
-        allow = self.state.permissions.shell_allowlist
+        allow = shell_allowlist(self.state.permissions)
         missing = [b for b in allow if shutil.which(b, path=self._search_path()) is None]
         return Health("ok", f"{len(allow) - len(missing)} Programme erlaubt", details={"not_installed": missing})
 
@@ -48,7 +60,7 @@ class ShellConnector(Connector):
         the Android SDK are added (``coding.extra_path`` is shared with the coding runner)."""
         extra = [os.path.expanduser(str(p)) for p in getattr(self.state.settings.coding, "extra_path", None) or []]
         fixed = ["/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/Library/Android/sdk/platform-tools")]
-        return ":".join([os.environ.get("PATH", ""), *extra, *fixed])
+        return os.pathsep.join([os.environ.get("PATH", ""), *extra, *fixed])
 
     def tools(self) -> list[ToolSpec]:
         async def run(ctx: ToolContext, a: dict[str, Any]) -> Any:
@@ -56,7 +68,7 @@ class ShellConnector(Connector):
             if not argv:
                 raise ToolUserError("Kein Befehl angegeben")
             exe = argv[0]
-            if exe not in self.state.permissions.shell_allowlist or "/" in exe:
+            if exe not in shell_allowlist(self.state.permissions) or "/" in exe or "\\" in exe:
                 raise ToolUserError(f"'{exe}' ist nicht in der Shell-Allowlist")
             if any(set(arg) & _FORBIDDEN_ARG_CHARS for arg in argv[1:]):
                 raise ToolUserError("Argumente mit Shell-Sonderzeichen sind nicht erlaubt")
@@ -64,6 +76,8 @@ class ShellConnector(Connector):
             path = shutil.which(exe, path=search_path)
             if path is None:
                 raise ToolUserError(f"{exe} ist nicht installiert")
+            if path.lower().endswith((".cmd", ".bat")) and any(set(arg) & _FORBIDDEN_BATCH_CHARS for arg in argv[1:]):
+                raise ToolUserError("Argumente mit cmd.exe-Sonderzeichen (% ^ \" ! ( )) sind nicht erlaubt")
             cwd = Path(os.path.expanduser(a.get("cwd") or "~")).resolve()
             home = Path.home().resolve()
             if not cwd.is_relative_to(home):

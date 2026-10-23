@@ -78,7 +78,10 @@ Details: [ARCHITECTURE.md](ARCHITECTURE.md), Sicherheitsmodell: [SECURITY.md](SE
 
 ## Installation
 
-Voraussetzungen: macOS auf Apple Silicon, Homebrew, Xcode Command Line Tools, Claude Code CLI (angemeldet über
+**Windows und Linux** (Client, Device Agent und/oder Core): `scripts\windows\install.ps1` bzw. `scripts/linux/install.sh` –
+prüft Abhängigkeiten, lädt Modelle, führt durch die Einrichtung. Details: [docs/DISTRIBUTED.md](docs/DISTRIBUTED.md).
+
+**macOS** – Voraussetzungen: macOS auf Apple Silicon, Homebrew, Xcode Command Line Tools, Claude Code CLI (angemeldet über
 `claude` → `/login`), ca. 6 GB freier Speicher.
 
 ```bash

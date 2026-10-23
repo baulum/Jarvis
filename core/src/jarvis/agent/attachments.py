@@ -302,11 +302,29 @@ def image_size(data: bytes) -> tuple[int, int] | None:
     return None
 
 
+def _pillow_jpeg(path: Path) -> bytes | None:
+    """Verkleinerte JPEG-Fassung mit Pillow (Windows/Linux, wo es kein ``sips`` gibt)."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        with Image.open(path) as img:
+            img.thumbnail((SCALED_IMAGE_EDGE, SCALED_IMAGE_EDGE))
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, "JPEG", quality=82)
+    except (OSError, ValueError):
+        return None
+    data = buf.getvalue()
+    return data if 0 < len(data) <= INLINE_IMAGE_BYTES else None
+
+
 async def _scaled_jpeg(path: Path) -> bytes | None:
-    """Verkleinerte JPEG-Fassung über macOS ``sips`` (keine Bildbibliothek nötig); ``None`` wenn nicht möglich."""
+    """Verkleinerte JPEG-Fassung über macOS ``sips`` (keine Bildbibliothek nötig), ohne ``sips`` über Pillow;
+    ``None`` wenn nicht möglich."""
     exe = shutil.which("sips")
     if exe is None:
-        return None
+        return await asyncio.to_thread(_pillow_jpeg, path)
     with tempfile.TemporaryDirectory(prefix="jarvis-att-") as tmp:
         out = Path(tmp) / "scaled.jpg"
         proc = await asyncio.create_subprocess_exec(

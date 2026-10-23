@@ -55,15 +55,26 @@ export function useChatFile(kind: ChatFileKind, file: string): { url?: string; e
   return state.key === key ? { url: state.url, error: state.error, retry } : { retry }; // another file: loading
 }
 
+/**
+ * File manager of the Core host ("Finder" on the Mac, "Explorer", "Dateimanager"), or null when the file lies on
+ * another computer (desktop app/browser as client of a remote Core): then "… zeigen" is not offered.
+ */
+export function useFileManager(): string | null {
+  const remote = useApp((s) => s.remote);
+  const name = useApp((s) => s.status?.platform?.file_manager);
+  return remote ? null : (name ?? "Finder");
+}
+
 /** "Im Finder zeigen" – the core opens the Finder after checking the name; failures become a toast. */
 export function useRevealInFinder(): (kind: ChatFileKind, file: string) => void {
   const pushToast = useApp((s) => s.pushToast);
+  const manager = useFileManager() ?? "Finder";
   return useCallback(
     (kind, file) => {
       api.revealMedia(kind, file).catch((e: unknown) =>
-        pushToast({ tone: "bad", title: "Im Finder nicht gefunden", body: e instanceof Error ? e.message : String(e) }),
+        pushToast({ tone: "bad", title: `Im ${manager} nicht gefunden`, body: e instanceof Error ? e.message : String(e) }),
       );
     },
-    [pushToast],
+    [pushToast, manager],
   );
 }

@@ -42,6 +42,8 @@ from jarvis.connectors.telephony import TelephonyConnector
 from jarvis.connectors.vercel import VercelConnector
 from jarvis.db import init_engine, session_scope
 from jarvis.db.models import Approval, Task, UsageRecord
+from jarvis.devices.connector import DevicesConnector
+from jarvis.devices.hub import DeviceHub
 from jarvis.events import Event, bus, spawn
 from jarvis.graph import GraphBuilder
 from jarvis.jobs.engine import TaskEngine
@@ -60,6 +62,7 @@ from jarvis.mobile.location import LocationStore
 from jarvis.mobile.pairing import PairingService
 from jarvis.mobile.phone_control import PhoneControl
 from jarvis.mobile.push import PushService
+from jarvis.platform import create_adapter, set_adapter
 from jarvis.secrets import secret_store
 from jarvis.security.audit import audit
 from jarvis.security.guards import KillSwitch
@@ -93,8 +96,13 @@ class AppState:
             p.mkdir(parents=True, exist_ok=True)
         settings.paths.data_dir.chmod(0o700)
 
+        # The host's PlatformAdapter (MacAdapter on the Mac: the existing code paths). Tools that need a capability
+        # this host lacks disappear from the agent's list and answer "nicht verfügbar – <Grund>" instead of crashing.
+        self.platform = create_adapter(data_dir=settings.paths.data_dir)
+        set_adapter(self.platform)
         self.kill_switch = KillSwitch(settings.paths.data_dir)
         self.registry = ToolRegistry(self.permissions)
+        self.registry.set_capabilities(self.platform.capabilities())
         self.approval_policy = ApprovalPolicy(settings.paths.data_dir / "approval-mode.json")
         self.executor = ToolExecutor(self.registry, self.permissions, self.kill_switch, self.approval_policy)
         self.wakeup = WakeupStore(settings.paths.data_dir / "wakeup.json", settings.voice.wakeup)
@@ -152,11 +160,16 @@ class AppState:
         self.calls = CallService(self)
         self.location = LocationStore(self.push)
         self.phone = PhoneControl(self.push)
+        # Jarvis Device Agents: remote computers (Windows, Linux, Mac) connected over Tailscale/LAN
+        self.device_hub = DeviceHub(settings.devices.command_timeout_s, lambda: self.kill_switch.engaged)
+        self.device_hub.on_paired_change = self._on_devices_paired_change
+        self.device_pairing = PairingService(settings.devices.pairing_ttl_s)
 
         for conn_cls in (
             SystemConnector,
             ObsidianMemoryConnector,
             MacConnector,
+            DevicesConnector,
             BrowserConnector,
             ShellConnector,
             CodingConnector,
@@ -224,6 +237,11 @@ class AppState:
     # ------------------------------------------------------------------ lifecycle
     async def start(self) -> None:
         init_engine(self.settings)
+        if self.settings.devices.enabled:
+            try:
+                await self.device_hub.load_paired()
+            except Exception:
+                logger.exception("Loading paired device agents failed")
         await self.connectors.load()
         try:  # in-process embedding model for semantic memory search (loads in a worker thread)
             await self.embedder.embed(["warm-up"])
@@ -329,9 +347,17 @@ class AppState:
             await self.hermes.close()
         await self.bridge.close()
 
+    async def _on_devices_paired_change(self) -> None:
+        """The first device agent was paired (or the last one revoked): the device_* tools appear/disappear."""
+        await self.connectors.check("devices")
+        await self.hermes_supervisor.restart()
+        if self.agent is not None:
+            await self.agent.reload()
+
     async def _on_killswitch(self, ev: Event) -> None:
         engaged = bool(ev.data.get("engaged"))
         await self.bridge.set_killswitch(engaged)
+        await self.device_hub.broadcast_killswitch(engaged)
         if engaged:
             await self.coding.cancel_all()
             await self.orchestrator.interrupt()
@@ -371,6 +397,8 @@ class AppState:
         comps["voice_daemon"] = "ok" if self.voice_state.get("connected") else "offline"
         for cid, h in self.connectors.health.items():
             comps[f"connector:{cid}"] = h.status
+        if self.device_hub.has_paired:
+            comps["devices"] = "ok" if self.device_hub.online() else "offline"
         async with session_scope() as s:
             pending = (
                 await s.execute(select(func.count()).select_from(Approval).where(Approval.status == "pending"))
@@ -457,6 +485,8 @@ class AppState:
             "push_configured": self.push.fcm.configured(),
         }
         out["mcp_servers"] = self.mcp_hub.status()
+        out["platform"] = self.platform.info()
+        out["devices"] = self.device_hub.describe()
         out["voice"] = self.voice_state
         out["hermes_restarts"] = self.hermes_supervisor.restarts
         out["agent"] = (

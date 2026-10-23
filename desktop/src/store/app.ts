@@ -35,6 +35,7 @@ export type ViewId =
   | "notifications"
   | "settings"
   | "permissions"
+  | "devices"
   | "system";
 
 /** A view, optionally with the job/task to select in it. */
@@ -71,6 +72,10 @@ const LIVE_LOG_MAX = 3000;
 interface AppState {
   token: string | null;
   tokenError: string | null;
+  /** Core address: the local Core (CORE_URL) or a remote one (desktop app as client, browser client). */
+  coreUrl: string;
+  /** true when the Core runs on another computer (no local services; Finder/Explorer actions hidden). */
+  remote: boolean;
   connection: ConnectionState;
   principal: { label: string; role: string } | null;
   status: SystemStatus | null;
@@ -99,6 +104,7 @@ interface AppState {
   setView: (v: ViewId) => void;
   openTarget: (t: ViewTarget) => void;
   setToken: (t: string | null, err?: string | null) => void;
+  setConnection: (c: { baseUrl: string; token: string; remote: boolean }) => void;
   setActiveSession: (sid: string | null) => void;
   setThread: (t: ChatThread) => void;
   pushToast: (t: Omit<Toast, "id">) => void;
@@ -120,6 +126,8 @@ const PAGE_TURNS = 40;
 export const useApp = create<AppState>((set, get) => ({
   token: null,
   tokenError: null,
+  coreUrl: CORE_URL,
+  remote: false,
   connection: "idle",
   principal: null,
   status: null,
@@ -162,6 +170,7 @@ export const useApp = create<AppState>((set, get) => ({
     get().setView(view);
   },
   setToken: (token, err = null) => set({ token, tokenError: err }),
+  setConnection: (c) => set({ coreUrl: c.baseUrl, token: c.token, remote: c.remote, tokenError: null }),
   setActiveSession: (activeSessionId) => set({ activeSessionId }),
   setThread: (t) => set((s) => ({ threads: { ...s.threads, [t.sessionId]: t } })),
   pushToast: (t) => {
@@ -242,7 +251,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 }));
 
-export const api = createApi({ baseUrl: CORE_URL, getToken: () => useApp.getState().token });
+export const api = createApi({ getBaseUrl: () => useApp.getState().coreUrl, getToken: () => useApp.getState().token });
 
 function bump(topic: Topic) {
   useApp.setState((s) => ({ versions: { ...s.versions, [topic]: s.versions[topic] + 1 } }));
@@ -302,6 +311,12 @@ export function handleBusEvent(ev: BusEvent): void {
   }
   if (type === "agent.model" || type === "agent.usage" || type === "backup.finished") {
     bump("system");
+    return;
+  }
+  if (type === "device.connected" || type === "device.disconnected") {
+    bump("system");
+    const name = typeof d.name === "string" ? d.name : "Gerät";
+    st.pushToast({ tone: type === "device.connected" ? "ok" : "warn", title: type === "device.connected" ? `${name} verbunden` : `${name} getrennt` });
     return;
   }
   if (type.startsWith("chat.")) {
@@ -456,7 +471,7 @@ let client: RealtimeClient | null = null;
 export function startRealtime(): RealtimeClient {
   if (client) return client;
   client = new RealtimeClient({
-    baseUrl: CORE_URL,
+    baseUrl: useApp.getState().coreUrl,
     logs: true,
     getToken: () => useApp.getState().token,
     onEvent: handleBusEvent,

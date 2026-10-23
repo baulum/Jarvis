@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from jarvis.config import RISK_ORDER, Permissions, RiskLevel
 
 if TYPE_CHECKING:
+    from jarvis.platform.capabilities import CapabilityReport
     from jarvis.security.auth import Principal
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
@@ -50,6 +51,8 @@ class ToolSpec:
     untrusted_output: bool = False
     timeout_s: float = 60.0
     summarize: Callable[[dict[str, Any]], str] | None = None
+    # Capability ids this tool needs on the host (jarvis.platform.capabilities). Empty = runs everywhere.
+    requires: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not _NAME_RE.match(self.name):
@@ -72,6 +75,7 @@ class ToolRegistry:
         self._tools: dict[str, ToolSpec] = {}
         self._connector_enabled: dict[str, Callable[[], bool]] = {}
         self.permissions = permissions
+        self.capabilities: CapabilityReport | None = None  # None: no capability gate (tests, legacy callers)
 
     def register(self, spec: ToolSpec) -> None:
         if spec.name in self._tools:
@@ -85,8 +89,17 @@ class ToolRegistry:
     def set_connector_gate(self, connector: str, is_enabled: Callable[[], bool]) -> None:
         self._connector_enabled[connector] = is_enabled
 
+    def set_capabilities(self, report: CapabilityReport | None) -> None:
+        self.capabilities = report
+
     def get(self, name: str) -> ToolSpec | None:
         return self._tools.get(name)
+
+    def unavailable_reason(self, spec: ToolSpec) -> str | None:
+        """Why ``spec`` cannot run on this host (a capability it needs is missing), else None."""
+        if not spec.requires or self.capabilities is None or not self.capabilities.missing(spec.requires):
+            return None
+        return self.capabilities.explain(spec.requires)
 
     def _override(self, name: str) -> tuple[RiskLevel | None, bool | None]:
         risk: RiskLevel | None = None
@@ -110,6 +123,8 @@ class ToolRegistry:
     def is_enabled(self, spec: ToolSpec) -> bool:
         _, enabled = self._override(spec.name)
         if enabled is False:
+            return False
+        if self.unavailable_reason(spec) is not None:
             return False
         gate = self._connector_enabled.get(spec.connector)
         return gate() if gate else True

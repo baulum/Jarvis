@@ -1,0 +1,24 @@
+# Linux overlay: loaded on top of config/jarvis.yaml when the Core Server runs on Linux (desktop or
+# headless server; never on the Mac). Paths follow the XDG base directories. Environment variables
+# JARVIS__SECTION__KEY still win over both files.
+
+paths:
+  data_dir: ~/.local/share/jarvis
+  log_dir: ~/.local/state/jarvis/logs
+  vault_dir: ~/Documents/Jarvis Vault
+  workspaces_dir: ~/Jarvis/Workspaces
+  projects_dir: ~/Jarvis/Projects
+
+voice:
+  tts:
+    # Piper server (scripts/local-tts/piper_server.py, model downloaded by the installer); while it is down
+    # Fish Audio (if active) and then espeak-ng take over.
+    provider: local
+    macos_voice: de            # espeak-ng voice
+  native_audio: false          # the Swift audio helper only exists on macOS – sounddevice is used
+
+browser:
+  engine: chromium             # Edge is not standard on Linux; Playwright's Chromium is
+
+backup:
+  directory: ~/Backups/Jarvis

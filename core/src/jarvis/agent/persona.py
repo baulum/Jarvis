@@ -98,6 +98,27 @@ Beispiele für den gewünschten Ton (als Anregung, nicht wörtlich wiederholen):
 {OPERATING_RULES}"""
 
 
+def host_note(platform_id: str | None, platform_label: str = "", has_devices: bool = False) -> str:
+    """Extra prompt section for a Core outside the Mac and for paired Device Agents. Empty on the Mac without
+    device agents – then the system prompt stays word for word what it was."""
+    parts: list[str] = []
+    if platform_id and platform_id != "mac":
+        parts.append(
+            f"## Dieser Rechner\nDer Jarvis-Server läuft hier auf {platform_label or platform_id}, nicht auf dem Mac: "
+            "Die `mac_*`-Werkzeuge gibt es hier nicht. Was auf diesem System fehlt, melden die Werkzeuge als "
+            "„nicht verfügbar“ mit Grund – sag Sir dann ehrlich, was fehlt."
+        )
+    if has_devices:
+        parts.append(
+            "## Weitere Rechner\nGekoppelte Rechner (Windows, Linux, Mac) steuerst du mit den `device_*`-Werkzeugen "
+            "über den Jarvis Device Agent. Bei „auf meinem PC“, „am Windows-Rechner“ oder einem Gerätenamen nutzt du "
+            "`device_*`, nicht `mac_*`; sind mehrere verbunden, gib `device` an (`device_list`). Lies nach jeder "
+            "Eingabe den Bildschirm neu (`device_screenshot`); Klick-Koordinaten beziehen sich auf den letzten "
+            "Screenshot. Meldet ein Werkzeug „nicht verfügbar“ oder „nicht verbunden“, sag Sir ehrlich warum."
+        )
+    return "\n\n" + "\n\n".join(parts) if parts else ""
+
+
 def time_of_day_greeting(p: Personality, now: datetime | None = None) -> str:
     now = now or datetime.now(TZ)
     h = now.hour

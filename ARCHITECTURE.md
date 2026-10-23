@@ -23,11 +23,20 @@
                     └───────────────────────────────────────────────────────────────┘
 ```
 
+Verteilt (Windows, Linux, weitere Rechner): drei logisch getrennte Komponenten – **Jarvis Core Server** (`core/`),
+**Jarvis Client** (Desktop-App/Browser/Handy, auch gegen einen entfernten Core) und **Jarvis Device Agent**
+(`device_agent/`, steuert einen Rechner im Auftrag des Core), verbunden über Tailscale. Details:
+[docs/DISTRIBUTED.md](docs/DISTRIBUTED.md).
+
 ## Komponenten
 
 | Komponente | Ort | Aufgabe |
 |---|---|---|
 | **Jarvis Core** | `core/src/jarvis` | Zentrale Orchestrierung, REST/WS-API, Policy-Engine, Tools, Gedächtnis, Aufgaben, Telefonie, Coding-Runner |
+| **PlatformAdapter** | `core/src/jarvis/platform/` | Alles Betriebssystem-Spezifische des Core (Mac/Windows/Linux, headless) mit Capability-Flags + Grund; `MacAdapter` beschreibt die bisherigen Mac-Wege unverändert; Werkzeuge mit `requires` verschwinden, wo eine Fähigkeit fehlt |
+| **Device-Hub** | `core/src/jarvis/devices/` | Kopplung, WebSocket und Remote-Command-Routing zu den Device Agents; `devices`-Connector mit den `device_*`-Werkzeugen |
+| **Jarvis Device Agent** | `device_agent/` | Leichtgewichtiger Agent je Rechner (Windows Win32, Linux X11/Wayland, macOS über die Bridge): Programme, Fenster, Maus, Tastatur, Screenshots, Dateien, Terminal, Claude Code, Browser, Benachrichtigungen, Audio |
+| **Installer** | `installer/`, `scripts/windows/`, `scripts/linux/` | Windows/Linux: Abhängigkeiten prüfen und melden (z. B. Obsidian), Modelle laden und prüfen (Piper, Whisper, Wake-Word), Ersteinrichtung von Client, Device Agent, Core |
 | **Agent (Claude Code)** | `core/src/jarvis/agent/claude_agent.py` | Agent-Loop über die offizielle Claude Code CLI mit Sirs Subscription; einziges Werkzeug-Set = Jarvis-MCP-Server |
 | **Modellrouter** | `core/src/jarvis/agent/model_router.py` | Sonnet 5.5 Standard, einfache Anfragen → Haiku 5.5, Opus 5.5 nur auf Befehl/manuell |
 | **Hermes Agent** (Altoption, ungenutzt) | `~/.hermes` | früherer Modus `agent.provider: hermes` mit lokalem Ollama-Modell; wird nicht gestartet |
@@ -204,10 +213,11 @@ Annehmen in 45 s → `missed` + Benachrichtigung. Sir → Jarvis: `/api/mobile/c
 - **Externe MCP-Server:** `config/mcp_servers.yaml` (z. B. offizieller GitHub-MCP-Server) – gleiche Policy-Pipeline.
 - **Weitere Telefonie-/TTS-Anbieter:** `TelephonyProvider` bzw. `TTSProvider`-Interface.
 - **Mehrere Geräte/Benutzer:** Geräte mit Rollen (`devices`), Tokens nur als SHA-256 gespeichert; Sitzungen pro Akteur.
-- **VPS:** Core ist plattformneutral (macOS-spezifisch sind nur Bridge, Voice-Daemon, `say`). Auf einem VPS: Core + Postgres +
-  Hermes + Ollama/anderer Provider, TLS-Reverse-Proxy (z. B. Caddy) vor `:8765`, `server.public_base_url` setzen,
-  Secrets per `JARVIS_SECRET_<NAME>`-Umgebungsvariablen (systemd credentials) statt Schlüsselbund. Bridge/Voice bleiben am Mac
-  und verbinden sich als Geräte.
+- **Andere Betriebssysteme / VPS:** Alles OS-Spezifische des Core liegt hinter `PlatformAdapter` (Mac, Windows, Linux,
+  headless); `config/platform/<os>.yaml` liefert Pfade und Vorgaben, `GET /api/system/capabilities` zeigt, was fehlt und warum.
+  Auf einem VPS: Core + Postgres, TLS-Reverse-Proxy (z. B. Caddy) vor `:8765`, `server.public_base_url` setzen, Secrets per
+  `JARVIS_SECRET_<NAME>`-Umgebungsvariablen (systemd credentials) statt Schlüsselbund. Rechner, die Jarvis steuern soll,
+  verbinden sich als Device Agents (`device_agent/`), Clients über `clients.remote_api` – siehe docs/DISTRIBUTED.md.
 - **Android-App:** `apps/jarvis_mobile`, Rolle `mobile_owner`, dieselbe REST/WS-API über das Mobile-Gateway.
 - **iPhone-App (später):** gleiche Gateway-/Token-Mechanik; CallKit statt Telecom, APNs-VoIP statt FCM.
 

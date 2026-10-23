@@ -2,7 +2,7 @@
 // files of a sent message (image thumbnails, document chips) in the conversation.
 import { FolderOpen, ImageOff, Loader2, Paperclip, RotateCw, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
-import { useChatFile, useRevealInFinder } from "../../hooks/useChatFile";
+import { useChatFile, useFileManager, useRevealInFinder } from "../../hooks/useChatFile";
 import type { DraftAttachment } from "../../hooks/useAttachmentDraft";
 import { ACCEPT, formatBytes, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, typeLabel, type AttachmentInfo } from "../../lib/attachments";
 import { IconButton } from "../ui";
@@ -114,6 +114,7 @@ function SentImage({ info, compact }: { info: AttachmentInfo; compact: boolean }
   const [zoom, setZoom] = useState(false);
   const close = useCallback(() => setZoom(false), []);
   const reveal = useRevealInFinder();
+  const manager = useFileManager();
   const box = compact ? "h-14 max-w-24" : "h-24 max-w-40";
   if (error || broken) {
     const why = broken ? "Die Datei ist beschädigt oder hat ein unbekanntes Format." : error;
@@ -160,17 +161,23 @@ function SentImage({ info, compact }: { info: AttachmentInfo; compact: boolean }
             {info.name}
           </span>
         )}
-        <IconButton label={`Im Finder zeigen: ${info.name}`} onClick={() => reveal("attachments", info.file)} className="ml-auto size-6 shrink-0">
-          <FolderOpen className="size-3.5" />
-        </IconButton>
+        {manager && (
+          <IconButton label={`Im ${manager} zeigen: ${info.name}`} onClick={() => reveal("attachments", info.file)} className="ml-auto size-6 shrink-0">
+            <FolderOpen className="size-3.5" />
+          </IconButton>
+        )}
       </div>
-      {zoom && <Lightbox url={url} alt={info.name} caption={info.name} onClose={close} onReveal={() => reveal("attachments", info.file)} />}
+      {zoom && (
+        <Lightbox url={url} alt={info.name} caption={info.name} onClose={close} revealLabel={manager ? `Im ${manager} zeigen` : undefined}
+                  onReveal={manager ? () => reveal("attachments", info.file) : undefined} />
+      )}
     </figure>
   );
 }
 
 function SentDocument({ info }: { info: AttachmentInfo }) {
   const reveal = useRevealInFinder();
+  const manager = useFileManager();
   return (
     <span className="flex h-10 max-w-[16rem] items-center gap-2 rounded-md border border-seam bg-void/60 pr-0.5 pl-1">
       <Thumb kind="document" name={info.name} size="size-8" />
@@ -180,9 +187,11 @@ function SentDocument({ info }: { info: AttachmentInfo }) {
         </span>
         <span className="type-data text-ink-faint">{formatBytes(info.size)}</span>
       </span>
-      <IconButton label={`Im Finder zeigen: ${info.name}`} onClick={() => reveal("attachments", info.file)} className="size-6 shrink-0">
-        <FolderOpen className="size-3.5" />
-      </IconButton>
+      {manager && (
+        <IconButton label={`Im ${manager} zeigen: ${info.name}`} onClick={() => reveal("attachments", info.file)} className="size-6 shrink-0">
+          <FolderOpen className="size-3.5" />
+        </IconButton>
+      )}
     </span>
   );
 }
