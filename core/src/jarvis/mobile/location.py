@@ -95,6 +95,8 @@ class LocationStore:
 
     def _reverser(self) -> NominatimReverser:
         if self._reverse is None:
+            # httpx logs every request URL at INFO – this URL carries the coordinates
+            logging.getLogger("httpx").setLevel(logging.WARNING)
             self._client = httpx.AsyncClient(
                 timeout=REVERSE_TIMEOUT_S,
                 headers={"User-Agent": REVERSE_USER_AGENT, "Accept-Language": "de"},
