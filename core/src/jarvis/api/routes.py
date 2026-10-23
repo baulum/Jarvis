@@ -23,10 +23,11 @@ from jarvis.api.deps import current_principal, get_state, require, require_owner
 from jarvis.app_state import VERSION, AppState
 from jarvis.coding.runner import CodingError
 from jarvis.commands import command_list
-from jarvis.config import RISK_ORDER
+from jarvis.config import REPO_ROOT, RISK_ORDER
 from jarvis.connectors.kie_creative import MEDIA_TYPES, resolve_media_file
 from jarvis.db import session_scope
 from jarvis.db.models import Approval, AuditEntry, Call, ChatSession, CodingJob, Task
+from jarvis.desktop_build import desktop_build_status
 from jarvis.events import bus, spawn
 from jarvis.logging_setup import ring
 from jarvis.security.audit import audit, verify_chain
@@ -59,6 +60,12 @@ async def health(st: AppState = StateDep) -> dict[str, Any]:
 @router.get("/system/status")
 async def system_status(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
     return await st.system_status()
+
+
+@router.get("/system/desktop-build")
+async def desktop_build(commit: str = Query(default="", max_length=40), p: Principal = Reader) -> dict[str, Any]:
+    """Is the desktop app older than the UI code in the repository the core runs from? (see desktop_build)"""
+    return await desktop_build_status(REPO_ROOT, commit.strip().lower())
 
 
 @router.get("/system/greeting")

@@ -1,6 +1,6 @@
 // Attachments in the chat: the paper clip and the chips of the message being written, the drop overlay, and the
 // files of a sent message (image thumbnails, document chips) in the conversation.
-import { FolderOpen, ImageOff, Loader2, Paperclip, X } from "lucide-react";
+import { FolderOpen, ImageOff, Loader2, Paperclip, RotateCw, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { useChatFile, useRevealInFinder } from "../../hooks/useChatFile";
 import type { DraftAttachment } from "../../hooks/useAttachmentDraft";
@@ -110,23 +110,32 @@ export function DropOverlay({ active, rounded = "rounded-[inherit]" }: { active:
 
 function SentImage({ info, compact }: { info: AttachmentInfo; compact: boolean }) {
   const { url, error, retry } = useChatFile("attachments", info.file);
+  const [broken, setBroken] = useState(false); // the file arrived but could not be decoded
   const [zoom, setZoom] = useState(false);
   const close = useCallback(() => setZoom(false), []);
   const reveal = useRevealInFinder();
   const box = compact ? "h-14 max-w-24" : "h-24 max-w-40";
-  if (error)
+  if (error || broken) {
+    const why = broken ? "Die Datei ist beschädigt oder hat ein unbekanntes Format." : error;
     return (
-      <button
-        type="button"
-        onClick={retry}
-        title={`${info.name}: ${error} – erneut laden`}
-        aria-label={`Bild ${info.name} konnte nicht geladen werden: ${error}. Erneut laden`}
-        className={`flex ${compact ? "h-14" : "h-24"} w-28 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-alarm/40 px-2 text-2xs text-ink-dim`}
+      <div
+        role="img"
+        aria-label={`Bild ${info.name} konnte nicht geladen werden`}
+        title={`${info.name}: ${why}`}
+        className={`flex ${compact ? "min-h-14 w-32" : "min-h-24 w-40"} flex-col items-center justify-center gap-0.5 rounded-lg border border-dashed border-alarm/40 px-2 py-1.5 text-center text-2xs text-ink-dim`}
       >
         <ImageOff className="size-4 text-alarm/80" aria-hidden />
-        <span className="w-full truncate">{info.name}</span>
-      </button>
+        <span className="w-full truncate text-ink">{info.name}</span>
+        <span className="line-clamp-2">{why}</span>
+        {!broken && (
+          <button type="button" onClick={retry} aria-label={`Erneut laden: ${info.name}`} className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-plate-hi hover:text-ink">
+            <RotateCw className="size-3" aria-hidden />
+            Erneut laden
+          </button>
+        )}
+      </div>
     );
+  }
   if (!url)
     return (
       <span role="status" aria-label={`${info.name} wird geladen`} className={`flex ${compact ? "size-14" : "size-24"} items-center justify-center rounded-lg border border-seam bg-void`}>
@@ -134,7 +143,7 @@ function SentImage({ info, compact }: { info: AttachmentInfo; compact: boolean }
       </span>
     );
   return (
-    <>
+    <figure className="flex w-fit max-w-full flex-col gap-0.5">
       <button
         type="button"
         onClick={() => setZoom(true)}
@@ -142,10 +151,21 @@ function SentImage({ info, compact }: { info: AttachmentInfo; compact: boolean }
         title={info.name}
         className="block cursor-zoom-in overflow-hidden rounded-lg border border-seam bg-void hover:border-seam-hi"
       >
-        <img src={url} alt={info.name} draggable={false} className={`block w-auto object-cover ${box}`} />
+        <img src={url} alt={info.name} draggable={false} onError={() => setBroken(true)} className={`block w-auto object-cover ${box}`} />
       </button>
+      {/* w-0 min-w-full: the row is as wide as the image, a long name does not widen it */}
+      <div className="flex w-0 min-w-full items-center gap-1 pl-1">
+        {!compact && (
+          <span className="type-data min-w-0 flex-1 truncate text-ink-faint" title={info.name}>
+            {info.name}
+          </span>
+        )}
+        <IconButton label={`Im Finder zeigen: ${info.name}`} onClick={() => reveal("attachments", info.file)} className="ml-auto size-6 shrink-0">
+          <FolderOpen className="size-3.5" />
+        </IconButton>
+      </div>
       {zoom && <Lightbox url={url} alt={info.name} caption={info.name} onClose={close} onReveal={() => reveal("attachments", info.file)} />}
-    </>
+    </figure>
   );
 }
 

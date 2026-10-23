@@ -397,11 +397,32 @@ describe("ChatTimeline", () => {
       revealMedia.mockRejectedValueOnce(new Error("Nicht gefunden."));
       const fresh = { ...img, file: "20261022-150000-bbbbcccc-neu.png", name: "Neu.png" }; // not in the load cache yet
       render(<ChatTimeline thread={thread([item("u", 1, "message", { role: "user", text: "x", attachments: [fresh, pdf] })])} />);
-      const broken = await screen.findByRole("button", { name: /konnte nicht geladen werden/ });
-      fireEvent.click(broken);
+      const placeholder = await screen.findByRole("img", { name: "Bild Neu.png konnte nicht geladen werden" });
+      expect(placeholder.textContent).toContain("Die Datei konnte nicht gelesen werden."); // the reason, visible
+      expect(placeholder.textContent).toContain("Neu.png");
+      fireEvent.click(within(placeholder).getByRole("button", { name: "Erneut laden: Neu.png" }));
       expect(await screen.findByRole("img", { name: "Neu.png" })).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Im Finder zeigen: Vertrag.pdf" }));
       await vi.waitFor(() => expect(pushToast).toHaveBeenCalledWith(expect.objectContaining({ tone: "bad", body: "Nicht gefunden." })));
+    });
+
+    it("an image attachment has „Im Finder zeigen“ right next to it, in both layouts", async () => {
+      for (const compact of [false, true]) {
+        render(<ChatTimeline thread={thread([item("u", 1, "message", { role: "user", text: "", attachments: [img] })])} compact={compact} />);
+        await screen.findByRole("img", { name: "Foto vom Lager.png" });
+        fireEvent.click(screen.getByRole("button", { name: "Im Finder zeigen: Foto vom Lager.png" }));
+        expect(revealMedia).toHaveBeenLastCalledWith("attachments", img.file);
+        cleanup();
+      }
+    });
+
+    it("an attachment that arrives but cannot be decoded gets a placeholder that says so", async () => {
+      const bad = { ...img, file: "20261023-090000-ddddeeee-kaputt.png", name: "Kaputt.png" };
+      render(<ChatTimeline thread={thread([item("u", 1, "message", { role: "user", text: "", attachments: [bad] })])} />);
+      fireEvent.error(await screen.findByRole("img", { name: "Kaputt.png" }));
+      const placeholder = screen.getByRole("img", { name: "Bild Kaputt.png konnte nicht geladen werden" });
+      expect(placeholder.textContent).toContain("beschädigt");
+      expect(within(placeholder).queryByRole("button")).toBeNull(); // loading again would not help
     });
   });
 

@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { useBrain } from "../holo/store";
 import { ApiError, CORE_URL, createApi } from "../lib/api";
 import { attachmentKey, type AttachmentInfo } from "../lib/attachments";
+import { BUILD_COMMIT, staleBuildNotice } from "../lib/build";
 import { nativeLog, nativeNotify } from "../lib/native";
 import { RealtimeClient, type ConnectionState } from "../lib/realtime";
 import { applyToolEvent, applyVoiceStatus, pushBounded, type LiveToolCall } from "../lib/reducers";
@@ -49,6 +50,8 @@ export interface Toast {
   title: string;
   body?: string;
   action?: ViewTarget & { label: string };
+  /** stays until Sir closes it */
+  sticky?: boolean;
 }
 
 /** Event families views can watch to refetch when something relevant changed. */
@@ -164,7 +167,7 @@ export const useApp = create<AppState>((set, get) => ({
   pushToast: (t) => {
     const id = `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     set((s) => ({ toasts: [...s.toasts.slice(-4), { ...t, id }] }));
-    setTimeout(() => get().dismissToast(id), t.tone === "bad" ? 9000 : 6000);
+    if (!t.sticky) setTimeout(() => get().dismissToast(id), t.tone === "bad" ? 9000 : 6000);
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) })),
   setLogsPaused: (logsPaused) => set({ logsPaused }),
@@ -434,6 +437,20 @@ export function handleLog(entry: LogEntry): void {
   useApp.setState((s) => ({ logs: pushBounded(s.logs, entry, LIVE_LOG_MAX) }));
 }
 
+let buildChecked = false;
+
+/** Once per app start: says so when this app is older than the UI code the core runs from. */
+export async function checkDesktopBuild(commit: string = BUILD_COMMIT): Promise<void> {
+  if (buildChecked || !commit) return;
+  buildChecked = true;
+  try {
+    const notice = staleBuildNotice(await api.desktopBuild(commit));
+    if (notice) useApp.getState().pushToast({ tone: "warn", ...notice, sticky: true });
+  } catch {
+    buildChecked = false; // core not reachable yet (or older): asked again on the next connect
+  }
+}
+
 let client: RealtimeClient | null = null;
 
 export function startRealtime(): RealtimeClient {
@@ -455,6 +472,7 @@ export function startRealtime(): RealtimeClient {
       void st.refreshStatus();
       void st.refreshApprovals();
       void st.refreshUnread();
+      if (!import.meta.env.DEV) void checkDesktopBuild(); // the dev server reloads changed code by itself
       // events sent while the socket was down are in the stored timeline: merge them back in, by seq
       if (st.activeSessionId && st.threads[st.activeSessionId]?.loaded) void st.loadThread(st.activeSessionId).catch(() => undefined);
       (Object.keys(st.versions) as Topic[]).forEach(bump);

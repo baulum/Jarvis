@@ -38,6 +38,7 @@ import type {
   WakeupSettings,
 } from "./types";
 import type { AttachmentInfo } from "./attachments";
+import type { DesktopBuild } from "./build";
 import type { SlashCommand } from "./slash";
 import type { TimelineEvent } from "./timeline";
 
@@ -165,6 +166,8 @@ export function createApi(opts: ApiOptions) {
     // system
     health: () => get<{ status: string; version: string }>("/health"),
     systemStatus: () => get<SystemStatus>("/system/status"),
+    /** Whether this app is older than the UI code the core runs from (see lib/build.ts). */
+    desktopBuild: (commit: string) => get<DesktopBuild>("/system/desktop-build", { commit }),
     greeting: () => get<{ text: string }>("/system/greeting"),
     setKillSwitch: (engaged: boolean, reason = "") =>
       post<KillSwitchState>("/system/killswitch", { engaged, reason }),
