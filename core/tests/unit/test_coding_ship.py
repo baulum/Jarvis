@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 import jarvis.coding.runner as runner_mod
-from jarvis.coding.runner import CodingRunner, parse_github_repo, supabase_projects
+from jarvis.coding.runner import CodingRunner, parse_github_repo, supabase_projects, valid_git_email
 from jarvis.connectors.coding import CodingConnector
 from jarvis.tools.executor import ToolUserError
 
@@ -616,6 +616,8 @@ async def test_run_red_job_commits_wip_and_pushes_branch_not_main(
     assert _origin_main(env) == before
     assert _git(env.origin, "rev-parse", BRANCH) == _git(env.repo, "rev-parse", BRANCH)
     assert _git(env.repo, "log", "-1", "--format=%s", BRANCH).startswith("Jarvis (WIP): Feature")
+    author = _git(env.repo, "log", "-1", "--format=%ae", BRANCH)
+    assert author == env.runner.git_identity()[1] and valid_git_email(author)  # never jarvis@localhost
     assert job.result["commit"] == _git(env.repo, "rev-parse", "--short", BRANCH)
     summary = _finished(env)["summary"]
     assert "Nichts in main gemergt oder deployt" in summary and "auf origin gesichert" in summary
