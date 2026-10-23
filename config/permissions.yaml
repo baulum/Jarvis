@@ -90,6 +90,13 @@ tools:
 shell_allowlist:
   - ls
   - pwd
+  - grep
+  - rg
+  - find
+  - cat
+  - head
+  - tail
+  - wc
   - git
   - npm
   - pnpm
