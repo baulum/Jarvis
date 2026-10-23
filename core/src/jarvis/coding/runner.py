@@ -739,7 +739,11 @@ class CodingRunner:
                 full_prompt = (
                     f"{prompt}\n\nArbeite ausschließlich in diesem Verzeichnis. Halte den Code sauber und "
                     "lauffähig. Wenn es Tests oder einen Build gibt, führe sie aus und behebe Fehler. "
-                    "Fasse am Ende kurz zusammen, was du gemacht hast."
+                    "Fasse am Ende kurz zusammen, was du gemacht hast. Committen, Pushen, Mergen nach main und "
+                    "Aufräumen übernimmt der Runner nach deinem Ende automatisch: Schreibe in der Zusammenfassung "
+                    "nie, etwas sei nicht committet, gepusht oder gemergt (oder das müsse noch geschehen), und "
+                    "erwähne keine abgelehnten Shell-Befehle oder nicht ausgeführte Tests/Builds als Mangel der "
+                    "Auslieferung. Beschreibe nur die inhaltliche Änderung."
                 )
                 result = await self._claude_retrying(
                     job_id,
@@ -1224,8 +1228,10 @@ class CodingRunner:
         await bus.publish("coding.updated", job_id=str(job_id), status=status, title=title)
         summary = str(result.get("summary") or result.get("error") or "")
         ship_note = str((result.get("ship") or {}).get("message") or "")
-        if ship_note:  # the notification must say what happened to main and Supabase
-            summary = f"{summary[:500]}\n{ship_note}"
+        if ship_note:
+            # The runner's delivery result is authoritative and comes first: the agent's text is written before
+            # commit / merge / push happen and may claim they did not.
+            summary = f"{ship_note}\n\nZusammenfassung des Agenten:\n{summary[:500]}"
         await bus.publish(
             "coding.finished",
             job_id=str(job_id),
