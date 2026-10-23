@@ -9,6 +9,10 @@
   ``--allowedTools mcp__jarvis`` — every action still passes Jarvis' policy/approval engine.
 * Authentication: the unmodified CLI with Sir's own login. API-key variables are stripped so
   the subscription is used; no OAuth tokens are read or reused anywhere.
+* Process lifecycle: whenever Jarvis itself ends a process (Stopp/barge-in, idle reaper, reload, shutdown) it is
+  first taken out of the pool and marked with the reason, so no turn is ever handed a dying process and a
+  deliberate stop surfaces as ``cancelled`` instead of an error. A process that dies on its own is reported with
+  exit code and stderr and the turn is retried once (via ``--resume``; fresh if the resume itself failed).
 """
 
 from __future__ import annotations
@@ -19,9 +23,10 @@ import json
 import logging
 import os
 import shutil
+import signal
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -45,10 +50,18 @@ _STRIP_ENV = (
     "CLAUDE_CODE_USE_FOUNDRY",
 )
 MCP_PREFIX = "mcp__jarvis__"
+RETRY_NOTE = (
+    "[Hinweis von Jarvis: Der vorige Versuch dieser Anfrage brach unerwartet ab, nachdem bereits Werkzeuge liefen "
+    "({tools}). Prüfe zuerst den aktuellen Stand und wiederhole keine Aktion, die schon ausgeführt wurde.]\n\n"
+)
 
 
 class ClaudeUnavailable(RuntimeError):
     pass
+
+
+class _ProcessEnded(ClaudeUnavailable):
+    """stdout of the CLI closed (the process ended) while Jarvis was waiting for it."""
 
 
 def claude_env() -> dict[str, str]:
@@ -83,21 +96,44 @@ def friendly_error(text: str) -> str:
     return text.strip()[:300] or "Unbekannter Fehler von Claude Code"
 
 
+def exit_detail(returncode: int | None, stderr_tail: list[str]) -> str:
+    """What to tell Sir when the CLI died on its own: exit code (or signal) and the end of its stderr."""
+    if returncode is None:
+        code = "Exit-Code unbekannt"
+    elif returncode < 0:
+        try:
+            code = f"Signal {signal.Signals(-returncode).name}"
+        except ValueError:
+            code = f"Signal {-returncode}"
+    else:
+        code = f"Exit-Code {returncode}"
+    tail = " | ".join(stderr_tail[-3:]).strip()
+    return f"Claude Code wurde unerwartet beendet ({code})" + (f": {tail}" if tail else "")
+
+
 @dataclass
 class _Proc:
     proc: asyncio.subprocess.Process
     claude_session_id: str | None = None
     model: str = ""
     effort: str | None = None
+    resumed: str | None = None  # session id passed via --resume (None: fresh conversation)
     last_used: float = field(default_factory=time.monotonic)
     busy: bool = False
+    stop_reason: str | None = None  # set when Jarvis itself ends the process: interrupted, shutdown, idle, …
+    events_seen: bool = False  # the process produced at least one stream-json event
     stderr_tail: list[str] = field(default_factory=list)
+    stderr_closed: asyncio.Event = field(default_factory=asyncio.Event)
     tool_names: dict[str, str] = field(default_factory=dict)  # tool_use id -> tool name (for results)
     thinking_streamed: bool = False  # reasoning of the current API message already arrived as deltas
 
     @property
     def alive(self) -> bool:
         return self.proc.returncode is None
+
+    @property
+    def usable(self) -> bool:
+        return self.alive and self.stop_reason is None
 
 
 class ClaudeCodeAgent:
@@ -137,10 +173,11 @@ class ClaudeCodeAgent:
     async def stop(self) -> None:
         if self._reaper:
             self._reaper.cancel()
-        for p in [*self._procs.values(), *([self._standby] if self._standby else [])]:
-            await self._kill(p)
+        procs = [*self._procs.values(), *([self._standby] if self._standby else [])]
         self._procs.clear()
         self._standby = None
+        for p in procs:
+            await self._kill(p, "shutdown")
 
     def available(self) -> bool:
         return shutil.which(self.cfg.claude_binary) is not None and self.mcp_config.exists()
@@ -162,12 +199,12 @@ class ClaudeCodeAgent:
     async def reload(self) -> None:
         """Apply changed skills/persona: idle processes and the standby are restarted, busy ones finish first."""
         for sid, p in list(self._procs.items()):
-            if not p.busy:
-                await self._kill(p)
-                self._procs.pop(sid, None)
-        if self._standby is not None:
-            await self._kill(self._standby)
-            self._standby = None
+            if not p.busy and self._procs.get(sid) is p:
+                self._procs.pop(sid)  # out of the pool first: a turn starting meanwhile must not get it
+                await self._kill(p, "reload")
+        standby, self._standby = self._standby, None
+        if standby is not None:
+            await self._kill(standby, "reload")
         spawn(self._ensure_standby(), name="claude-standby")
 
     async def _spawn(self, resume: str | None = None) -> _Proc:
@@ -216,7 +253,7 @@ class ClaudeCodeAgent:
             limit=16 * 1024 * 1024,
             start_new_session=True,
         )
-        p = _Proc(proc=proc, model=self._model_id(self._spawn_model()), effort=effort)
+        p = _Proc(proc=proc, model=self._model_id(self._spawn_model()), effort=effort, resumed=resume)
         spawn(self._drain_stderr(p), name="claude-stderr")
         return p
 
@@ -231,26 +268,34 @@ class ClaudeCodeAgent:
 
     async def _drain_stderr(self, p: _Proc) -> None:
         assert p.proc.stderr is not None
-        async for raw in p.proc.stderr:
-            line = raw.decode(errors="replace").strip()
-            if line:
-                p.stderr_tail = [*p.stderr_tail[-9:], line[:300]]
+        try:
+            async for raw in p.proc.stderr:
+                line = raw.decode(errors="replace").strip()
+                if line:
+                    p.stderr_tail = [*p.stderr_tail[-9:], line[:300]]
+        finally:
+            p.stderr_closed.set()
 
     async def _ensure_standby(self) -> None:
         async with self._standby_lock:
-            if self._standby is None or not self._standby.alive:
+            if self._standby is None or not self._standby.usable:
                 try:
                     self._standby = await self._spawn()
                 except Exception as e:
                     self.last_error = str(e)
                     logger.warning("Claude standby spawn failed: %s", e)
 
-    async def _kill(self, p: _Proc) -> None:
+    def _terminate(self, p: _Proc, reason: str) -> None:
+        """SIGTERM the process group – only while the process lives (a reaped pid may already be reused)."""
+        p.stop_reason = p.stop_reason or reason
         if p.alive:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(p.proc.pid, 15)
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(p.proc.wait(), 5)
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(p.proc.pid, signal.SIGTERM)
+
+    async def _kill(self, p: _Proc, reason: str) -> None:
+        self._terminate(p, reason)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(p.proc.wait(), 5)
 
     async def _reap_idle(self) -> None:
         idle = self.cfg.idle_timeout_minutes * 60
@@ -258,20 +303,23 @@ class ClaudeCodeAgent:
             await asyncio.sleep(30)
             now = time.monotonic()
             for sid, p in list(self._procs.items()):
-                if not p.busy and (now - p.last_used > idle or not p.alive):
-                    await self._kill(p)
-                    self._procs.pop(sid, None)
+                if self._procs.get(sid) is not p or p.busy:
+                    continue
+                if now - p.last_used > idle or not p.usable:
+                    self._procs.pop(sid)  # out of the pool before the (awaited) kill: no turn may pick it up
+                    await self._kill(p, "idle")
 
     async def _proc_for(self, session_id: uuid.UUID, resume: str | None) -> _Proc:
         p = self._procs.get(session_id)
-        if p is not None and p.alive:
+        if p is not None and p.usable:
             return p
+        self._procs.pop(session_id, None)
         if resume:
             p = await self._spawn(resume=resume)
         else:
             async with self._standby_lock:
                 p, self._standby = self._standby, None
-            if p is None or not p.alive:
+            if p is None or not p.usable:
                 p = await self._spawn()
             spawn(self._ensure_standby(), name="claude-standby")
         self._procs[session_id] = p
@@ -293,7 +341,7 @@ class ClaudeCodeAgent:
             while True:
                 line = await p.proc.stdout.readline()
                 if not line:
-                    raise ClaudeUnavailable("Claude Code wurde beim Modellwechsel beendet")
+                    raise _ProcessEnded("Claude Code wurde beim Modellwechsel beendet")
                 ev = json.loads(line)
                 if ev.get("type") == "control_response" and ev.get("response", {}).get("request_id") == rid:
                     if ev["response"].get("subtype") != "success":
@@ -309,55 +357,98 @@ class ClaudeCodeAgent:
         context: str,
         model: str | None = None,
         images: list[dict[str, Any]] | None = None,
-    ) -> AsyncIterator[AgentEvent]:
+    ) -> AsyncGenerator[AgentEvent]:
+        """One turn. Ends with ``completed``, ``failed`` or ``cancelled`` (stopped by Sir / a barge-in).
+
+        If the CLI dies on its own the turn is retried once (``retry`` event with the reason): via ``--resume`` of
+        the conversation, or as a fresh conversation if resuming it was what failed. When tools already ran in the
+        failed attempt, the retry is told so – nothing may be done twice."""
+        prompt = text
+        for attempt in (1, 2):
+            crash: AgentEvent | None = None
+            tools: list[str] = []
+            content = user_content(prompt, context, images)
+            async with contextlib.aclosing(self._attempt(session_id, resume_id, content, model)) as stream:
+                async for ev in stream:
+                    if ev.type == "crashed":
+                        crash = ev
+                        continue
+                    if ev.type == "tool_started":
+                        tools.append(str(ev.data.get("name") or "Werkzeug"))
+                    yield ev
+            if crash is None:
+                return
+            if attempt == 2 or not crash.data.get("retryable"):
+                yield AgentEvent("failed", text=crash.text)
+                return
+            resume_id = crash.data.get("resume")
+            logger.warning("Retrying the turn once (%s, resume=%s)", crash.text, resume_id)
+            yield AgentEvent("retry", text=crash.text)
+            if tools:
+                prompt = RETRY_NOTE.format(tools=", ".join(dict.fromkeys(tools))) + text
+
+    async def _attempt(
+        self, session_id: uuid.UUID, resume_id: str | None, content: str | list[dict[str, Any]], model: str | None
+    ) -> AsyncGenerator[AgentEvent]:
+        """One try of a turn on this conversation's process. An unexpected end yields ``crashed`` (internal)."""
         p = await self._proc_for(session_id, resume_id)
         if p.effort != self._effort():
             # effort is a launch flag: restart this conversation's process (history comes back via --resume)
             resume_id = p.claude_session_id or resume_id
-            await self._kill(p)
             self._procs.pop(session_id, None)
+            await self._kill(p, "restart")
             p = await self._proc_for(session_id, resume_id)
         p.busy = True
         p.last_used = time.monotonic()
-        model_id = self._model_id(model or self.cfg.model)
-        if p.model != model_id:
-            try:
-                t_switch = time.monotonic()
-                await self._switch_model(p, model_id)
-                logger.info("Model switch to %s took %.0f ms", model_id, (time.monotonic() - t_switch) * 1000)
-            except (ClaudeUnavailable, TimeoutError, json.JSONDecodeError) as e:
-                p.busy = False
-                yield AgentEvent("failed", text=f"Modellwechsel fehlgeschlagen: {e}")
-                return
-        msg = {"type": "user", "message": {"role": "user", "content": user_content(text, context, images)}}
-        assert p.proc.stdin is not None and p.proc.stdout is not None
         finished = False
-        deadline = time.monotonic() + self.cfg.turn_timeout_s
         try:
-            p.proc.stdin.write((json.dumps(msg, ensure_ascii=False) + "\n").encode())
-            await p.proc.stdin.drain()
+            model_id = self._model_id(model or self.cfg.model)
+            if p.model != model_id:
+                try:
+                    t_switch = time.monotonic()
+                    await self._switch_model(p, model_id)
+                    logger.info("Model switch to %s took %.0f ms", model_id, (time.monotonic() - t_switch) * 1000)
+                except (_ProcessEnded, BrokenPipeError, ConnectionResetError):
+                    finished = True
+                    yield await self._ended(p, session_id)
+                    return
+                except (ClaudeUnavailable, TimeoutError, json.JSONDecodeError) as e:
+                    # not finished: a late answer to the switch could be read as this turn's → process is dropped
+                    yield AgentEvent("failed", text=f"Modellwechsel fehlgeschlagen: {e}")
+                    return
+            msg = {"type": "user", "message": {"role": "user", "content": content}}
+            assert p.proc.stdin is not None and p.proc.stdout is not None
+            deadline = time.monotonic() + self.cfg.turn_timeout_s
+            try:
+                p.proc.stdin.write((json.dumps(msg, ensure_ascii=False) + "\n").encode())
+                await p.proc.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                finished = True
+                yield await self._ended(p, session_id)
+                return
             while True:
                 try:
                     line = await asyncio.wait_for(p.proc.stdout.readline(), max(1.0, deadline - time.monotonic()))
                 except TimeoutError:
                     # a hung turn holds the global run lock: kill it so voice/desktop/phone keep working
                     logger.error("Claude turn exceeded %s s – process killed", self.cfg.turn_timeout_s)
-                    finished = False
+                    self._terminate(p, "timeout")
                     yield AgentEvent("failed", text=f"Zeitüberschreitung nach {self.cfg.turn_timeout_s // 60} Minuten")
                     return
                 if not line:
-                    err = friendly_error(" ".join(p.stderr_tail) or "Claude Code wurde beendet")
-                    self._procs.pop(session_id, None)
                     finished = True
-                    yield AgentEvent("failed", text=err)
+                    yield await self._ended(p, session_id)
                     return
                 try:
                     ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                p.events_seen = True
                 for out in self._translate(ev, p):
                     if out.type in ("completed", "failed"):
                         finished = True
+                        p.busy = False  # free for the reaper/next turn even if the caller never closes the stream
+                        p.last_used = time.monotonic()
                     yield out
                     if out.type in ("completed", "failed"):
                         return
@@ -367,9 +458,37 @@ class ClaudeCodeAgent:
             if not finished:
                 # cancelled / timed out mid-turn: the process still has this turn in flight and its leftover
                 # output would be read as the answer of the next turn → drop it (resumed later via --resume)
-                with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.killpg(p.proc.pid, 15)
-                self._procs.pop(session_id, None)
+                self._terminate(p, "aborted")
+                if self._procs.get(session_id) is p:
+                    self._procs.pop(session_id)
+
+    async def _ended(self, p: _Proc, session_id: uuid.UUID) -> AgentEvent:
+        """The process ended mid-turn: a deliberate stop (``cancelled`` / ``failed``) or a crash (``crashed``)."""
+        if self._procs.get(session_id) is p:
+            self._procs.pop(session_id)
+        if p.stop_reason == "interrupted":
+            return AgentEvent("cancelled")
+        if p.stop_reason == "shutdown":
+            return AgentEvent("failed", text="Jarvis wurde beendet oder neu gestartet – die Antwort wurde abgebrochen")
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(p.proc.wait(), 3)
+        with contextlib.suppress(TimeoutError):  # stdout closes first: let the stderr reader catch up
+            await asyncio.wait_for(p.stderr_closed.wait(), 1)
+        if p.stop_reason is not None:  # stopped by Jarvis while busy (should not happen) – the turn itself is fine
+            detail = f"Claude Code wurde von Jarvis beendet ({p.stop_reason})"
+        else:
+            detail = exit_detail(p.proc.returncode, p.stderr_tail)
+        logger.error(
+            "Claude Code ended mid-turn: rc=%s reason=%s resumed=%s events=%s stderr=%s",
+            p.proc.returncode, p.stop_reason, p.resumed, p.events_seen, p.stderr_tail,
+        )  # fmt: skip
+        self.last_error = detail
+        stderr = " ".join(p.stderr_tail).strip()
+        if stderr and friendly_error(stderr) != stderr[:300]:
+            return AgentEvent("failed", text=friendly_error(stderr))  # quota / login: a retry cannot help
+        # a resumed process that died before its first event: the resume itself failed → retry fresh
+        resume = None if p.resumed and not p.events_seen else (p.claude_session_id or p.resumed)
+        return AgentEvent("crashed", text=detail, data={"retryable": True, "resume": resume})
 
     def _translate(self, ev: dict[str, Any], p: _Proc) -> list[AgentEvent]:
         t = ev.get("type")
@@ -457,7 +576,7 @@ class ClaudeCodeAgent:
     async def interrupt(self, session_id: uuid.UUID) -> None:
         p = self._procs.pop(session_id, None)
         if p is not None:
-            await self._kill(p)  # the conversation continues later via --resume
+            await self._kill(p, "interrupted")  # the turn ends as "cancelled"; continues later via --resume
 
     def status(self) -> dict[str, Any]:
         return {

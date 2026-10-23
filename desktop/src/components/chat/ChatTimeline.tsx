@@ -11,6 +11,7 @@ import {
   Lightbulb,
   ListChecks,
   Loader2,
+  RotateCcw,
   Search,
   ShieldAlert,
   TriangleAlert,
@@ -320,6 +321,7 @@ const STEP_ICON: Record<string, typeof Brain> = {
   plan: ListChecks,
   action: ShieldAlert,
   summary: ClipboardList,
+  retry: RotateCcw,
 };
 
 function ThoughtProcess({ process, running, compact = false }: { process: TimelineEvent<ProcessData>[]; running: boolean; compact?: boolean }) {

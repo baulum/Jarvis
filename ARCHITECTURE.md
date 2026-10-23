@@ -57,6 +57,11 @@ Taint-Warnung, Erinnerungen) → Claude-Code-Prozess der Sitzung (`--input-forma
 Control-Request ohne Neustart) → Events auf den Bus → Transkript speichern → asynchrone Wissensextraktion (Haiku).
 Ein vorgewärmter Bereitschaftsprozess macht auch den ersten Turn schnell (gemessen: ~4 s inkl. Tool-Aufruf; Folge-Turns
 erstes Token ~1 s). Untätige Prozesse werden nach 15 min beendet und per `--resume` fortgesetzt.
+Beendet Jarvis selbst einen Prozess (Stopp/Barge-in, Leerlauf, Reload, Shutdown), wird er zuerst aus dem Pool genommen
+und mit Grund markiert: kein Turn bekommt einen sterbenden Prozess, ein Stopp endet als „Abgebrochen“ statt als Fehler.
+Stirbt die CLI von selbst, nennt Jarvis Exit-Code und stderr-Auszug und wiederholt den Turn einmal (per `--resume`, frisch,
+falls schon das Fortsetzen scheiterte; liefen bereits Werkzeuge, wird der zweite Versuch angewiesen, nichts doppelt zu tun).
+Ein Barge-in merkt sich einen Abbruch nur für einen Turn dieser Sitzung, der gerade läuft oder auf seinen Platz wartet.
 Agent-Läufe sind serialisiert, damit der MCP-Server jeden Tool-Aufruf dem richtigen Akteur und der richtigen Sitzung zuordnet.
 Ist Claude nicht verfügbar (z. B. Kontingent erschöpft), antwortet Jarvis deterministisch und ehrlich – ohne LLM und ohne
 Erledigt-Behauptungen.

@@ -485,6 +485,13 @@ class TurnRecorder:
             return await self._tool_started(ev.data)
         if ev.type in ("tool_completed", "tool_failed"):
             return await self._tool_finished(ev.data, ok=ev.type == "tool_completed")
+        if ev.type == "retry":  # Claude Code died on its own and the turn is tried once more
+            await self._close_text()
+            await self._close_thinking()
+            item = await self.process(
+                "retry", "Claude Code neu gestartet – zweiter Versuch", text=ev.text, status="done"
+            )
+            return {"event_id": item.id, "seq": item.seq, "turn_id": self.turn_id}
         return {}
 
     async def _tool_started(self, d: dict[str, Any]) -> dict[str, Any]:
