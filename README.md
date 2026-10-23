@@ -70,7 +70,9 @@ sie fehl, folgt ein zweiter Lauf mit der Testausgabe. Am Ende werden offene Änd
 anschließend gemergt wird. Danach Supabase-Deploy (falls `supabase/` im Projekt liegt), Vercel-Deploy in Produktion (falls
 das Projekt eine `vercel.json` oder einen Vercel-Link `.vercel/project.json` hat und der Vercel-Connector aktiv ist; ist das
 Vercel-Projekt bereits mit dem Repo verbunden, baut Vercel selbst über die Git-Integration) und Aufräumen von Branch und Worktree.
-Bei rotem Ergebnis, Fehler oder Abbruch wird nur der Job-Branch gesichert, nichts gemergt.
+Bei rotem Ergebnis, Fehler oder Abbruch wird nur der Job-Branch gesichert, nichts gemergt. Bis zu `coding.max_parallel_jobs`
+(Standard 3) Jobs laufen gleichzeitig, jeder in seinem Worktree; weitere warten als „queued“. Das Ausliefern läuft pro
+Repository nacheinander (der nächste Job rebased auf das frisch gemergte `main`), Jobs für dieselbe Kundenseite ebenso.
 
 Details: [ARCHITECTURE.md](ARCHITECTURE.md), Sicherheitsmodell: [SECURITY.md](SECURITY.md).
 

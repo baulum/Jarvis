@@ -203,7 +203,9 @@ coding:
   extra_path: [/Users/paul/Documents/flutter/bin]
   # Modell für Coding-Jobs ohne Angabe: haiku | sonnet | opus; leer = aktuell im Chat gewähltes Modell.
   default_model: ""
-  max_parallel_jobs: 1
+  # Coding-Jobs gleichzeitig, jeder im eigenen Worktree; weitere warten als "queued". Ausliefern (Merge nach main,
+  # Deploy, Aufräumen) geschieht pro Repository nacheinander; Jobs für dieselbe Kundenseite laufen nacheinander.
+  max_parallel_jobs: 3
   job_timeout_minutes: 60
   allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm:*)", "Bash(npx:*)", "Bash(pnpm:*)",
                   "Bash(node:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git add:*)",

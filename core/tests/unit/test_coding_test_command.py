@@ -57,6 +57,19 @@ async def test_all_steps_green(tmp_path: Path) -> None:
     assert "a\n" in res["output"] and "b\n" in res["output"]
 
 
+async def test_worktree_src_leads_pythonpath_and_import_path_is_logged(tmp_path: Path, monkeypatch) -> None:
+    pkg = tmp_path / "core" / "src" / "jarvis"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    monkeypatch.setenv("PYTHONPATH", "/somewhere/else")
+    res = await _runner(tmp_path)._run_tests(
+        tmp_path, "python3 -c \"import os; print(os.environ['PYTHONPATH'])\""
+    )
+    assert res["passed"] is True
+    assert res["output"].startswith(f"{tmp_path / 'core' / 'src'}:/somewhere/else")
+    assert f"[jarvis geladen aus: {pkg / '__init__.py'}]" in res["output"]
+
+
 async def test_invalid_stored_command_fails_without_running(tmp_path: Path) -> None:
     res = await _runner(tmp_path)._run_tests(tmp_path, "pnpm test ; touch pwned")
     assert res["passed"] is False and res["exit_code"] is None
