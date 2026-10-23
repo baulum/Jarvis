@@ -23,6 +23,7 @@ import re
 import shlex
 import shutil
 import signal
+import subprocess
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -198,6 +199,39 @@ def supabase_projects(paths: list[str]) -> dict[str, dict[str, Any]]:
     }
 
 
+# Commit identity when the global git config has none (overridable via JARVIS_GIT_NAME / JARVIS_GIT_EMAIL).
+DEFAULT_GIT_NAME = "Paul"
+DEFAULT_GIT_EMAIL = "paulhoflich@gmail.com"
+_EMAIL_RE = re.compile(r"^[^@\s]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$")
+
+
+def valid_git_email(email: str | None) -> bool:
+    """A real address with a domain (``x@localhost``, ``t@t`` … are not: Vercel blocks deployments of such commits)."""
+    return bool(email and _EMAIL_RE.match(email.strip()))
+
+
+def _global_git_config(key: str) -> str:
+    try:
+        proc = subprocess.run(
+            ["git", "config", "--global", "--get", key], capture_output=True, text=True, timeout=10, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def git_identity() -> tuple[str, str]:
+    """(name, email) for every commit of a coding job: Sir's global git identity; if it has no valid email,
+    ``JARVIS_GIT_EMAIL`` (else ``DEFAULT_GIT_EMAIL``), the name likewise from ``JARVIS_GIT_NAME``."""
+    name = _global_git_config("user.name") or os.environ.get("JARVIS_GIT_NAME", "").strip() or DEFAULT_GIT_NAME
+    email = _global_git_config("user.email")
+    if not valid_git_email(email):
+        email = os.environ.get("JARVIS_GIT_EMAIL", "").strip()
+        if not valid_git_email(email):
+            email = DEFAULT_GIT_EMAIL
+    return name, email
+
+
 def slug(text: str, n: int = 40) -> str:
     s = re.sub(
         r"[^a-z0-9]+", "-", text.lower().replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
@@ -237,8 +271,14 @@ class CodingRunner:
         self._inbox: dict[uuid.UUID, list[str]] = {}  # messages for the agent, delivered between two runs
         self._interrupted: set[uuid.UUID] = set()  # current run was stopped on purpose to deliver a message
         self._closing: set[uuid.UUID] = set()  # job is past its last agent run: no more messages
+        self._identity: tuple[str, str] | None = None  # (name, email) of all commits, resolved on first use
 
     # ------------------------------------------------------------------ environment
+    def git_identity(self) -> tuple[str, str]:
+        if getattr(self, "_identity", None) is None:
+            self._identity = git_identity()
+        return self._identity
+
     def _env(self) -> dict[str, str]:
         env = {
             k: v
@@ -252,6 +292,12 @@ class CodingRunner:
                 raise CodingError(f"coding.claude_env darf {k} nicht setzen (nur Subscription-Login erlaubt)")
             env[k] = os.path.expanduser(str(v))
         env["GIT_TERMINAL_PROMPT"] = "0"
+        # Every commit (runner, agent, merges) carries Sir's identity: a made-up one like jarvis@localhost makes
+        # Vercel block the deployment.
+        name, email = self.git_identity()
+        for role in ("AUTHOR", "COMMITTER"):
+            env[f"GIT_{role}_NAME"] = name
+            env[f"GIT_{role}_EMAIL"] = email
         # Package-manager caches live in a dedicated, sandbox-writable directory (not ~/.npm etc.).
         cache = self.workspaces / ".cache"
         env["npm_config_cache"] = str(cache / "npm")
@@ -317,9 +363,7 @@ class CodingRunner:
             if not readme.exists():
                 readme.write_text(f"# {path.name}\n", encoding="utf-8")
             await self._git(path, "add", "-A")
-            await self._git(
-                path, "-c", "user.name=Jarvis", "-c", "user.email=jarvis@localhost", "commit", "-m", "Initial commit"
-            )
+            await self._git(path, "commit", "-m", "Initial commit")
 
     async def _commit_pending(self, repo: Path) -> None:
         """Jarvis-managed projects: commit prepared files (e.g. BRIEF.md) so the job's worktree sees them."""
@@ -327,16 +371,7 @@ class CodingRunner:
             return  # never touch Sir's other repositories
         if await self._git(repo, "status", "--porcelain", check=False):
             await self._git(repo, "add", "-A")
-            await self._git(
-                repo,
-                "-c",
-                "user.name=Jarvis",
-                "-c",
-                "user.email=jarvis@localhost",
-                "commit",
-                "-m",
-                "Jarvis: Projektunterlagen vorbereitet",
-            )
+            await self._git(repo, "commit", "-m", "Jarvis: Projektunterlagen vorbereitet")
 
     async def clone(self, url: str, name: str | None = None) -> Path:
         if not re.match(r"^https://[\w.-]+/[\w.-]+/[\w.-]+(\.git)?/?$", url):
@@ -1277,7 +1312,7 @@ class CodingRunner:
             if wip
             else f"Jarvis: {title}\n\nErstellt mit Claude Code über den Jarvis Coding-Runner."
         )
-        await self._git(cwd, "-c", "user.name=Jarvis", "-c", "user.email=jarvis@localhost", "commit", "-m", message)
+        await self._git(cwd, "commit", "-m", message)
         return await self._git(cwd, "rev-parse", "--short", "HEAD")
 
     async def _branch_work(self, wt: Path) -> dict[str, Any]:
