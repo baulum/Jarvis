@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import io
@@ -223,7 +224,7 @@ async def test_documents_pdf_docx_csv_xlsx(wa: SimpleNamespace) -> None:
     cases = [
         ("P", "Rechnung.pdf", "application/pdf", make_pdf("Rechnung Nr. 4711 Gesamt 499,00 EUR")),
         ("W", "Brief.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", make_docx("Sehr geehrter Herr Weber")),
-        ("C", "Umsatz.csv", "text/csv", "Monat;Umsatz\nJanuar;1.200,50\nFebruar;800\n".encode()),
+        ("C", "Umsatz.csv", "text/csv", b"Monat;Umsatz\nJanuar;1.200,50\nFebruar;800\n"),
         ("X", "Angebot.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", make_xlsx()),
     ]
     out = {}
@@ -307,7 +308,8 @@ async def test_voice_note_transcript_and_suggestions_need_sirs_ok(wa: SimpleName
 @pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="ffmpeg not installed")
 async def test_video_metadata_audio_and_frames(wa: SimpleNamespace, tmp_path: Path) -> None:
     video = tmp_path / "clip.mp4"
-    subprocess.run(
+    await asyncio.to_thread(
+        subprocess.run,
         ["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=10",
          "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-shortest", "-pix_fmt", "yuv420p", str(video)],
         check=True,

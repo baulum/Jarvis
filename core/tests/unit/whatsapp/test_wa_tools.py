@@ -223,7 +223,7 @@ async def test_forwarding_a_received_file_is_flagged(t: SimpleNamespace) -> None
     f = await t.svc.download(await t.svc.repo.message("F1"), actor="t")  # type: ignore[arg-type]
     res = await t.executor.execute("whatsapp_send_file", {"contactId": MUELLER, "filePath": f"wa-file:{f.id}"}, ctx(t))
     ap = await approval(res.approval_id)
-    assert "Weiterleitung" in ap.summary and "fremde Inhalte" not in ap.summary or "Weiterleitung" in ap.summary
+    assert "Weiterleitung" in ap.summary
 
 
 async def test_roles_kill_switch_and_connection_state(t: SimpleNamespace) -> None:

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import importlib
+import json
 import sys
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -24,8 +25,8 @@ from typing import Any
 import pytest
 from sqlalchemy import BigInteger, event
 from sqlalchemy import types as sqltypes
-from sqlalchemy.dialects.sqlite import DATETIME as SQLITE_DATETIME
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.sqlite import DATETIME as SQLITE_DATETIME
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
 
@@ -256,12 +257,11 @@ class FakeOneShot:
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     base = tmp_path / "jarvis"
-    return Settings(
-        paths=PathsCfg(
-            data_dir=base / "data", log_dir=base / "logs", vault_dir=base / "vault",
-            workspaces_dir=base / "workspaces", projects_dir=base / "projects",
-        )  # fmt: skip
-    )
+    paths = PathsCfg(
+        data_dir=base / "data", log_dir=base / "logs", vault_dir=base / "vault",
+        workspaces_dir=base / "workspaces", projects_dir=base / "projects",
+    )  # fmt: skip
+    return Settings(paths=paths)
 
 
 @pytest.fixture
@@ -343,5 +343,5 @@ def media_message(mid: str, kind: str, *, file_name: str | None = None, mimetype
         media["fileName"] = file_name
     if sha_b64:
         media["fileSha256"] = sha_b64
-    raw = '{"key":{"id":"%s"},"message":{"documentMessage":{"url":"https://mmg.whatsapp.net/x"}}}' % mid
+    raw = json.dumps({"key": {"id": mid}, "message": {"documentMessage": {"url": "https://mmg.whatsapp.net/x"}}})
     return incoming(mid, caption, kind=kind, media=media, raw=raw, **kw)
