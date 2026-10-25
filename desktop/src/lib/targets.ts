@@ -1,7 +1,7 @@
 // Where a notification leads: the approval, the coding job or the task it is about – never just the list.
 
 export interface Target {
-  view: "approvals" | "agents" | "tasks";
+  view: "approvals" | "agents" | "tasks" | "whatsapp";
   job?: string;
   task?: string;
 }
@@ -16,6 +16,7 @@ export function notificationTarget(event: string, data: Record<string, unknown> 
   if (job) return { view: "agents", job }; // a coding job has its own monitor, preferred over its task
   const task = id(d.task_id);
   if (task) return { view: "tasks", task };
+  if (event.startsWith("whatsapp.")) return { view: "whatsapp" }; // messages, reminders, failed sends
   if (event.startsWith("coding.")) return { view: "agents" };
   if (event.startsWith("task.")) return { view: "tasks" };
   return null;

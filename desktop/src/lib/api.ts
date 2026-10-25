@@ -41,6 +41,16 @@ import type {
   WakeupSettings,
 } from "./types";
 import type { AttachmentInfo } from "./attachments";
+import type {
+  WaChat,
+  WaConversation,
+  WaFile,
+  WaLocations,
+  WaSend,
+  WaSendResult,
+  WaStatus,
+  WaSuggestion,
+} from "./whatsapp";
 import type { DesktopBuild } from "./build";
 import type { SlashCommand } from "./slash";
 import type { TimelineEvent } from "./timeline";
@@ -313,6 +323,41 @@ export function createApi(opts: ApiOptions) {
     taskMessage: (tid: string, text: string, immediate = false) =>
       post<AgentMessageResult>(`/tasks/${id(tid)}/message`, { text, immediate }),
     commands: () => get<{ version: number; commands: SlashCommand[] }>("/commands"),
+
+    // whatsapp (one central connection on the Core; every client sees the same chats)
+    whatsapp: {
+      status: () => get<WaStatus>("/whatsapp/status"),
+      connect: (method: "qr" | "pairing", phone?: string) =>
+        post<{ started: boolean; pairing_code: string | null }>("/whatsapp/connect", { method, phone: phone || null }),
+      disconnect: () => post<{ ok: boolean }>("/whatsapp/disconnect"),
+      logout: () => post<{ ok: boolean }>("/whatsapp/logout"),
+      chats: (q = "", limit = 200) => get<WaChat[]>("/whatsapp/chats", { q, limit }),
+      messages: (jid: string, before?: string, limit = 60) =>
+        get<WaConversation>(`/whatsapp/chats/${id(jid)}/messages`, { before, limit }),
+      markRead: (jid: string) => post<WaSendResult>(`/whatsapp/chats/${id(jid)}/read`),
+      thumbnail: async (jid: string, msgId: string): Promise<Blob> =>
+        (await raw("GET", `/whatsapp/chats/${id(jid)}/messages/${id(msgId)}/thumbnail`)).blob(),
+      download: (jid: string, msgId: string) =>
+        json<WaSendResult>("POST", `/whatsapp/chats/${id(jid)}/messages/${id(msgId)}/download`, {}, undefined),
+      loadHistory: (jid: string) => post<{ requested: boolean; note?: string }>(`/whatsapp/chats/${id(jid)}/history`),
+      suggest: (jid: string) => post<{ created: WaSuggestion[] }>(`/whatsapp/chats/${id(jid)}/suggest`),
+      forgetChat: (jid: string) => del<{ files: number }>(`/whatsapp/chats/${id(jid)}`),
+      files: (query: { q?: string; chat?: string; type?: string; limit?: number } = {}) => get<WaFile[]>("/whatsapp/files", query),
+      fileContent: async (fileId: string, download = false): Promise<Blob> =>
+        (await raw("GET", `/whatsapp/files/${id(fileId)}/content`, undefined, download ? { download: true } : undefined, 300_000)).blob(),
+      saveFile: (fileId: string, body: { destination: string; device?: string; allow_outside?: boolean }) =>
+        post<WaSendResult>(`/whatsapp/files/${id(fileId)}/save`, body),
+      locations: () => get<WaLocations>("/whatsapp/locations"),
+      send: (body: { chat: string; text?: string; files?: string[]; caption?: string; as_document?: boolean; reply_to?: string; force?: boolean }) =>
+        post<WaSendResult>("/whatsapp/send", body),
+      sends: (limit = 50) => get<WaSend[]>("/whatsapp/sends", { limit }),
+      suggestions: (status: "pending" | "all" = "pending") => get<WaSuggestion[]>("/whatsapp/suggestions", { status }),
+      decideSuggestion: (sid: string, decision: "accept" | "dismiss") =>
+        post<{ status: string }>(`/whatsapp/suggestions/${id(sid)}`, { decision }),
+      purge: (olderThanDays: number) => post<{ files: number }>("/whatsapp/purge", { older_than_days: olderThanDays }),
+      /** URL + token for the upload with progress (XMLHttpRequest, see lib/whatsapp.ts). */
+      uploadTarget: (name: string) => ({ url: buildUrl(opts.getBaseUrl?.() ?? baseUrl, "/whatsapp/uploads", { name }), token: opts.getToken() }),
+    },
   };
 }
 

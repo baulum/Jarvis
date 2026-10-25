@@ -117,7 +117,10 @@ class Dispatcher:
             "files.list": lambda a: files.run_sync(files.list_dir, self.policy, _str(a, "path")),
             "files.read": lambda a: files.run_sync(files.read_file, self.policy, _str(a, "path"), a.get("max_bytes")),
             "files.search": self._files_search,
+            "files.stat": lambda a: files.run_sync(files.stat, self.policy, _str(a, "path"), bool(a.get("hash"))),
+            "files.read_chunk": self._files_read_chunk,
             "files.write": self._files_write,
+            "files.write_chunk": self._files_write_chunk,
             "files.move": lambda a: files.run_sync(files.move, self.policy, _str(a, "from_path"), _str(a, "to_path")),
             "files.mkdir": lambda a: files.run_sync(files.mkdir, self.policy, _str(a, "path")),
             "files.reveal": self._reveal,
@@ -315,6 +318,28 @@ class Dispatcher:
         if not isinstance(content, str):
             raise CommandError("invalid", "content muss Text sein")
         return await files.run_sync(files.write_file, self.policy, _str(a, "path"), content, bool(a.get("overwrite")))
+
+    async def _files_read_chunk(self, a: dict[str, Any]) -> Any:
+        offset = int(_num(a, "offset"))
+        length = int(_num(a, "length", required=False, default=files.CHUNK_MAX))
+        return await files.run_sync(files.read_chunk, self.policy, _str(a, "path"), offset, length)
+
+    async def _files_write_chunk(self, a: dict[str, Any]) -> Any:
+        size = a.get("size")
+        if size is not None and (isinstance(size, bool) or not isinstance(size, int)):
+            raise CommandError("invalid", "size muss eine ganze Zahl sein")
+        return await files.run_sync(
+            files.write_chunk,
+            self.policy,
+            _str(a, "upload_id", max_len=40),
+            _str(a, "path"),
+            int(_num(a, "offset")),
+            _str(a, "data", required=False, max_len=8 * 1024 * 1024) or "",
+            bool(a.get("final")),
+            _str(a, "sha256", required=False, max_len=64),
+            size,
+            bool(a.get("overwrite")),
+        )
 
     async def _reveal(self, a: dict[str, Any]) -> Any:
         path = self.policy.check(_str(a, "path") or "", must_exist=True)

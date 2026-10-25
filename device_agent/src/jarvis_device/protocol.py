@@ -28,7 +28,10 @@ ACTIONS: dict[str, str] = {
     "files.list": "files.read",
     "files.read": "files.read",
     "files.search": "files.read",
+    "files.stat": "files.read",
+    "files.read_chunk": "files.read",
     "files.write": "files.write",
+    "files.write_chunk": "files.write",
     "files.move": "files.write",
     "files.mkdir": "files.write",
     "files.reveal": "files.reveal",
@@ -80,6 +83,8 @@ READ_ONLY_ACTIONS = frozenset(
         "files.list",
         "files.read",
         "files.search",
+        "files.stat",
+        "files.read_chunk",
     }
 )
 

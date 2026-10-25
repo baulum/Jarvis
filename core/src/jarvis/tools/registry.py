@@ -53,6 +53,18 @@ class ToolSpec:
     summarize: Callable[[dict[str, Any]], str] | None = None
     # Capability ids this tool needs on the host (jarvis.platform.capabilities). Empty = runs everywhere.
     requires: tuple[str, ...] = ()
+    # Runs before the approval decision (only for calls that are not yet approved): resolves and checks the
+    # arguments on the server (e.g. a contact name → chat id, a file → staged copy with type, size and hash) and
+    # returns the arguments that are shown in the approval and later executed. May raise ToolUserError.
+    prepare: Callable[[ToolContext, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
+    # Always ask Sir before running – whatever the approval mode says (e.g. messages to third parties).
+    always_ask: bool = False
+    # Per call: a reason to ask Sir although the mode would run it directly (e.g. a path outside allowed folders).
+    ask_if: Callable[[dict[str, Any]], str | None] | None = None
+    # Argument names whose values the audit log only records as a length (message texts, captions).
+    private_args: tuple[str, ...] = ()
+    # Summary for the audit log when ``summarize`` shows content that must not be logged.
+    audit_summary: Callable[[dict[str, Any]], str] | None = None
 
     def __post_init__(self) -> None:
         if not _NAME_RE.match(self.name):
@@ -66,8 +78,25 @@ class ToolSpec:
                 return self.summarize(args)
             except Exception:  # noqa: S110 - fall back to generic summary
                 pass
-        shown = ", ".join(f"{k}={str(v)[:80]}" for k, v in args.items())
+        shown = ", ".join(
+            f"{k}={f'[{len(str(v))} Zeichen]' if k in self.private_args else str(v)[:80]}" for k, v in args.items()
+        )
         return f"{self.name}({shown})"
+
+    def describe_for_audit(self, args: dict[str, Any]) -> str:
+        if self.audit_summary:
+            try:
+                return self.audit_summary(args)
+            except Exception:  # noqa: S110 - fall back to the generic summary without private values
+                pass
+        if self.private_args:
+            shown = ", ".join(
+                f"{k}={f'[{len(str(v))} Zeichen]' if k in self.private_args else str(v)[:80]}"
+                for k, v in args.items()
+                if not isinstance(v, dict | list)
+            )
+            return f"{self.name}({shown})"
+        return self.describe(args)
 
 
 class ToolRegistry:

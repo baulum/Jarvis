@@ -370,6 +370,21 @@ class ClientsCfg(_Strict):
         return _expand(v) if v else None
 
 
+class WhatsAppCfg(_Strict):
+    """The WhatsApp sidecar (whatsapp-sidecar/, Node + Baileys). Connection options Sir changes in the app live in
+    the connector settings; these are host-level options."""
+
+    node_binary: str = "node"  # name in PATH or absolute path (Node.js ≥ 20)
+    sidecar_dir: Path | None = None  # default: <repo>/whatsapp-sidecar (needs `npm ci && npm run build`)
+    log_level: Literal["error", "warn", "info", "debug"] = "warn"  # sidecar log (always redacted)
+    request_timeout_s: float = Field(default=60, ge=5, le=600)
+
+    @field_validator("sidecar_dir", mode="before")
+    @classmethod
+    def _exp(cls, v: Any) -> Path | None:
+        return _expand(v) if v else None
+
+
 class Settings(_Strict):
     server: ServerCfg = Field(default_factory=ServerCfg)
     paths: PathsCfg
@@ -389,6 +404,7 @@ class Settings(_Strict):
     creative: CreativeCfg = Field(default_factory=CreativeCfg)
     devices: DevicesCfg = Field(default_factory=DevicesCfg)
     clients: ClientsCfg = Field(default_factory=ClientsCfg)
+    whatsapp: WhatsAppCfg = Field(default_factory=WhatsAppCfg)
 
 
 class Personality(_Strict):

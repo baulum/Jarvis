@@ -72,6 +72,8 @@ from jarvis.tools.executor import ToolExecutor
 from jarvis.tools.registry import ToolRegistry
 from jarvis.voice.speech import STTService, TTSService
 from jarvis.voice.wakeup import WakeupStore
+from jarvis.whatsapp.connector import WhatsAppConnector
+from jarvis.whatsapp.service import WhatsAppService
 
 logger = logging.getLogger(__name__)
 VERSION = "0.2.0"
@@ -164,6 +166,8 @@ class AppState:
         self.device_hub = DeviceHub(settings.devices.command_timeout_s, lambda: self.kill_switch.engaged)
         self.device_hub.on_paired_change = self._on_devices_paired_change
         self.device_pairing = PairingService(settings.devices.pairing_ttl_s)
+        # WhatsApp: one central connection on this server (Node sidecar, supervised), shared by every client
+        self.whatsapp = WhatsAppService(self)
 
         for conn_cls in (
             SystemConnector,
@@ -185,6 +189,7 @@ class AppState:
             TelephonyConnector,
             RoutingConnector,
             AttachmentsConnector,
+            WhatsAppConnector,
         ):
             self.connectors.add(conn_cls(self))
         self._register_phone_tool()

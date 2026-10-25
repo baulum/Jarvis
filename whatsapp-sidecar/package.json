@@ -1,0 +1,27 @@
+{
+  "name": "jarvis-whatsapp-sidecar",
+  "private": true,
+  "version": "1.0.0",
+  "description": "WhatsApp connector for the Jarvis Core (Baileys). Started and supervised by the Core; talks JSON lines over stdio only.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "dist/main.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "6.7.24",
+    "pino": "9.14.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "typescript": "6.0.3",
+    "vitest": "5.0.4"
+  }
+}

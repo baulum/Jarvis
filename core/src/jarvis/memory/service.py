@@ -1567,7 +1567,9 @@ class MemoryService:
             )
         if sess is None:
             return None
-        user_msgs = [m for m in msgs if m.role == "user"]
+        # private WhatsApp content is never summarised into the global memory on its own (see jarvis.whatsapp)
+        private = any(str(src).startswith("whatsapp_") for src in (sess.taint_sources or []))
+        user_msgs = [] if private else [m for m in msgs if m.role == "user"]
         result: dict[str, Any] | None = None
         if len(user_msgs) >= 2:
             lines = []

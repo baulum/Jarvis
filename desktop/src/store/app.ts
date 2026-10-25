@@ -36,6 +36,7 @@ export type ViewId =
   | "settings"
   | "permissions"
   | "devices"
+  | "whatsapp"
   | "system";
 
 /** A view, optionally with the job/task to select in it. */
@@ -65,6 +66,7 @@ export type Topic =
   | "connector"
   | "notification"
   | "session"
+  | "whatsapp"
   | "system";
 
 const LIVE_LOG_MAX = 3000;
@@ -151,6 +153,7 @@ export const useApp = create<AppState>((set, get) => ({
     connector: 0,
     notification: 0,
     session: 0,
+    whatsapp: 0,
     system: 0,
   },
   taskInputFields: {},
@@ -440,6 +443,18 @@ export function handleBusEvent(ev: BusEvent): void {
       title: d.engaged ? "Not-Aus aktiviert" : "Not-Aus aufgehoben",
       body: d.engaged ? String(d.reason ?? "") : undefined,
     });
+    return;
+  }
+  if (type.startsWith("whatsapp.")) {
+    // chats are private: the bus carries ids and states only, the view refetches what it shows
+    debounce("whatsapp", type === "whatsapp.send_progress" ? 50 : 300, () => bump("whatsapp"));
+    if (type === "whatsapp.status") {
+      debounce("connector", 500, () => bump("connector"));
+      const state = String(d.state ?? "");
+      if (state === "logged_out" || state === "replaced" || (state === "error" && d.error)) {
+        st.pushToast({ tone: "warn", title: "WhatsApp getrennt", body: String(d.error ?? ""), action: { label: "Öffnen", view: "whatsapp" } });
+      }
+    }
     return;
   }
   if (type.startsWith("telephony.")) {

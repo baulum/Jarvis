@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import fnmatch
+import hashlib
 import os
+import re
 import shutil
 import time
 from datetime import UTC, datetime
@@ -134,3 +137,108 @@ def search(policy: PathPolicy, query: str, root: str | None, limit: int = 50, bu
 
 async def run_sync(fn: Any, *args: Any) -> Any:
     return await asyncio.to_thread(fn, *args)
+
+
+# ---------------------------------------------------------------------------------------- binary transfer
+# Used by the Core to move files between the server and this computer (e.g. a WhatsApp attachment to the
+# desktop, a PDF from here to WhatsApp). Pieces travel base64-encoded in normal command frames; the SHA-256 of
+# the whole file is checked on both ends.
+CHUNK_MAX = 4 * 1024 * 1024
+TRANSFER_MAX = 2 * 1024 * 1024 * 1024
+_UPLOAD_ID = re.compile(r"^[0-9a-f]{8,32}$")
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def stat(policy: PathPolicy, raw: str, with_hash: bool = False) -> dict[str, Any]:
+    path = policy.check(raw, must_exist=True)
+    st = path.stat()
+    out: dict[str, Any] = {
+        "path": str(path),
+        "name": path.name,
+        "is_file": path.is_file(),
+        "size": st.st_size if path.is_file() else None,
+        "modified": _iso(st.st_mtime),
+    }
+    if with_hash and path.is_file():
+        if st.st_size > TRANSFER_MAX:
+            raise ValueError("Datei ist zu groß für eine Übertragung (max. 2 GB)")
+        out["sha256"] = _sha256(path)
+    return out
+
+
+def read_chunk(policy: PathPolicy, raw: str, offset: int, length: int) -> dict[str, Any]:
+    path = policy.check(raw, must_exist=True)
+    if not path.is_file():
+        raise IsADirectoryError(str(path))
+    if offset < 0:
+        raise ValueError("offset muss ≥ 0 sein")
+    length = max(1, min(CHUNK_MAX, int(length)))
+    size = path.stat().st_size
+    with path.open("rb") as f:
+        f.seek(offset)
+        data = f.read(length)
+    return {"offset": offset, "data": base64.b64encode(data).decode(), "eof": offset + len(data) >= size, "size": size}
+
+
+def _free_name(target: Path) -> Path:
+    if not target.exists():
+        return target
+    stem, suffix = target.stem, target.suffix
+    for i in range(1, 1000):
+        candidate = target.with_name(f"{stem} ({i}){suffix}")
+        if not candidate.exists():
+            return candidate
+    raise FileExistsError(f"Kein freier Name für {target.name}")
+
+
+def write_chunk(
+    policy: PathPolicy,
+    upload_id: str,
+    raw: str,
+    offset: int,
+    data_b64: str,
+    final: bool,
+    sha256: str | None = None,
+    size: int | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    if not _UPLOAD_ID.match(upload_id or ""):
+        raise ValueError("upload_id ungültig")
+    target = policy.check(raw)
+    if target.exists() and target.is_dir():
+        raise IsADirectoryError(f"{target} ist ein Ordner – vollständigen Dateipfad angeben")
+    policy.check(str(target.parent))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    part = target.with_name(f".{target.name}.jarvis-part-{upload_id}")
+    policy.check(str(part))
+    data = base64.b64decode(data_b64 or "", validate=True)
+    if len(data) > CHUNK_MAX:
+        raise ValueError("Block zu groß")
+    current = part.stat().st_size if part.exists() else 0
+    if offset == 0 and current:
+        part.unlink()
+        current = 0
+    if offset != current:
+        raise ValueError(f"Block an falscher Stelle ({offset}, erwartet {current})")
+    if current + len(data) > TRANSFER_MAX:
+        part.unlink(missing_ok=True)
+        raise ValueError("Übertragung zu groß (max. 2 GB)")
+    with part.open("ab") as f:
+        f.write(data)
+    if not final:
+        return {"received": current + len(data)}
+    total = part.stat().st_size
+    digest = _sha256(part)
+    if (size is not None and total != int(size)) or not sha256 or digest != sha256:
+        part.unlink(missing_ok=True)
+        raise ValueError("Prüfsumme oder Größe stimmt nicht – Datei verworfen")
+    final_path = target if overwrite else _free_name(target)
+    os.replace(part, final_path)
+    return {"path": str(final_path), "size": total, "sha256": digest}

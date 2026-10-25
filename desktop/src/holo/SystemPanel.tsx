@@ -17,6 +17,7 @@ import { SkillsView } from "../views/SkillsView";
 import { SystemView } from "../views/SystemView";
 import { TasksView } from "../views/TasksView";
 import { VoiceView } from "../views/VoiceView";
+import { WhatsAppView } from "../views/WhatsAppView";
 import { useApp } from "../store/app";
 import { useBrain } from "./store";
 
@@ -27,6 +28,7 @@ export const SYSTEM_VIEWS: { id: string; label: string; keywords: string[]; view
   { id: "agents", label: "Agent-Monitor", keywords: ["coding", "claude", "werkzeugaufrufe"], view: AgentsView },
   { id: "scheduler", label: "Zeitplaner", keywords: ["cron", "termin", "wiederkehrend"], view: SchedulerView },
   { id: "memory", label: "Gedächtnis als Liste", keywords: ["vault", "obsidian", "notizen", "export"], view: MemoryView },
+  { id: "whatsapp", label: "WhatsApp", keywords: ["chats", "nachrichten", "dateien", "qr", "messenger"], view: WhatsAppView },
   { id: "connectors", label: "Connectoren", keywords: ["lexware", "google", "telegram", "fish", "twilio", "mcp"], view: ConnectorsView },
   { id: "skills", label: "Skills", keywords: ["claude skills"], view: SkillsView },
   { id: "voice", label: "Stimme", keywords: ["mikrofon", "push-to-talk", "voice"], view: VoiceView },

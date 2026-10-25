@@ -10,6 +10,7 @@ node_modules/
 desktop/dist/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
+whatsapp-sidecar/dist/
 # Swift
 bridge/.build/
 bridge/build/

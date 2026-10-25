@@ -5,7 +5,7 @@ import { useAction, useQuery } from "../hooks/useQuery";
 import { formatRelative, healthLabel, healthTone } from "../lib/format";
 import { openExternal } from "../lib/native";
 import type { Connector } from "../lib/types";
-import { api } from "../store/app";
+import { api, useApp } from "../store/app";
 
 function ConfigureDialog({ c, onClose, onSaved }: { c: Connector; onClose: () => void; onSaved: () => void }) {
   const [secrets, setSecrets] = useState<Record<string, string>>({});
@@ -92,11 +92,16 @@ function ConnectorCard({ c, refetch }: { c: Connector; refetch: () => Promise<vo
         </ul>
       </details>
       <footer className="mt-auto flex flex-wrap gap-2">
-        {(c.secrets.length > 0 || Object.keys(c.settings_schema.properties ?? {}).length > 0) && (
+        {c.id !== "whatsapp" && (c.secrets.length > 0 || Object.keys(c.settings_schema.properties ?? {}).length > 0) && (
           <Button size="sm" icon={<KeyRound className="size-3.5" />} onClick={() => setConfiguring(true)}>Einrichten</Button>
         )}
         <Button size="sm" variant="ghost" busy={act.busy === "test"} icon={<RefreshCw className="size-3.5" />}
                 onClick={() => void act.run("test", () => api.testConnector(c.id)).then(refetch)}>Testen</Button>
+        {c.id === "whatsapp" && (
+          <Button size="sm" variant={c.enabled ? "primary" : "ghost"} onClick={() => useApp.getState().setView("whatsapp")}>
+            {c.enabled && h?.status === "ok" ? "Chats öffnen" : "Verbinden und verwalten"}
+          </Button>
+        )}
         {c.id === "telegram" && (
           <Button size="sm" variant="ghost" onClick={() => void act.run("pair", () => api.telegramPair()).then((r) => r && setPairCode(r.code))}>Koppeln</Button>
         )}

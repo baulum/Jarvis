@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 
 from jarvis.agent.llm import AgentEvent
 from jarvis.agent.model_router import MODELS
-from jarvis.agent.persona import host_note, render_soul
+from jarvis.agent.persona import host_note, render_soul, whatsapp_note
 from jarvis.events import spawn
 from jarvis.platform.procs import terminate_group
 
@@ -197,10 +197,12 @@ class ClaudeCodeAgent:
         note = host_note(
             getattr(platform, "id", None), getattr(platform, "label", ""), bool(getattr(hub, "has_paired", False))
         )
+        connectors = getattr(self.state, "connectors", None)
+        wa = getattr(connectors, "connectors", {}).get("whatsapp") if connectors is not None else None
         return render_soul(self.state.personality) + (
             "\n\n## Werkzeuge\nDeine Werkzeuge sind die Jarvis-Werkzeuge (Namen beginnen mit `mcp__jarvis__`) und "
             "das Skill-Werkzeug." + skill_note
-        ) + note
+        ) + note + whatsapp_note(bool(wa is not None and wa.active))
 
     async def reload(self) -> None:
         """Apply changed skills/persona: idle processes and the standby are restarted, busy ones finish first."""

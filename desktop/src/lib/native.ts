@@ -50,9 +50,13 @@ export async function nativeNotify(title: string, body: string): Promise<void> {
 }
 
 /** Asks for a destination and writes the bytes there. Returns the path or null when cancelled. */
-export async function saveBytes(defaultName: string, bytes: Uint8Array): Promise<string | null> {
+export async function saveBytes(
+  defaultName: string,
+  bytes: Uint8Array,
+  filter: { name: string; extensions: string[]; mime?: string } = { name: "ZIP-Archiv", extensions: ["zip"], mime: "application/zip" },
+): Promise<string | null> {
   if (!inTauri()) {
-    const blob = new Blob([bytes as BlobPart], { type: "application/zip" });
+    const blob = new Blob([bytes as BlobPart], { type: filter.mime ?? "application/octet-stream" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = defaultName;
@@ -61,7 +65,7 @@ export async function saveBytes(defaultName: string, bytes: Uint8Array): Promise
     return defaultName;
   }
   const { save } = await import("@tauri-apps/plugin-dialog");
-  const path = await save({ defaultPath: defaultName, filters: [{ name: "ZIP-Archiv", extensions: ["zip"] }] });
+  const path = await save({ defaultPath: defaultName, filters: filter.extensions.length ? [{ name: filter.name, extensions: filter.extensions }] : [] });
   if (!path) return null;
   const { writeFile } = await import("@tauri-apps/plugin-fs");
   await writeFile(path, bytes);

@@ -15,6 +15,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -75,13 +76,41 @@ _SECRET_MAP_ARGS = {"vercel_deploy": "env"}
 LEDGER_STALE_AFTER = timedelta(minutes=15)
 
 
-def audit_args(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+def audit_args(tool: str, args: dict[str, Any], private: tuple[str, ...] = ()) -> dict[str, Any]:
+    if private:  # personal messages: no content and no phone numbers (also inside chat ids) in the audit log
+        args = {k: f"[{len(str(v))} Zeichen]" if k in private and v is not None else v for k, v in args.items()}
+        args = {k: _mask_numbers(_strip_private(v, private)) for k, v in args.items()}
     if tool in _SECRET_MAP_ARGS and isinstance(args.get(_SECRET_MAP_ARGS[tool]), dict):
         key = _SECRET_MAP_ARGS[tool]
         args = {**args, key: {k: f"[{len(str(v))} Zeichen]" for k, v in args[key].items()}}
     if tool in _CONTENT_ARG_TOOLS:
         return {k: f"[{len(v)} Zeichen]" if k in _CONTENT_KEYS and isinstance(v, str) else v for k, v in args.items()}
     return {k: (v[:1500] + "…" if isinstance(v, str) and len(v) > 1500 else v) for k, v in args.items()}
+
+
+_PHONE_RE = re.compile(r"\+?\d[\d ]{5,}\d")
+
+
+def _mask_numbers(value: Any) -> Any:
+    if isinstance(value, str):
+        return _PHONE_RE.sub(lambda m: f"…{re.sub(r'\\D', '', m.group(0))[-2:]}", value)
+    if isinstance(value, dict):
+        return {k: v if k in ("fingerprint", "sha256") else _mask_numbers(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_mask_numbers(v) for v in value]
+    return value
+
+
+def _strip_private(value: Any, private: tuple[str, ...]) -> Any:
+    """Nested structures (e.g. a prepared ``resolved`` block) lose their private values too."""
+    if isinstance(value, dict):
+        return {
+            k: (f"[{len(str(v))} Zeichen]" if k in private and v is not None else _strip_private(v, private))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_strip_private(v, private) for v in value]
+    return value
 
 
 class ToolExecutor:
@@ -142,8 +171,24 @@ class ToolExecutor:
         ):
             return ToolResult("denied", name, message="Rate-Limit für Aktionen mit hohem Risiko erreicht.")
 
+        if spec.prepare is not None and not ctx.approved:
+            # server-side resolution before anything is shown to Sir or executed (candidates instead of guesses)
+            try:
+                args = await asyncio.wait_for(spec.prepare(ctx, args), timeout=spec.timeout_s)
+                jsonschema.validate(args, spec.parameters)
+            except ToolUserError as e:
+                return ToolResult("error", name, message=str(e))
+            except TimeoutError:
+                why = f"Vorbereitung abgebrochen (Zeitüberschreitung {spec.timeout_s:.0f}s)"
+                return ToolResult("error", name, message=why)
+            except jsonschema.ValidationError as e:
+                return ToolResult("error", name, message=f"Ungültige Argumente nach der Vorbereitung: {e.message}")
+            except Exception as e:
+                logger.exception("Preparing %s failed", name)
+                return ToolResult("error", name, message=f"{type(e).__name__}: {e}"[:500])
+
         if not ctx.approved:
-            decision, reason = await self._approval_decision(spec, risk, ctx)
+            decision, reason = await self._approval_decision(spec, risk, ctx, args)
             if decision == "deny":
                 await audit(ctx.principal.label, f"tool.{name}", outcome="denied_policy", details={"risk": risk})
                 return ToolResult("denied", name, message=reason)
@@ -160,10 +205,23 @@ class ToolExecutor:
             sess = await s.get(ChatSession, ctx.session_id)
             return bool(sess is not None and sess.tainted)
 
-    async def _approval_decision(self, spec: ToolSpec, risk: str, ctx: ToolContext) -> tuple[str, str]:
+    async def _approval_decision(
+        self, spec: ToolSpec, risk: str, ctx: ToolContext, args: dict[str, Any] | None = None
+    ) -> tuple[str, str]:
         """auto / ask / deny for this call, from the approval mode (or the role defaults without one)."""
         if RISK_ORDER[risk] == RISK_ORDER["read"]:
             return "auto", ""
+        decision, reason = await self._mode_decision(spec, risk, ctx)
+        if decision != "auto":
+            return decision, reason
+        # tool-level rules are stricter than every mode, YOLO included
+        if spec.always_ask:
+            return "ask", "Wird immer zur Bestätigung vorgelegt"
+        if spec.ask_if is not None and (why := spec.ask_if(args or {})):
+            return "ask", why
+        return "auto", ""
+
+    async def _mode_decision(self, spec: ToolSpec, risk: str, ctx: ToolContext) -> tuple[str, str]:
         tainted = self.permissions.taint_requires_approval and await self._tainted(ctx)
         if self.approval_policy is not None:
             return self.approval_policy.decide(spec.name, risk, tainted)
@@ -216,7 +274,7 @@ class ToolExecutor:
             f"approval.request.{spec.name}",
             target=str(approval_id),
             outcome="pending",
-            details={"risk": risk, "reason": reason, "summary": summary},
+            details={"risk": risk, "reason": reason, "summary": spec.describe_for_audit(args)},
         )
         await bus.publish(
             "approval.requested",
@@ -331,7 +389,7 @@ class ToolExecutor:
                     ctx.principal.label,
                     f"tool.{spec.name}",
                     outcome="started",
-                    details={"risk": risk, "args": audit_args(spec.name, args)},
+                    details={"risk": risk, "args": audit_args(spec.name, args, spec.private_args)},
                     strict=True,
                 )
             except AuditUnavailable:
@@ -383,7 +441,7 @@ class ToolExecutor:
             outcome=status,
             details={
                 "risk": risk,
-                "args": audit_args(spec.name, args),
+                "args": audit_args(spec.name, args, spec.private_args),
                 "duration_ms": duration_ms,
                 "approval_id": str(ctx.approval_id) if ctx.approval_id else None,
                 "error": message if status != "ok" else None,
@@ -446,6 +504,12 @@ class ToolExecutor:
                 row.result = json.loads(json.dumps({"data": data, "message": message}, default=str))
                 row.duration_ms = duration_ms
                 row.finished_at = datetime.now(UTC)
+
+    async def is_tainted(self, session_id: uuid.UUID) -> bool:
+        """Does this conversation contain untrusted external content?"""
+        async with session_scope() as s:
+            sess = await s.get(ChatSession, session_id)
+            return bool(sess is not None and sess.tainted)
 
     async def taint(self, session_id: uuid.UUID, source: str) -> None:
         """Marks a conversation as containing untrusted content (e.g. a document attachment with injection hits)."""

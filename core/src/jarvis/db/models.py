@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     Computed,
@@ -18,6 +19,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    TypeDecorator,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
@@ -414,3 +416,153 @@ class CallSession(Base, TimestampMixin):
     metrics: Mapped[dict[str, Any]] = mapped_column(default=dict)
     # why Jarvis rings: the open question and what it refers to (jarvis.mobile.call_context)
     context: Mapped[dict[str, Any]] = mapped_column(default=dict)
+
+
+# --------------------------------------------------------------------------- WhatsApp connector
+# Portable column types: the same repository code runs on PostgreSQL (production) and SQLite (unit tests).
+class UTCDateTime(TypeDecorator[datetime]):
+    """Timezone-aware datetimes on every backend (SQLite returns naive values otherwise)."""
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect: Any) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value
+
+    def process_result_value(self, value: datetime | None, dialect: Any) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value
+
+
+PortableJSON = JSON().with_variant(JSONB(), "postgresql")
+PortableBigInt = BigInteger().with_variant(Integer(), "sqlite")
+
+
+class WhatsAppChat(Base):
+    __tablename__ = "whatsapp_chats"
+    jid: Mapped[str] = mapped_column(String(200), primary_key=True)
+    name: Mapped[str] = mapped_column(String(300), default="")
+    is_group: Mapped[bool] = mapped_column(Boolean, default=False)
+    unread_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_message_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), index=True)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    muted_until: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    meta: Mapped[dict[str, Any]] = mapped_column(PortableJSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
+
+
+class WhatsAppContact(Base):
+    __tablename__ = "whatsapp_contacts"
+    jid: Mapped[str] = mapped_column(String(200), primary_key=True)
+    lid: Mapped[str | None] = mapped_column(String(200), index=True)
+    name: Mapped[str] = mapped_column(String(300), default="")  # Sir's address book name
+    notify: Mapped[str] = mapped_column(String(300), default="")  # the name the contact set themselves
+    verified_name: Mapped[str] = mapped_column(String(300), default="")
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
+
+
+class WhatsAppMessage(Base):
+    """One WhatsApp message. (chat_jid, msg_id) is unique: replays, history syncs and our own echo never
+    create a second row."""
+
+    __tablename__ = "whatsapp_messages"
+    __table_args__ = (
+        UniqueConstraint("chat_jid", "msg_id", name="uq_whatsapp_messages_chat_msg"),
+        Index("ix_whatsapp_messages_chat_ts", "chat_jid", "ts"),
+    )
+    id: Mapped[int] = mapped_column(PortableBigInt, primary_key=True, autoincrement=True)
+    chat_jid: Mapped[str] = mapped_column(String(200))
+    msg_id: Mapped[str] = mapped_column(String(128), index=True)
+    from_me: Mapped[bool] = mapped_column(Boolean, default=False)
+    sender_jid: Mapped[str] = mapped_column(String(200), default="")
+    sender_name: Mapped[str] = mapped_column(String(300), default="")
+    ts: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
+    kind: Mapped[str] = mapped_column(String(20), default="text")
+    text: Mapped[str] = mapped_column(Text, default="")
+    quoted_msg_id: Mapped[str | None] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(16), default="")  # pending|server_ack|delivered|read|played|error
+    forwarded: Mapped[bool] = mapped_column(Boolean, default=False)
+    edited_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    read_by_me: Mapped[bool] = mapped_column(Boolean, default=False)
+    media: Mapped[dict[str, Any]] = mapped_column(PortableJSON, default=dict)
+    media_ref: Mapped[str | None] = mapped_column(Text)  # AES-GCM encrypted original message (download key)
+    extra: Mapped[dict[str, Any]] = mapped_column(PortableJSON, default=dict)  # location, poll, reactions, …
+    source: Mapped[str] = mapped_column(String(10), default="live")  # live | history | sent
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class WhatsAppFile(Base):
+    """A file received via WhatsApp and stored by Jarvis (server or a device), with integrity data."""
+
+    __tablename__ = "whatsapp_files"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    chat_jid: Mapped[str] = mapped_column(String(200), index=True)
+    msg_id: Mapped[str] = mapped_column(String(128), index=True)
+    sender_jid: Mapped[str] = mapped_column(String(200), default="")
+    sender_name: Mapped[str] = mapped_column(String(300), default="")
+    chat_name: Mapped[str] = mapped_column(String(300), default="")
+    file_name: Mapped[str] = mapped_column(String(300))
+    location: Mapped[str] = mapped_column(String(160), default="server")  # server | device:<name>
+    path: Mapped[str] = mapped_column(Text)
+    mime: Mapped[str] = mapped_column(String(120), default="application/octet-stream")
+    ext: Mapped[str] = mapped_column(String(12), default="")
+    category: Mapped[str] = mapped_column(String(20), default="document")  # image|video|audio|document|archive|other
+    size: Mapped[int] = mapped_column(PortableBigInt, default=0)
+    sha256: Mapped[str] = mapped_column(String(64), index=True)
+    duplicate_of: Mapped[uuid.UUID | None] = mapped_column()
+    text_excerpt: Mapped[str] = mapped_column(Text, default="")  # search index for the content
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
+
+
+class WhatsAppSend(Base):
+    """Outgoing message ledger: delivery status, and the guard against sending the same thing twice."""
+
+    __tablename__ = "whatsapp_sends"
+    send_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)  # recipient + content hash
+    chat_jid: Mapped[str] = mapped_column(String(200), index=True)
+    chat_name: Mapped[str] = mapped_column(String(300), default="")
+    kind: Mapped[str] = mapped_column(String(20))
+    files: Mapped[list[Any]] = mapped_column(PortableJSON, default=list)  # [{name, type, size, sha256}]
+    text_len: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    # pending | uploading | sent | server_ack | delivered | read | played | failed
+    msg_ids: Mapped[list[Any]] = mapped_column(PortableJSON, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+    actor: Mapped[str] = mapped_column(String(120), default="")
+    approval_id: Mapped[uuid.UUID | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
+
+
+class WhatsAppSuggestion(Base):
+    """Something Jarvis noticed in a chat (task, appointment, invoice …). Nothing is applied before Sir accepts."""
+
+    __tablename__ = "whatsapp_suggestions"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    chat_jid: Mapped[str] = mapped_column(String(200), index=True)
+    msg_id: Mapped[str | None] = mapped_column(String(128))
+    kind: Mapped[str] = mapped_column(String(30))  # task|appointment|reminder|invoice|change_request|project_info
+    title: Mapped[str] = mapped_column(String(300))
+    detail: Mapped[str] = mapped_column(Text, default="")
+    due_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)  # pending|accepted|dismissed
+    applied: Mapped[dict[str, Any]] = mapped_column(PortableJSON, default=dict)
+    remind_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), index=True)  # set when Sir accepts
+    reminded_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
+    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+WHATSAPP_TABLES = [
+    WhatsAppChat.__table__,
+    WhatsAppContact.__table__,
+    WhatsAppMessage.__table__,
+    WhatsAppFile.__table__,
+    WhatsAppSend.__table__,
+    WhatsAppSuggestion.__table__,
+]

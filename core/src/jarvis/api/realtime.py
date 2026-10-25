@@ -105,6 +105,8 @@ async def events_ws(ws: WebSocket) -> None:
 def _visible(ev: Event, p: Principal) -> bool:
     if p.role == "owner":
         return True
+    if ev.type.startswith("whatsapp."):  # private chats: only Sir's own paired desktop clients
+        return False
     if p.role == "mobile_owner":  # Sir's phone: live memory highlighting, but nothing sensitive
         if ev.type == "memory.recalled":
             return True
