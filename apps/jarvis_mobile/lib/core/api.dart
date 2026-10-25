@@ -136,6 +136,35 @@ class Api {
     return res.bodyBytes;
   }
 
+  /// Uploads one chat attachment (POST /api/attachments, raw body). The core checks size, type and file signature.
+  Future<Map<String, dynamic>> uploadAttachment(String name, List<int> bytes) async {
+    if (_client == null) await init();
+    final token = await native.accessToken();
+    try {
+      final res = await _client!
+          .post((await _uri('/api/attachments')).replace(queryParameters: {'name': name}),
+              headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/octet-stream'}, body: bytes)
+          .timeout(const Duration(minutes: 2));
+      final text = utf8.decode(res.bodyBytes);
+      if (res.statusCode >= 400) {
+        String msg = 'Fehler ${res.statusCode}';
+        try {
+          msg = (jsonDecode(text) as Map)['detail']?.toString() ?? msg;
+        } catch (_) {}
+        throw ApiError(res.statusCode, msg);
+      }
+      return (jsonDecode(text) as Map).cast<String, dynamic>();
+    } on ApiError {
+      rethrow;
+    } on Exception catch (e) {
+      if (e is SocketException || e is TimeoutException || e is HandshakeException || e is http.ClientException) {
+        base = null; // network changed → probe the advertised addresses again on the next request
+        throw ApiError(0, 'Jarvis ist nicht erreichbar');
+      }
+      rethrow;
+    }
+  }
+
   Future<String> transcribe(List<int> wav) async {
     if (_client == null) await init();
     final token = await native.accessToken();

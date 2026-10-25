@@ -109,6 +109,11 @@ def test_push_payload_is_encrypted_and_bound_to_device() -> None:
         ("PUT", "/api/approvals/mode", False),
         ("POST", "/api/connectors/lexware", False),
         ("GET", "/api/audit", False),
+        ("POST", "/api/attachments", True),
+        ("GET", "/api/attachments", False),
+        ("GET", "/api/media/attachments/20261022-141500-1a2b3c4d-foto.jpg", True),
+        ("GET", "/api/media/attachments/../secrets.jpg", False),
+        ("POST", "/api/media/attachments/20261022-141500-1a2b3c4d-foto.jpg/reveal", False),  # Finder is Mac-only/owner
         ("POST", "/mcp", False),
         ("DELETE", "/api/memory/items/0b7e6a7e-0000-0000-0000-000000000000", False),
         ("POST", "/api/devices", False),

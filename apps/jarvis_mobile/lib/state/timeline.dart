@@ -86,7 +86,7 @@ class Timeline {
 int _localSeq = 0;
 
 /// Optimistic message: sorts after everything the core has sent until the core's copy replaces it.
-Timeline addOptimisticUser(Timeline t, String sessionId, String text) {
+Timeline addOptimisticUser(Timeline t, String sessionId, String text, {List<Map<String, dynamic>> attachments = const []}) {
   _localSeq++;
   final id = 'local-${DateTime.now().millisecondsSinceEpoch}-$_localSeq';
   final item = TItem(
@@ -95,7 +95,7 @@ Timeline addOptimisticUser(Timeline t, String sessionId, String text) {
     seq: 1 << 52 | _localSeq,
     ts: DateTime.now().millisecondsSinceEpoch,
     kind: 'message',
-    data: {'role': 'user', 'text': text, 'status': 'done'},
+    data: {'role': 'user', 'text': text, 'status': 'done', if (attachments.isNotEmpty) 'attachments': attachments},
     local: true,
   );
   return t.copy(items: [...t.items, item], running: true);

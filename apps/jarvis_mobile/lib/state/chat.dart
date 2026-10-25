@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/api.dart';
+import '../core/attachments.dart';
 import '../core/live.dart';
 import 'providers.dart';
 import 'timeline.dart';
@@ -147,16 +148,28 @@ class ChatController extends Notifier<ChatState> {
     state = const ChatState();
   }
 
-  Future<void> send(String text) async {
+  /// [files] are already uploaded (`POST /api/attachments`); the message only names them.
+  Future<void> send(String text, {List<Attachment> files = const []}) async {
     final t = text.trim();
-    if (t.isEmpty || state.sending) return;
+    if ((t.isEmpty && files.isEmpty) || state.sending) return;
     final before = state.timeline;
     final prev = state.sessionId;
-    state = state.copy(sending: true, clearError: true, timeline: addOptimisticUser(before, prev ?? '', t));
+    state = state.copy(
+      sending: true,
+      clearError: true,
+      timeline: addOptimisticUser(before, prev ?? '', t, attachments: [
+        for (final f in files) {'file': f.file, 'name': f.name, 'kind': f.kind, 'size': f.size},
+      ]),
+    );
     final early = <CoreEvent>[];
     _early = early;
     try {
-      final res = await _api.post('/api/chat', {'message': t, 'session_id': prev, 'channel': 'mobile'}) as Map;
+      final res = await _api.post('/api/chat', {
+        'message': t,
+        'session_id': prev,
+        'channel': 'mobile',
+        if (files.isNotEmpty) 'attachments': [for (final f in files) f.toRef()],
+      }) as Map;
       final sid = res['session_id'] as String;
       if (state.sessionId != prev) return; // Sir opened another conversation meanwhile; this one is in the history
       if (sid == prev) {

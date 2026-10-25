@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/attachments.dart';
 import '../../core/live.dart';
 import '../../core/theme.dart';
 import '../../state/chat.dart';
@@ -28,10 +29,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     super.dispose();
   }
 
-  void _send(String text) {
+  void _send(String text, [List<Attachment> files = const []]) {
     final chat = ref.read(chatProvider.notifier);
     if (ref.read(chatProvider).sessionId == null) chat.fresh();
-    chat.send(text);
+    chat.send(text, files: files);
     context.push('/chat');
   }
 
@@ -166,7 +167,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       ]),
                     ),
                   ),
-                  Composer(onSend: _send),
+                  Composer(onSend: _send, onSendFiles: _send),
                 ]),
               ),
             ]),

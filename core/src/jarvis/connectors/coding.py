@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
+from jarvis.agent.attachments import (
+    MAX_PER_MESSAGE,
+    NAME_PATTERN,
+    AttachmentError,
+    job_attachment_note,
+    stage_for_job,
+)
 from jarvis.agent.model_router import EFFORTS
 from jarvis.coding.runner import CodingError, CodingRunner, slug
 from jarvis.connectors.base import Connector, Health, Manifest
@@ -56,10 +64,17 @@ class CodingConnector(Connector):
                 raise ToolUserError(str(e)) from e
 
         async def start_job(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            instructions = a["instructions"]
+            if a.get("attachments"):
+                try:
+                    _, staged = await asyncio.to_thread(stage_for_job, self.state, list(a["attachments"]))
+                except AttachmentError as e:
+                    raise ToolUserError(str(e)) from e
+                instructions += job_attachment_note(staged)
             try:
                 job = await runner().create_job(
                     a["title"],
-                    a["instructions"],
+                    instructions,
                     a["project_path"],
                     test_command=a.get("test_command"),
                     actor=ctx.principal.label,
@@ -164,7 +179,8 @@ class CodingConnector(Connector):
                 "unter result.ship, Probleme unter result.delivery_error). "
                 "Optional model (haiku|sonnet|opus|auto) und effort (low|medium|high|xhigh|max): nennt Sir im Auftrag "
                 "ein Modell (z. B. 'Opus 5.5'), hier übergeben; ohne Angabe gilt das Standardmodell bzw. das im Chat "
-                "gewählte.",
+                "gewählte. Mit attachments gibt Jarvis Dateien aus dem Chat (Fotos, Screenshots, PDFs, Dokumente) an den "
+                "Job weiter; sie werden kopiert und in den Anweisungen mit Pfad genannt.",
                 _obj(
                     {
                         "title": {"type": "string"},
@@ -173,6 +189,13 @@ class CodingConnector(Connector):
                         "test_command": {"type": "string"},
                         "model": {"type": "string", "enum": ["haiku", "sonnet", "opus", "auto"]},
                         "effort": {"type": "string", "enum": list(EFFORTS)},
+                        "attachments": {
+                            "type": "array",
+                            "items": {"type": "string", "pattern": NAME_PATTERN},
+                            "maxItems": MAX_PER_MESSAGE,
+                            "description": "Chat-Anhänge (file aus <anhaenge>), die Claude Code lesen soll – "
+                            "Fotos, Screenshots, PDFs, Dokumente",
+                        },
                     },
                     ["title", "instructions", "project_path"],
                 ),

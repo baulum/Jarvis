@@ -5,11 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/attachments.dart';
 import '../../core/theme.dart';
 import '../../state/chat.dart';
 import '../../state/live_model.dart';
 import '../../state/providers.dart';
 import '../../state/timeline.dart';
+import '../widgets/attachments.dart';
 import '../widgets/composer.dart';
 import '../widgets/core_orb.dart';
 import '../widgets/generated_media.dart';
@@ -173,6 +175,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 _toEnd();
                 ref.read(chatProvider.notifier).send(t);
               },
+              onSendFiles: (t, files) {
+                setState(() => _atEnd = true);
+                _toEnd();
+                ref.read(chatProvider.notifier).send(t, files: files);
+              },
               busy: chat.sending || chat.running,
               onStop: () => ref.read(chatProvider.notifier).interrupt(),
             ),
@@ -277,7 +284,13 @@ class _UserBubble extends StatelessWidget {
                   bottomRight: Radius.circular(4),
                 ),
               ),
-              child: SelectableText(item.text, style: J.body.copyWith(color: J.ice)),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+                MessageAttachments(items: Attachment.fromData(item.data['attachments'])),
+                if (item.text.isNotEmpty) ...[
+                  if (item.data['attachments'] is List && (item.data['attachments'] as List).isNotEmpty) const SizedBox(height: J.s2),
+                  SelectableText(item.text, style: J.body.copyWith(color: J.ice)),
+                ],
+              ]),
             ),
           ),
         ),
