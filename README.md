@@ -74,6 +74,28 @@ Bei rotem Ergebnis, Fehler oder Abbruch wird nur der Job-Branch gesichert, nicht
 (Standard 3) Jobs laufen gleichzeitig, jeder in seinem Worktree; weitere warten als „queued“. Das Ausliefern läuft pro
 Repository nacheinander (der nächste Job rebased auf das frisch gemergte `main`), Jobs für dieselbe Kundenseite ebenso.
 
+**Coding-Jobs an Jarvis selbst.** Ist das Projekt eines Jobs das Repository, aus dem der laufende Core stammt, und hat der
+Job Dateien geändert, die Core oder Desktop-App laden (`core/src`, Abhängigkeiten und Migrationen in `core/`, `config/`,
+`desktop/`; nicht Doku, Tests, Android-App, Device Agent), startet Jarvis sich nach der Auslieferung selbst neu
+(`core/src/jarvis/coding/self_restart.py`, abschaltbar mit `coding.self_restart: false`). Voraussetzung: Der Merge nach
+`main` ist erfolgt und das lokale Projekt wurde auf den neuen Stand gebracht; sonst wird nur der Grund vermerkt. Jobs an
+anderen Projekten (z. B. Lead-Tool) lösen nie einen Neustart aus. Reihenfolge:
+
+1. Auslieferung abschließen, Job-Ergebnis schreiben und „fertig“ melden.
+2. Warten, bis kein anderer Coding-Job mehr läuft oder wartet (im Ergebnis steht dann `waiting` mit den Job-IDs) – laufende
+   Jobs werden nie abgebrochen.
+3. Ein eigenständiger Helfer-Prozess (überlebt das Ende des Cores) übernimmt: Läuft die Desktop-App, wird sie zuerst regulär
+   beendet (sonst per SIGTERM), denn ihr Beenden stoppt je nach Einstellung auch die Dienste. Dann wird der Core neu
+   gestartet – als launchd-Dienst `com.jarvis.core` per `launchctl kickstart -k`, sonst Stopp über die PID-Datei und
+   `scripts/start.sh --no-voice --no-app` – und per `/api/health` geprüft. Zuletzt wird die Desktop-App wieder geöffnet,
+   aber nur, wenn sie vorher lief.
+4. Der neue Core trägt das Ergebnis in den Job ein: `result.ship.self_restart` (`state`: `done`, `failed` oder `skipped`,
+   dazu Core und Desktop-App im Einzelnen). Fehler stehen zusätzlich unter `result.warnings` und kommen als Benachrichtigung
+   `coding.self_restart`; die Auslieferung selbst bleibt davon unberührt. Protokoll: `~/Library/Logs/Jarvis/self-restart.log`.
+
+Der Neustart der Desktop-App lädt nur das installierte Bundle neu; geänderte Oberflächen-Funktionen erscheinen erst nach
+`scripts/install-app.sh` (die App weist selbst darauf hin, wenn ihr Build älter ist als der Code).
+
 Details: [ARCHITECTURE.md](ARCHITECTURE.md), Sicherheitsmodell: [SECURITY.md](SECURITY.md).
 
 ## Installation

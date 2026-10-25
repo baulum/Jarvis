@@ -282,6 +282,8 @@ class AppState:
         await audit("system", "core.start", details={"version": VERSION})
         if interrupted_jobs:
             spawn(self._report_interrupted_jobs(interrupted_jobs), name="coding-interrupted")
+        # this start may be the restart after a job on Jarvis itself: record its outcome in that job
+        spawn(self.coding.finish_self_restart(), name="coding-self-restart-result")
         if self.settings.mobile.enabled:
             from jarvis.mobile.alerts import Alert
 

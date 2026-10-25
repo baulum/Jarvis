@@ -242,6 +242,9 @@ class CodingCfg(_Strict):
     # supabase/migrations enthält.
     supabase_command: str = "supabase"
     supabase_timeout_minutes: int = 10
+    # Hat ein Job Jarvis' eigenen Code ausgeliefert (Projekt = dieses Repository), startet Jarvis danach Core und –
+    # falls sie läuft – Desktop-App neu, sobald kein anderer Coding-Job mehr läuft (jarvis.coding.self_restart).
+    self_restart: bool = True
 
 
 class BrowserCfg(_Strict):

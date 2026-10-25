@@ -34,11 +34,12 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import select
 
 from jarvis.agent.model_router import EFFORTS, model_id, resolve_alias
+from jarvis.coding import self_restart
 from jarvis.coding.monitor import build_monitor, compact_events
-from jarvis.config import CUSTOMER_SITES_DIR
+from jarvis.config import CUSTOMER_SITES_DIR, REPO_ROOT
 from jarvis.db import session_scope
 from jarvis.db.models import CodingJob
-from jarvis.events import bus
+from jarvis.events import bus, spawn
 from jarvis.security.audit import audit
 from jarvis.tools.executor import ToolUserError
 
@@ -272,6 +273,11 @@ class CodingRunner:
         self._interrupted: set[uuid.UUID] = set()  # current run was stopped on purpose to deliver a message
         self._closing: set[uuid.UUID] = set()  # job is past its last agent run: no more messages
         self._identity: tuple[str, str] | None = None  # (name, email) of all commits, resolved on first use
+        # Jobs that delivered changes to Jarvis itself: one restart for all of them once no job runs (self_restart)
+        self._restart_jobs: list[uuid.UUID] = []
+        self._restart_task: asyncio.Task[None] | None = None
+        self.restart_poll_s: float = 5
+        self.restart_status_poll_s: float = 2
 
     # ------------------------------------------------------------------ environment
     def git_identity(self) -> tuple[str, str]:
@@ -911,6 +917,7 @@ class CodingRunner:
                     reason="Der Job ist fehlgeschlagen" if result.get("is_error") else "Die Tests sind rot",
                 )
                 await self._finish(job_id, title, status, payload)
+                await self._schedule_self_restart(job_id, payload.get("ship"))
             except asyncio.CancelledError:
                 if job_id in self._cancelled and worktree and branch:
                     await self._after_cancel(job_id, repo=repo, worktree=Path(worktree), branch=branch, title=title)
@@ -962,6 +969,8 @@ class CodingRunner:
             payload.update(await self._branch_work(worktree))
         except Exception as e:
             problems.append(f"Commits des Job-Branch nicht lesbar: {e}")
+        jarvis = self_restart.is_jarvis_repo(repo)
+        files = await self._changed_files(worktree) if jarvis else None  # before the clean-up removes the worktree
         if self.cfg.auto_ship:
             ship = await self._ship_flow(
                 job_id,
@@ -973,6 +982,8 @@ class CodingRunner:
                 green=green,
                 reason=reason,
             )
+            if jarvis:
+                self_restart.plan(ship, files, enabled=getattr(self.cfg, "self_restart", True))
             payload["ship"] = ship
             if ship["state"] == "failed" or ship.get("backup_error") or (ship.get("cleanup") or {}).get("errors"):
                 problems.append(ship["message"])
@@ -1415,6 +1426,8 @@ class CodingRunner:
         if prior.get("state") == "shipped":
             raise CodingError("Job ist bereits ausgeliefert")
         tests = res.get("tests")
+        jarvis = self_restart.is_jarvis_repo(repo)
+        files = await self._changed_files(wt) if jarvis and wt.is_dir() else None
         ship = await self._ship_flow(
             job_id,
             repo=repo,
@@ -1427,8 +1440,11 @@ class CodingRunner:
             prior=prior,
             actor=actor,
         )
+        if jarvis:
+            self_restart.plan(ship, files, enabled=getattr(self.cfg, "self_restart", True))
         await self._update(job_id, result={**res, "ship": ship})
         await bus.publish("coding.updated", job_id=str(job_id), status="completed", title=title)
+        await self._schedule_self_restart(job_id, ship)
         return ship
 
     async def _ship_flow(
@@ -1821,6 +1837,188 @@ class CodingRunner:
         }
         if result.get("message"):
             ship["message"] += f" {result['message']}"
+
+    # ------------------------------------------------------------------ self restart (a job changed Jarvis itself)
+    async def _changed_files(self, wt: Path) -> list[str] | None:
+        """Files the job branch changes compared with the base branch; None if that cannot be determined."""
+        base = getattr(self.cfg, "ship_base_branch", "main")
+        try:
+            refs = [
+                ref
+                for ref in (f"origin/{base}", base)
+                if await self._git(wt, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
+            ]
+            if not refs:
+                return None
+            fork = await self._git(wt, "merge-base", "HEAD", *refs)
+            return (await self._git(wt, "diff", "--name-only", fork, "HEAD")).splitlines()
+        except (CodingError, OSError):
+            return None
+
+    def _restart_status_path(self) -> Path:
+        return Path(self.state.settings.paths.data_dir) / self_restart.STATUS_FILE
+
+    def _health_url(self) -> str:
+        server = getattr(self.state.settings, "server", None)
+        host = str(getattr(server, "host", "") or "127.0.0.1")
+        if host in ("0.0.0.0", "::"):  # noqa: S104 - only mapped to the loopback address
+            host = "127.0.0.1"
+        return f"http://{host}:{getattr(server, 'port', 8765)}/api/health"
+
+    async def _schedule_self_restart(self, job_id: uuid.UUID, ship: dict[str, Any] | None) -> None:
+        """The job delivered changes to Jarvis itself (``self_restart.plan`` said so): restart Jarvis once the job's
+        result is written and no coding job runs or waits any more. Never raises; problems go into the result."""
+        if ((ship or {}).get("self_restart") or {}).get("state") != "pending":
+            return
+        try:
+            if job_id not in self._restart_jobs:
+                self._restart_jobs.append(job_id)
+            # recorded at once: a restart by other means before this one also loads the new code (finish_self_restart)
+            self_restart.write_status(
+                self._restart_status_path(),
+                {"phase": "pending", "jobs": [str(j) for j in self._restart_jobs], "requested_at": self_restart.now()},
+            )
+            if self._restart_task is None or self._restart_task.done():
+                self._restart_task = spawn(self._restart_when_idle(), name="coding-self-restart")
+        except Exception as e:
+            logger.exception("Coding job %s: scheduling the Jarvis restart failed", job_id)
+            msg = f"Neustart konnte nicht geplant werden: {str(e) or type(e).__name__}"
+            with contextlib.suppress(Exception):
+                await self._set_self_restart(
+                    [job_id], {"state": "failed", "message": msg}, warning=f"Jarvis-Neustart: {msg}"
+                )
+
+    async def _restart_when_idle(self) -> None:
+        """Waits until no coding job runs or waits any more – the jobs that asked for the restart must have ended
+        too – then hands the restart to the helper process, which outlives this core (``self_restart.launch``)."""
+        noted: set[uuid.UUID] = set()
+        while True:
+            await asyncio.sleep(self.restart_poll_s)
+            busy = {jid for jid, task in self._tasks.items() if not task.done()}
+            if not busy:
+                break
+            others = busy - set(self._restart_jobs)
+            if others - noted:
+                noted |= others
+                ids = sorted(str(j) for j in others)
+                await self._set_self_restart(
+                    list(self._restart_jobs),
+                    {
+                        "state": "waiting",
+                        "message": "Neustart verschoben, bis die laufenden Coding-Jobs fertig sind: "
+                        + ", ".join(i[:8] for i in ids),
+                        "waiting_for": ids,
+                    },
+                )
+        jobs, self._restart_jobs = list(self._restart_jobs), []
+        path = self._restart_status_path()
+        if getattr(getattr(self.state, "kill_switch", None), "engaged", False):
+            with contextlib.suppress(OSError):
+                path.unlink()
+            await self._set_self_restart(jobs, {"state": "skipped", "message": "Kein Neustart: Not-Aus aktiv."})
+            return
+        try:
+            self_restart.write_status(
+                path, {"phase": "started", "jobs": [str(j) for j in jobs], "requested_at": self_restart.now()}
+            )
+            await self._set_self_restart(
+                jobs,
+                {
+                    "state": "started",
+                    "message": "Neustart läuft: Core und, falls offen, Desktop-App werden neu gestartet.",
+                    "started_at": self_restart.now(),
+                },
+            )
+            await audit("coding-runner", "coding.self_restart", details={"jobs": [str(j) for j in jobs]})
+            paths = self.state.settings.paths
+            pid = self_restart.launch(
+                path,
+                log=Path(getattr(paths, "log_dir", paths.data_dir)) / self_restart.LOG_FILE,
+                core_pid=os.getpid(),
+                health_url=self._health_url(),
+                root=REPO_ROOT,
+                run_dir=Path(paths.data_dir) / "run",
+            )
+            logger.info("Jarvis restart handed to helper pid %s (jobs %s)", pid, ", ".join(str(j) for j in jobs))
+        except Exception as e:
+            logger.exception("Starting the Jarvis restart failed")
+            with contextlib.suppress(OSError):
+                path.unlink()
+            msg = f"Neustart konnte nicht gestartet werden: {str(e) or type(e).__name__}"
+            await self._set_self_restart(jobs, {"state": "failed", "message": msg}, warning=f"Jarvis-Neustart: {msg}")
+
+    async def finish_self_restart(self, timeout_s: float = 600) -> None:
+        """At core start: record the outcome of a restart this runner asked for in the jobs that caused it
+        (``result.ship.self_restart``; failures also in ``result.warnings`` and as a notification). A helper that is
+        still at work (health check, desktop app) is waited for."""
+        path = self._restart_status_path()
+        status = self_restart.read_status(path)
+        if status is None:
+            return
+        deadline = asyncio.get_running_loop().time() + timeout_s
+        while status.get("phase") in ("started", "running") and asyncio.get_running_loop().time() < deadline:
+            helper = status.get("helper_pid")
+            if status.get("phase") == "running" and isinstance(helper, int) and not self_restart.alive(helper):
+                status = self_restart.read_status(path) or status  # it may have finished right before exiting
+                break
+            await asyncio.sleep(self.restart_status_poll_s)
+            status = self_restart.read_status(path) or status
+        phase = status.get("phase")
+        info: dict[str, Any]
+        if phase == "finished":
+            outcome = status.get("outcome") or {}
+            info = {
+                "state": outcome.get("state") or "failed",
+                "message": outcome.get("message") or "",
+                "core": outcome.get("core"),
+                "desktop": outcome.get("desktop"),
+                "finished_at": status.get("finished_at"),
+            }
+        elif phase == "pending":
+            info = {
+                "state": "done",
+                "message": "Der Core wurde vor dem geplanten Neustart anderweitig neu gestartet; der neue Stand ist "
+                "geladen (Desktop-App nicht angefasst).",
+            }
+        else:
+            info = {"state": "failed", "message": "Der Neustart-Helfer hat kein Ergebnis gemeldet (self-restart.log)."}
+        jobs: list[uuid.UUID] = []
+        for raw in status.get("jobs") or []:
+            with contextlib.suppress(ValueError, TypeError, AttributeError):
+                jobs.append(uuid.UUID(raw))
+        warning = f"Jarvis-Neustart: {info['message']}" if info["state"] != "done" else None
+        await self._set_self_restart(jobs, info, warning=warning)
+        with contextlib.suppress(OSError):
+            path.unlink()
+        notifier = getattr(self.state, "notifier", None)
+        if warning and notifier is not None:
+            await notifier.notify(
+                "coding.self_restart",
+                "Jarvis-Neustart nach Coding-Job unvollständig",
+                info["message"],
+                level="warning",
+                data={"job_ids": [str(j) for j in jobs], "self_restart": info},
+            )
+
+    async def _set_self_restart(
+        self, job_ids: list[uuid.UUID], info: dict[str, Any], *, warning: str | None = None
+    ) -> None:
+        """Updates ``result.ship.self_restart`` of the jobs; ``warning`` is added to ``result.warnings``. The rest of
+        the delivery result stays as it is."""
+        for job_id in job_ids:
+            async with session_scope() as s:
+                job = await s.get(CodingJob, job_id)
+                if job is None:
+                    continue
+                result = dict(job.result or {})
+                ship = dict(result.get("ship") or {})
+                ship["self_restart"] = {**(ship.get("self_restart") or {}), **info}
+                result["ship"] = ship
+                if warning:
+                    result["warnings"] = [*(result.get("warnings") or []), warning]
+                job.result = json.loads(json.dumps(result, default=str))
+                status, title = job.status, job.title
+            await bus.publish("coding.updated", job_id=str(job_id), status=status, title=title)
 
     async def prepare_pr(self, job_id: uuid.UUID, repo_full_name: str, base: str = "main") -> dict[str, Any]:
         """Manual opt-in: push the job branch and open a *draft* PR (not merged, nothing deployed)."""
