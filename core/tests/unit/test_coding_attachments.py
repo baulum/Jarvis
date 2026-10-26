@@ -42,7 +42,12 @@ async def test_job_gets_copies_and_paths(tmp_path: Path) -> None:
     info = att.save_attachment(att.attachments_dir(state), "Fehler Screenshot.png", PNG)
     out = await tool.handler(
         ctx,
-        {"title": "Bug", "instructions": "Behebe den Fehler im Screenshot.", "project_path": "/p", "attachments": [info.file]},
+        {
+            "title": "Bug",
+            "instructions": "Behebe den Fehler im Screenshot.",
+            "project_path": "/p",
+            "attachments": [info.file],
+        },
     )
     assert out["job_id"] == "J1"
     text = runner.created["instructions"]
@@ -65,5 +70,7 @@ async def test_without_attachments_nothing_changes(tmp_path: Path) -> None:
 async def test_only_real_attachments_pass(tmp_path: Path, bad: str) -> None:
     _, runner, (tool, ctx) = _setup(tmp_path)
     with pytest.raises(ToolUserError):
-        await tool.handler(ctx, {"title": "T", "instructions": "Mach etwas Sinnvolles.", "project_path": "/p", "attachments": [bad]})
+        await tool.handler(
+            ctx, {"title": "T", "instructions": "Mach etwas Sinnvolles.", "project_path": "/p", "attachments": [bad]}
+        )
     assert not runner.created

@@ -181,8 +181,8 @@ class CodingConnector(Connector):
                 "result.warnings). "
                 "Optional model (haiku|sonnet|opus|auto) und effort (low|medium|high|xhigh|max): nennt Sir im Auftrag "
                 "ein Modell (z. B. 'Opus 5.5'), hier übergeben; ohne Angabe gilt das Standardmodell bzw. das im Chat "
-                "gewählte. Mit attachments gibt Jarvis Dateien aus dem Chat (Fotos, Screenshots, PDFs, Dokumente) an den "
-                "Job weiter; sie werden kopiert und in den Anweisungen mit Pfad genannt.",
+                "gewählte. Mit attachments gibt Jarvis Dateien aus dem Chat (Fotos, Screenshots, PDFs, Dokumente) an "
+                "den Job weiter; sie werden kopiert und in den Anweisungen mit Pfad genannt.",
                 _obj(
                     {
                         "title": {"type": "string"},
