@@ -98,7 +98,7 @@ dependencies {
     implementation("io.livekit:livekit-android:2.29.0")
     // "Hey Jarvis" wake word, on device: sherpa-onnx keyword spotter, no account or key (see docs/MOBILE.md › Hey Jarvis)
     implementation(files(sherpaAar))
-    implementation(platform("com.google.firebase:firebase-bom:35.0.2"))
+    implementation(platform("com.google.firebase:firebase-bom:35.1.0"))
     implementation("com.google.firebase:firebase-messaging")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
