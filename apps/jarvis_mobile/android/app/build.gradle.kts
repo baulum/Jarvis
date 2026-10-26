@@ -95,7 +95,7 @@ dependencies {
     implementation("androidx.core:core-telecom:1.0.1")
     implementation("androidx.car.app:app:1.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
-    implementation("io.livekit:livekit-android:2.29.0")
+    implementation("io.livekit:livekit-android:2.29.1")
     // "Hey Jarvis" wake word, on device: sherpa-onnx keyword spotter, no account or key (see docs/MOBILE.md › Hey Jarvis)
     implementation(files(sherpaAar))
     implementation(platform("com.google.firebase:firebase-bom:35.0.2"))
