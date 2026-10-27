@@ -322,6 +322,8 @@ def test_upload_and_chat_reject_bad_input(tmp_path: Path, monkeypatch: pytest.Mo
     assert r.status_code == 400 and state.orchestrator.calls == []
     too_many = [{"file": f"20261022-000000-0000000{i}-x.png"} for i in range(att.MAX_PER_MESSAGE + 1)]
     assert c.post("/api/chat", json={"message": "hi", "attachments": too_many}).status_code == 422
+    assert c.post("/api/chat", json={"message": "x" * 40001}).status_code == 422  # chat limit is 40000 chars
+    assert c.post("/api/chat", json={"message": "x" * 40000}).status_code == 200
     # old clients (mobile, voice) keep working without the new field
     assert c.post("/api/chat", json={"message": "Hallo"}).status_code == 200
     assert state.orchestrator.calls[-1]["attachments"] is None

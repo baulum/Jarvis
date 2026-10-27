@@ -122,7 +122,7 @@ class AttachmentRef(BaseModel):
 
 
 class ChatBody(BaseModel):
-    message: str = Field(default="", max_length=20000)
+    message: str = Field(default="", max_length=40000)
     session_id: str | None = None
     channel: str = "desktop"
     wait: bool = False
