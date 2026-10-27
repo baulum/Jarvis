@@ -127,7 +127,8 @@ class WhatsAppService:
         self._suggest_timers: dict[str, asyncio.Task[None]] = {}
         self._ticker: asyncio.Task[None] | None = None
         self._running = False
-        self._last_purge = 0.0
+        # None until the first purge: monotonic() starts near zero after a reboot (macOS/Windows: uptime)
+        self._last_purge: float | None = None
         self.home = Path.home()  # base of relative paths and of the default allowed folders
 
     # ------------------------------------------------------------------ paths & keys
@@ -1206,7 +1207,7 @@ class WhatsAppService:
             )
         self.cleanup_staging(now)
         days = int(self.settings.get("retention_days") or 0)
-        if days > 0 and time.monotonic() - self._last_purge > 3600:
+        if days > 0 and (self._last_purge is None or time.monotonic() - self._last_purge > 3600):
             self._last_purge = time.monotonic()
             await self.purge(now - timedelta(days=days), actor="whatsapp-retention")
 
