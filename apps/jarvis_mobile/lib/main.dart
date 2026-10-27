@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/theme.dart';
+import 'state/app_update.dart';
 import 'state/providers.dart';
 import 'ui/screens/activity_screen.dart';
 import 'ui/screens/call_screen.dart';
@@ -47,6 +48,8 @@ String routeForLink(String link) {
       return '/activity';
     case 'memory':
       return '/memory';
+    case 'settings': // e.g. the app-update notification
+      return '/settings';
     case 'pair': // jarvis://pair?p=<base64url pairing payload> – confirmed on screen before anything happens
       return Uri(path: '/pair', queryParameters: {'p': ?u.queryParameters['p']}).toString();
     default:
@@ -123,6 +126,7 @@ class _JarvisMobileState extends ConsumerState<JarvisMobile> with WidgetsBinding
         _openLink(pending); // the notification that cold-started the app: open its target now
       }
       if (next.valueOrNull?.paired != true) return;
+      ref.read(appUpdateProvider.notifier).check(); // throttled natively; downloads/installs on its own
       final s = await native.callState();
       final live = !['idle', 'ended', null].contains(s['status']);
       if (live && _router.routerDelegate.currentConfiguration.uri.path != '/call') _router.push('/call');
@@ -177,6 +181,7 @@ class _JarvisMobileState extends ConsumerState<JarvisMobile> with WidgetsBinding
       ref.invalidate(availabilityProvider);
       // only sends anything if Sir switched location sharing on (Einstellungen › Standortfreigabe)
       if (ref.read(isPairedProvider)) ref.read(nativeProvider).reportLocation().catchError((Object _) => false);
+      if (ref.read(isPairedProvider)) ref.read(appUpdateProvider.notifier).check();
     }
   }
 

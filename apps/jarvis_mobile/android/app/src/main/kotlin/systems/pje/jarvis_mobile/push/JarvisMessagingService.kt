@@ -17,6 +17,7 @@ import systems.pje.jarvis_mobile.net.Gateway
 import systems.pje.jarvis_mobile.notify.AlertNotifier
 import systems.pje.jarvis_mobile.phone.PhoneControl
 import systems.pje.jarvis_mobile.secure.PushKey
+import systems.pje.jarvis_mobile.update.AppUpdater
 
 private const val TAG = "JarvisPush"
 
@@ -77,6 +78,8 @@ class JarvisMessagingService : FirebaseMessagingService() {
             "location_request" -> scope.launch { LocationShare.report(this@JarvisMessagingService) }
             // Jarvis operates the phone (phone_* tools); executed by the accessibility service, answer goes over HTTP
             "phone_command" -> scope.launch { PhoneControl.handle(this@JarvisMessagingService, msg) }
+            // a new signed release of this app is ready on the core: check, download, install (update/AppUpdater)
+            "app_update" -> AppUpdater.onPush(this)
             else -> Log.i(TAG, "Unknown push type ${msg.optString("type")}")
         }
     }

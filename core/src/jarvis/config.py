@@ -323,7 +323,7 @@ class AppUpdateCfg(_Strict):
     debounce_s: int = Field(default=60, ge=0)  # several changes in a row → one build
     keep_releases: int = Field(default=5, ge=3)  # older releases are removed (rollback needs a few)
     build_timeout_minutes: int = Field(default=40, ge=5)
-    min_free_gb: float = Field(default=3.0, ge=0)
+    min_free_gb: float = Field(default=5.0, ge=0)  # a release build needs ~2-3 GB (checkout + build output)
     # Program name (looked up in PATH + coding.extra_path) or absolute path; must be "flutter" from the shell allowlist
     flutter_command: str = "flutter"
     android_sdk: str = ""  # empty: ANDROID_HOME / ANDROID_SDK_ROOT / ~/Library/Android/sdk

@@ -123,6 +123,14 @@ Overrides in `permissions.yaml` können Risiken nur **erhöhen**.
   „tainted“ Sitzungen gilt die normale Freigabepflicht.
 - **Widerruf:** App › Abmelden, Einstellungen › Gekoppelte Telefone oder `DELETE /api/mobile/devices/<id>` – alle
   Refresh-Tokens ungültig, Push-Token gelöscht, Zugriffstoken spätestens nach 5 s Cache abgelehnt.
+- **App-Updates (OTA, docs/MOBILE.md §15):** ein Release-Schlüssel (RSA 4096) in `<data_dir>/android-signing/`
+  (0700), Passwort nur im Schlüsselbund, an keytool/Gradle nur über die Umgebung (nie argv/Log); wird nie automatisch
+  ersetzt. Gebaut wird in einem eigenen Worktree mit `flutter` aus der Shell-Allowlist, nicht bei Not-Aus. Vor der
+  Freigabe prüft der Core Signatur (v2/v3, genau dieser Schlüssel), Paket, versionCode und SHA-256. Die App lädt nur
+  über das gepinnte Gateway mit Gerätetoken, prüft SHA-256, Paket, höheren versionCode und dasselbe
+  Signaturzertifikat wie die installierte App, bevor sie installiert (Android lehnt fremd signierte Updates zusätzlich
+  selbst ab). Bauen/Zurückziehen/Installationslink nur Owner; Telefone dürfen nur prüfen, laden und melden.
+  Der Installationslink für die Erstinstallation ist zufällig (192 Bit), 24 h gültig, max. 20 Downloads, rate-limitiert.
 - **Test-Hooks:** `POST /api/mobile/test/ring-local` (Owner, nur Loopback, nicht im Gateway) und der
   `DevPushReceiver` (nur System/adb, `android.permission.DUMP`) – ein simulierter Anruf ist ohne klingelnde
   Sitzung im Core wertlos.

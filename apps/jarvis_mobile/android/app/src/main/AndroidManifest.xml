@@ -25,6 +25,10 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- Reminder to reactivate the wake word after a reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- App updates from the paired Jarvis core (update/AppUpdater): Sir allows "install unknown apps" once;
+         Android 12+ then installs updates of this app without a dialog -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
 
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -156,6 +160,20 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/phone_control_service" />
         </service>
+
+        <!-- App updates: install result, first start of the new version, periodic check -->
+        <receiver android:name=".update.UpdateInstallReceiver" android:exported="false" />
+        <receiver
+            android:name=".update.UpdatePackageReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+        <service
+            android:name=".update.UpdateJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <receiver android:name=".call.CallActionReceiver" android:exported="false" />
         <receiver android:name=".notify.AlertActionReceiver" android:exported="false" />

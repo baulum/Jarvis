@@ -135,15 +135,19 @@ class ApkBuilder:
         return apk
 
     async def inspect(self, tc: Toolchain, apk: Path) -> ApkInfo:
-        code, badging = await self.runner.run([tc.aapt2, "dump", "badging", str(apk)], env=tc.env, timeout_s=120)
+        # the whole stdout, not run()'s tail: badging starts with the package line and then lists every permission,
+        # apksigner may append many warnings after the signer lines
+        code, raw = await self.runner.output([tc.aapt2, "dump", "badging", str(apk)], env=tc.env, timeout_s=120)
+        badging = raw.decode(errors="replace")
         if code != 0:
-            raise BuildError("verify", f"aapt2 konnte die APK nicht lesen: {badging.strip()[-300:]}")
+            raise BuildError("verify", f"aapt2 konnte die APK nicht lesen (Exit {code}): {badging.strip()[-300:]}")
         package, vcode, vname, min_sdk, target_sdk = parse_badging(badging)
-        code, certs = await self.runner.run(
+        code, raw = await self.runner.output(
             [tc.apksigner, "verify", "--print-certs", "-v", str(apk)], env=tc.env, timeout_s=180
         )
+        certs = raw.decode(errors="replace")
         if code != 0:
-            raise BuildError("verify", f"Signaturprüfung fehlgeschlagen: {certs.strip()[-300:]}")
+            raise BuildError("verify", f"Signaturprüfung fehlgeschlagen (Exit {code}): {certs.strip()[-300:]}")
         return ApkInfo(package, vcode, vname, min_sdk, target_sdk, parse_signers(certs))
 
 

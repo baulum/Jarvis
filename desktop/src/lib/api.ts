@@ -2,6 +2,9 @@
 import type { GraphDTO } from "../holo/graph/types";
 import type {
   ApprovalMode,
+  AppInstallLink,
+  AppUpdateRelease,
+  AppUpdateStatus,
   AgentModelStatus,
   AgentUsage,
   BackupStatus,
@@ -310,6 +313,20 @@ export function createApi(opts: ApiOptions) {
       post<AgentModelStatus>("/agent/model", body),
     agentUsage: () => get<AgentUsage>("/agent/usage"),
     refreshAgentUsage: () => post<AgentUsage>("/agent/usage/refresh"),
+    // OTA updates of the Android app (built, signed and handed to the phones by the core)
+    appUpdate: {
+      status: () => get<AppUpdateStatus>("/mobile/app-update/status"),
+      /** Looks for app changes now; builds only if needed. */
+      check: () => post<AppUpdateStatus>("/mobile/app-update/check"),
+      /** Builds the branch head now (also: retry after a failure). */
+      build: () => post<AppUpdateStatus>("/mobile/app-update/build"),
+      distribute: () => post<{ sent: number; message: string }>("/mobile/app-update/distribute"),
+      withdraw: (code: number, withdrawn: boolean, reason?: string) =>
+        post<AppUpdateRelease>(`/mobile/app-update/releases/${code}/withdraw`, { withdrawn, reason: reason ?? null }),
+      /** Recovery: the old release's commit again, with a new (higher) versionCode. */
+      rebuild: (code: number) => post<AppUpdateStatus>(`/mobile/app-update/releases/${code}/rebuild`),
+      installLink: () => post<AppInstallLink>("/mobile/app-update/install-link"),
+    },
     backupStatus: () => get<BackupStatus>("/backup"),
     runBackup: () => post<BackupStatus["last"]>("/backup/run"),
     codingCancel: (jid: string) => post<{ cancelled: boolean }>(`/coding/jobs/${id(jid)}/cancel`),

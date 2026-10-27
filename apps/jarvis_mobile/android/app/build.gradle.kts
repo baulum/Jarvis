@@ -43,19 +43,32 @@ android {
         applicationId = "systems.pje.jarvis"
         minSdk = 26 // Core-Telecom
         targetSdk = 36
-        // phones only (no x86 WebRTC libs); `--split-per-abi` builds use Flutter's own ABI splits instead
-        if (!project.hasProperty("split-per-abi")) ndk { abiFilters += setOf("arm64-v8a", "armeabi-v7a") }
+        // phones only (no x86 WebRTC libs); `--split-per-abi` builds use Flutter's own ABI splits instead.
+        // OTA builds of the core (jarvis.mobile.ota) pass the phone's ABI in JARVIS_ANDROID_ABIS (smaller APK).
+        val otaAbis = System.getenv("JARVIS_ANDROID_ABIS")?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+        if (!project.hasProperty("split-per-abi")) ndk { abiFilters += otaAbis?.toSet() ?: setOf("arm64-v8a", "armeabi-v7a") }
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
-    // Release signing: android/key.properties (not in git) – see docs/MOBILE.md › Release-Build
+    // Release signing: the OTA builder of the core hands its key over the environment (JARVIS_SIGNING_*, password
+    // from the Keychain, never in a file); manual builds use android/key.properties (not in git) –
+    // see docs/MOBILE.md › Release-Build and › App-Updates
+    val otaStore = System.getenv("JARVIS_SIGNING_STORE_FILE")?.takeIf { it.isNotBlank() }
     val keyProps = Properties().apply {
         val f = rootProject.file("key.properties")
         if (f.exists()) f.inputStream().use { load(it) }
     }
     signingConfigs {
-        if (keyProps.getProperty("storeFile") != null) {
+        if (otaStore != null) {
+            create("release") {
+                storeFile = file(otaStore)
+                storeType = "pkcs12"
+                storePassword = System.getenv("JARVIS_SIGNING_STORE_PASSWORD")
+                keyAlias = System.getenv("JARVIS_SIGNING_KEY_ALIAS")
+                keyPassword = System.getenv("JARVIS_SIGNING_KEY_PASSWORD")
+            }
+        } else if (keyProps.getProperty("storeFile") != null) {
             create("release") {
                 storeFile = file(keyProps.getProperty("storeFile"))
                 storePassword = keyProps.getProperty("storePassword")
@@ -65,7 +78,7 @@ android {
         }
     }
 
-    if (keyProps.getProperty("storeFile") == null &&
+    if (otaStore == null && keyProps.getProperty("storeFile") == null &&
         gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
     ) {
         logger.warn("WARNING: android/key.properties missing – this release build is signed with the DEBUG key (not for distribution).")

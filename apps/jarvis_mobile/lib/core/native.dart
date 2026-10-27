@@ -80,6 +80,17 @@ class NativeBridge {
 
   /// Opens a web/mail link from a chat answer in the system's default app; false if that is not possible.
   Future<bool> openUrl(String url) async => await _ch.invokeMethod<bool>('openUrl', {'url': url}) ?? false;
+
+  /// App updates from the core (Kotlin `update/AppUpdater`); changes also arrive as event `app_update`.
+  Future<Map<String, dynamic>> updateStatus() async =>
+      jsonDecode(await _ch.invokeMethod<String>('updateStatus') ?? '{}') as Map<String, dynamic>;
+
+  /// Looks for an update (and downloads/installs it). Automatic checks are throttled natively, [manual] ones not.
+  Future<Map<String, dynamic>> updateCheck({bool manual = false}) async =>
+      jsonDecode(await _ch.invokeMethod<String>('updateCheck', {'manual': manual}) ?? '{}') as Map<String, dynamic>;
+
+  /// Installs the downloaded update now (ends the app; it restarts in the new version).
+  Future<void> updateInstall() => _ch.invokeMethod('updateInstall');
 }
 
 class NativeEvent {

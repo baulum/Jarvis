@@ -368,6 +368,8 @@ cd apps/jarvis_mobile && flutter build apk --release --split-per-abi   # oder: f
 ```
 `key.properties` und `*.jks` sind in `.gitignore`. Release: R8-Minify + Ressourcen-Shrinking, Proguard-Regeln für
 LiveKit/WebRTC und die Car App Library. Wechsel des Signierschlüssels = Neuinstallation = neu koppeln.
+Im Alltag baut der Core die Release-APK selbst und verteilt sie – siehe §15 App-Updates. `key.properties` ist nur
+noch für Builds von Hand nötig.
 
 ## 13. Bekannte Grenzen
 
@@ -469,3 +471,87 @@ microphone)` → `state: listen` → `keyword spotter loaded` → `listening`; b
   läuft im Core weiter, das Ergebnis steht in der App (Chat).
 - `ACTION_ASSIST`-Aktivität und Spracherkennungsdienst sind exportiert (Android verlangt das); jede Aufnahme ist
   sichtbar und erst nach dem Entsperren möglich.
+
+## 15. App-Updates (OTA)
+
+Jarvis baut, signiert und verteilt die Android-App selbst; die App aktualisiert sich daraufhin von allein – im WLAN
+und unterwegs über Tailscale. Core: `core/src/jarvis/mobile/ota/`, App: `android/…/update/AppUpdater.kt`,
+Konfiguration: `mobile.app_update` in `config/jarvis.yaml`.
+
+```
+ Änderung an apps/jarvis_mobile auf main          Core (Mac)                                   Handy
+ (Coding-Job oder Push von woanders) ──► Prüfung ──► Checkout (eigener Worktree) ──► flutter build apk
+                                          │          ──► apksigner/aapt2 prüfen ──► Release ──► Push „app_update“
+                                          │                                                     │
+                                          └─ alle 10 min, beim Start, nach jedem Coding-Job      ▼
+                                                                  /latest ─► Download (fortsetzbar) ─► Prüfung
+                                                                  ─► PackageInstaller ─► „installiert“ an den Core
+```
+
+**Core-Seite**
+
+- **Erkennung:** nach jedem abgeschlossenen Coding-Job, alle `poll_interval_minutes` (`git fetch origin main`) und
+  beim Start. Gebaut wird nur, wenn sich seit dem letzten Release Dateien geändert haben, die in der APK landen
+  (`apps/jarvis_mobile/…` ohne Tests, Doku, Lint-Einstellungen). Mehrere Änderungen kurz hintereinander werden
+  zusammengefasst (`debounce_s`); es läuft immer nur ein Build, und zwar immer der neueste Stand.
+- **Build:** in einem eigenen Worktree (`<data_dir>/app-updates/checkout`), nie in Sirs Checkout. `flutter` muss in
+  der Shell-Allowlist stehen und wird ohne Shell aufgerufen; Android-SDK und JDK (Android Studio) werden selbst
+  gefunden, sonst nennt der Status genau, was fehlt (`flutter_missing`, `android_sdk_missing` …) – fehlende
+  Werkzeuge werden nach dem Nachinstallieren automatisch erneut versucht. Build-Log: `<log_dir>/android-build.log`.
+- **Signierung:** genau ein Release-Schlüssel (RSA 4096, PKCS12) in `<data_dir>/android-signing/` (Ordner 0700),
+  Passwort nur im Schlüsselbund (`android-release-keystore`), an Gradle per Umgebung (`JARVIS_SIGNING_*`). Er wird
+  beim ersten Build erzeugt und **nie automatisch ersetzt** – fehlt er später, baut Jarvis nicht und sagt das (aus
+  der Sicherung wiederherstellen: Datei + Schlüsselbund-Eintrag). Mit anderem Schlüssel signierte Builds werden
+  verworfen.
+- **Versionierung:** versionCode strikt steigend ab 3000 (über allen Hand-Builds), nie wiederverwendet;
+  versionName `1.0.0+3001.ab12cd3` (pubspec-Version + Code + Commit).
+- **Prüfung vor der Freigabe:** apksigner (v2/v3-Signatur, genau der Release-Schlüssel), aapt2 (Paket, versionCode,
+  versionName), SHA-256. Erst dann entsteht ein Release (`<data_dir>/app-updates/releases/<code>/`), die letzten
+  `keep_releases` bleiben (nie das, was ein Handy gerade noch hat).
+- **Verteilung:** verschlüsselter Push `app_update` an alle gekoppelten Handys; ohne Push findet die App das Update
+  beim Öffnen, beim Zurückkehren in den Vordergrund und alle 6 Stunden selbst.
+
+**App-Seite**
+
+- Fragt `/api/mobile/app-update/latest` über die gepinnte Gateway-Verbindung (LAN oder Tailscale) und nimmt nur ein
+  Release mit **höherem versionCode, eigenem Paket und demselben Signaturzertifikat** wie die installierte App.
+- Download in den App-Speicher (ohne Backup), bei Abbruch per HTTP-Range fortgesetzt; danach SHA-256, Größe, Paket,
+  versionCode und Signatur der APK geprüft. Ein Fehler löscht die Datei, der nächste Versuch folgt mit wachsender
+  Pause (5 min … 6 h).
+- Installation über den Android-PackageInstaller: **ab Android 12 ohne Rückfrage**, sobald Sir die App verlassen hat
+  (das Update beendet die laufende App) und nie während eines Anrufs. „Jetzt installieren“ in den Einstellungen
+  installiert sofort. Ältere Android-Versionen oder Hersteller, die nachfragen: eine Benachrichtigung „Update bereit
+  – tippen“.
+- Daten, Kopplung, Einstellungen und Berechtigungen bleiben (gleiches Paket, gleicher Schlüssel). Nach dem Update
+  meldet die App „installiert“ (auch ohne geöffnet zu werden) und zeigt eine kurze Benachrichtigung. „Hey Jarvis“
+  muss danach einmal angetippt werden (siehe §14 › Akku und Verhalten).
+- Status in der App: **Einstellungen › App-Updates** (Version, Fortschritt, Fehler, „Jetzt prüfen“), ein Hinweis auf
+  der Startseite nur, wenn Sir etwas tun muss.
+
+**Status in der Jarvis-Oberfläche:** Desktop › System › **Handy-App-Updates** – Build-Status mit Log-Auszug,
+jedes Handy mit Version und Fortschritt, Releases, Knöpfe *Prüfen*, *Jetzt bauen / Wiederholen*, *Verteilen*,
+*Installationslink*. Benachrichtigungen `app_update.ready` / `app_update.failed`.
+
+**Erste Installation (einmalig)**
+
+1. Desktop › System › Handy-App-Updates › **Jetzt bauen** (dauert beim ersten Mal einige Minuten).
+2. **Installationslink** → QR-Code mit dem Handy scannen (WLAN oder Tailscale). Der Link gilt 24 h und höchstens
+   20 Downloads; der Browser warnt vor Jarvis' eigenem Zertifikat (Fingerabdruck steht im Dialog) → *Weiter*.
+3. APK öffnen, dem Browser einmal „Apps installieren“ erlauben, installieren. War eine J.A.R.V.I.S.-App mit anderem
+   Schlüssel installiert (Debug-Build, `key.properties`), meldet Android einen Konflikt: diese zuerst deinstallieren
+   und danach neu koppeln.
+4. In der App unter Einstellungen › App-Updates **Installation erlauben** („Unbekannte Apps installieren“ für
+   J.A.R.V.I.S.). Ab jetzt kommen Updates automatisch.
+
+**Recovery**
+
+- Fehlerhaftes Release: *Zurückziehen* – die Handys bekommen es nicht mehr (wer es schon hat, behält es).
+- Zurück auf einen älteren Stand: *Wiederherstellen* baut dessen Commit erneut mit **höherem** versionCode (Android
+  installiert nie eine niedrigere Version über eine höhere).
+- Fehlgeschlagener Build: Ursache im Status und in der Benachrichtigung; derselbe Commit wird nicht endlos neu
+  gebaut, sondern erst bei der nächsten App-Änderung oder über *Wiederholen*. Ein Core-Neustart mitten im Build
+  wird erkannt und neu geprüft.
+- Auf dem Handy: jedes Problem lässt die laufende App unberührt (Android installiert atomar).
+
+**Test ohne Firebase:** `adb shell am broadcast -a systems.pje.jarvis.DEV_PUSH -n systems.pje.jarvis/systems.pje.jarvis_mobile.push.DevPushReceiver --es payload '{"type":"app_update"}'`
+

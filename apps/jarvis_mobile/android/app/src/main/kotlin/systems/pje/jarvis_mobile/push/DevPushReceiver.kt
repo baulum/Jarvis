@@ -8,6 +8,7 @@ import org.json.JSONObject
 import systems.pje.jarvis_mobile.bridge.NativeEvents
 import systems.pje.jarvis_mobile.call.CallManager
 import systems.pje.jarvis_mobile.notify.AlertNotifier
+import systems.pje.jarvis_mobile.update.AppUpdater
 
 /**
  * Device test hook without Firebase: delivers a decrypted push payload into exactly the code path FCM uses.
@@ -25,6 +26,7 @@ class DevPushReceiver : BroadcastReceiver() {
             "call" -> CallManager.onIncomingPush(context, msg)
             "call_cancel" -> CallManager.onCancelPush(context, msg.optString("call_id"), msg.optString("status"))
             "alert" -> { AlertNotifier.show(context, msg); NativeEvents.emit("alert", msg.toString()) }
+            "app_update" -> AppUpdater.onPush(context)
         }
     }
 }

@@ -657,3 +657,85 @@ export interface AgentPairing {
   protocol: number;
   command: string;
 }
+
+// ------------------------------------------------------------------ Android app OTA updates (/api/mobile/app-update)
+export interface AppUpdateRelease {
+  application_id: string;
+  version_code: number;
+  version_name: string;
+  commit: string;
+  sha256: string;
+  size: number;
+  signing_cert_sha256: string;
+  created_at: string;
+  branch: string;
+  min_sdk: number | null;
+  target_sdk: number | null;
+  changelog: { commit: string; subject: string }[];
+  withdrawn: boolean;
+  withdrawn_reason: string | null;
+  rebuild_of: number | null;
+  download_path: string;
+}
+
+/** preparing | building | verifying | publishing (active) · ready | distributed · failed · idle */
+export interface AppUpdateBuild {
+  state: string;
+  message?: string | null;
+  commit?: string;
+  reason?: string;
+  version_code?: number;
+  version_name?: string;
+  started_at?: string;
+  finished_at?: string;
+  cause?: string;
+  stage?: string;
+  log_tail?: string;
+  push_sent?: number;
+  rebuild_of?: number | null;
+}
+
+/** What a phone reported last (state of its self-update). */
+export interface AppUpdateDevice {
+  device_id: string;
+  name: string;
+  state: string;
+  updated_at: string;
+  version_code?: number;
+  version_name?: string;
+  target_code?: number | null;
+  progress?: number | null;
+  error?: string | null;
+  can_install?: boolean;
+  unattended?: boolean;
+  sdk?: number;
+}
+
+export interface AppUpdateStatus {
+  enabled: boolean;
+  auto_build: boolean;
+  branch: string;
+  application_id: string;
+  build: AppUpdateBuild;
+  queued: boolean;
+  queued_reason: string | null;
+  busy: boolean;
+  last_check: { at: string; decision: string; reason: string; target?: string; trigger?: string } | null;
+  last_failure: { commit: string; cause: string; message: string; at: string } | null;
+  latest: AppUpdateRelease | null;
+  releases: AppUpdateRelease[];
+  history: AppUpdateBuild[];
+  devices: AppUpdateDevice[];
+  signing: { exists: boolean; fingerprint: string | null; created_at: string | null; location: string };
+  toolchain: { ok: boolean | null; cause?: string; error?: string; flutter?: string; android_sdk?: string; build_tools?: string; java_home?: string | null };
+  keep_releases: number;
+  log_file: string;
+}
+
+export interface AppInstallLink {
+  urls: string[];
+  expires_at: string;
+  svg: string | null;
+  release: AppUpdateRelease;
+  certificate_fingerprint: string | null;
+}

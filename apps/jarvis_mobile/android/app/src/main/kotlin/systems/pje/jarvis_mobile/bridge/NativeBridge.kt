@@ -29,6 +29,8 @@ import systems.pje.jarvis_mobile.phone.PhoneControlService
 import systems.pje.jarvis_mobile.net.sha256Hex
 import systems.pje.jarvis_mobile.push.PushRegistration
 import systems.pje.jarvis_mobile.secure.DeviceKey
+import systems.pje.jarvis_mobile.update.AppUpdater
+import systems.pje.jarvis_mobile.update.UpdateJob
 
 /** Native → Flutter events (JSON strings). Buffered while no Flutter listener is attached. */
 object NativeEvents {
@@ -113,6 +115,13 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
             }
             "openAssist" -> { Assist.launch(context, "app"); result.success(true) }
             "openUrl" -> result.success(openUrl(call.argument<String>("url").orEmpty()))
+            // app updates from the core (update/AppUpdater); status JSON, also pushed as event "app_update"
+            "updateStatus" -> result.success(AppUpdater.status(context).toString())
+            "updateCheck" -> async {
+                UpdateJob.schedule(context)
+                AppUpdater.check(context, manual = call.argument<Boolean>("manual") == true).toString()
+            }
+            "updateInstall" -> { AppUpdater.installNow(context); result.success(true) }
             else -> result.notImplemented()
         }
     }
@@ -157,6 +166,8 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
             "accessibility" -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
             // "Digital assistant app" page on Pixel/Samsung; elsewhere the list of default apps
             "assistant" -> Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)
+            // "Install unknown apps" for J.A.R.V.I.S. – needed once for self-updates
+            "install" -> Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, pkg)
             else -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
         }
         try {

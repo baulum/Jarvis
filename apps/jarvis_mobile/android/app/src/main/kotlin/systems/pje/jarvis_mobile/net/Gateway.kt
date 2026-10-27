@@ -19,6 +19,9 @@ import org.json.JSONObject
 import systems.pje.jarvis_mobile.secure.DeviceKey
 import systems.pje.jarvis_mobile.secure.PushKey
 import systems.pje.jarvis_mobile.secure.SecureStore
+import systems.pje.jarvis_mobile.update.UpdatePolicy
+import java.io.File
+import java.io.FileOutputStream
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -245,6 +248,52 @@ class Gateway private constructor(private val context: Context) {
             }
             @Suppress("UNREACHABLE_CODE") ""
         }
+
+    /**
+     * Streams a file (an app update) into [dest]. An existing [dest] is continued with a Range request; if the core
+     * answers with the whole file instead, it starts over. [onProgress] gets (bytes, total). Returns the file size.
+     */
+    suspend fun download(path: String, dest: File, onProgress: (Long, Long) -> Unit): Long = withContext(Dispatchers.IO) {
+        val base = resolveBase()
+        val from = if (dest.isFile) dest.length() else 0L
+        var b = Request.Builder().url("$base$path").header("Authorization", "Bearer ${accessToken()}")
+        if (from > 0) b = b.header("Range", "bytes=$from-")
+        val client = http().newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+        val response = try {
+            client.newCall(b.build()).execute()
+        } catch (e: java.io.IOException) {
+            baseUrl = null
+            throw ApiException(0, "Jarvis ist nicht erreichbar")
+        }
+        response.use { r ->
+            if (r.code == 416) { dest.delete(); throw ApiException(416, "Download wird neu begonnen") }
+            if (!r.isSuccessful) throw ApiException(r.code, detail(r.body?.string().orEmpty()) ?: "Download fehlgeschlagen (${r.code})")
+            val body = r.body ?: throw ApiException(0, "Leere Antwort")
+            val append = r.code == 206 && UpdatePolicy.contentRangeStart(r.header("Content-Range")) == from
+            val start = if (append) from else 0L
+            val total = if (body.contentLength() >= 0) start + body.contentLength() else -1L
+            var done = start
+            try {
+                FileOutputStream(dest, append).use { out ->
+                    body.byteStream().use { input ->
+                        val buf = ByteArray(64 * 1024)
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            done += n
+                            onProgress(done, total)
+                        }
+                        out.fd.sync()
+                    }
+                }
+            } catch (e: java.io.IOException) {
+                baseUrl = null
+                throw ApiException(0, "Download unterbrochen bei ${done / 1_000_000} MB – wird fortgesetzt")
+            }
+            done
+        }
+    }
 
     suspend fun logout() {
         runCatching { request("POST", "/api/mobile/logout") }

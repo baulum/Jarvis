@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/attachments.dart';
 import '../../core/live.dart';
 import '../../core/theme.dart';
+import '../../state/app_update.dart';
 import '../../state/chat.dart';
 import '../../state/live_model.dart';
 import '../../state/providers.dart';
@@ -89,6 +90,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   ),
                 ]),
               ),
+              const _UpdateBanner(),
               Expanded(
                 child: LayoutBuilder(builder: (context, box) => Column(mainAxisAlignment: MainAxisAlignment.center, children: [
                   Hero(
@@ -198,6 +200,30 @@ class _LinkLine extends StatelessWidget {
       const SizedBox(width: 6),
       Text(text, style: J.caps.copyWith(color: J.text3)),
     ]);
+  }
+}
+
+/// A downloaded app update that needs Sir once (confirm / allow); everything else happens without a word.
+class _UpdateBanner extends ConsumerWidget {
+  const _UpdateBanner();
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final u = ref.watch(appUpdateProvider);
+    if (u == null || !u.worthABanner) return const SizedBox.shrink();
+    return Pressable(
+      onTap: () => context.push('/settings'),
+      semantics: u.headline,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: J.s5, vertical: J.s1),
+        padding: const EdgeInsets.symmetric(horizontal: J.s4, vertical: J.s2),
+        decoration: BoxDecoration(
+          color: J.panel,
+          borderRadius: BorderRadius.circular(J.radius),
+          border: Border.all(color: J.lineBright),
+        ),
+        child: Text(u.headline, style: J.mono(11.5, color: J.cyan), textAlign: TextAlign.center),
+      ),
+    );
   }
 }
 

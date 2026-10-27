@@ -127,6 +127,7 @@ class AppUpdateService:
             bus.subscribe("coding.updated", self._on_coding)
 
     async def stop(self) -> None:
+        bus.unsubscribe("coding.updated", self._on_coding)
         for t in self._tasks:
             t.cancel()
         for t in self._tasks:
@@ -260,7 +261,7 @@ class AppUpdateService:
     def _set_build(self, **fields: Any) -> None:
         self.state["build"].update(fields)
         self._save()
-        spawn(self._publish(), name="app-update-event")
+        self._publish_soon()
 
     def _finish_failed(self, commit: str | None, cause: str, message: str, stage: str | None = None) -> None:
         b = self.state["build"]
@@ -353,7 +354,12 @@ class AppUpdateService:
         await self._notify("app_update.ready", f"Handy-App {name} bereit", self._release_text(rel), "info", rel)
 
     async def _failed(self, commit: str, cause: str, message: str, stage: str | None = None) -> None:
+        prev = self.state.get("last_failure") or {}
         self._finish_failed(commit, cause, message, stage)
+        if prev.get("commit") == commit and prev.get("cause") == cause:
+            # the automatic retry of a missing tool / full disk: Sir already knows, no notification every poll
+            logger.info("App update build still failing (%s)", cause)
+            return
         logger.warning("App update build failed (%s): %s", cause, message)
         await self._notify("app_update.failed", "Handy-App-Update fehlgeschlagen", message, "warning", None)
 
@@ -426,6 +432,13 @@ class AppUpdateService:
         lines = [f"• {c['subject']}" for c in rel.changelog[:5]]
         return f"{rel.size / 1e6:.1f} MB, Commit {rel.commit[:7]}." + ("\n" + "\n".join(lines) if lines else "")
 
+    def _publish_soon(self) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:  # called outside the event loop (CLI, tests): the next status read is fresh anyway
+            return
+        spawn(self._publish(), name="app-update-event")
+
     async def _publish(self) -> None:
         with contextlib.suppress(Exception):
             await bus.publish("app_update.status", **self.brief())
@@ -433,7 +446,7 @@ class AppUpdateService:
     # ------------------------------------------------------------------ manual actions
     def withdraw(self, code: int, withdrawn: bool, reason: str | None) -> Release:
         rel = self.releases.set_withdrawn(code, withdrawn, reason)
-        spawn(self._publish(), name="app-update-event")
+        self._publish_soon()
         return rel
 
     def rebuild(self, code: int, actor: str) -> dict[str, Any]:
@@ -466,7 +479,7 @@ class AppUpdateService:
         last = self._last_report_event.get(device_id)
         if last is None or last[0] != state or time.monotonic() - last[1] > 2:
             self._last_report_event[device_id] = (state, time.monotonic())
-            spawn(self._publish(), name="app-update-event")
+            self._publish_soon()
 
     # ------------------------------------------------------------------ first installation (no pairing yet)
     def create_install_link(self) -> tuple[str, float]:

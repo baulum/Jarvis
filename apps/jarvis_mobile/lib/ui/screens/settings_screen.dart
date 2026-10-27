@@ -10,6 +10,7 @@ import '../../core/theme.dart';
 import '../../state/providers.dart';
 import '../widgets/hud.dart';
 import '../widgets/model_picker.dart';
+import '../widgets/update_settings.dart';
 import '../widgets/wake_settings.dart';
 
 const _categories = [
@@ -290,6 +291,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> with WidgetsBin
                       ]),
                     ],
                   ),
+              const SizedBox(height: J.s6),
+              const UpdateSettings(),
               const SizedBox(height: J.s6),
               const Caps('Berechtigungen'),
               Wrap(spacing: J.s4, children: [
