@@ -135,6 +135,69 @@ def search(policy: PathPolicy, query: str, root: str | None, limit: int = 50, bu
     return {"results": hits, "complete": complete}
 
 
+CONTENT_MAX_FILE = 2 * 1024 * 1024
+
+
+def content_search(
+    policy: PathPolicy, query: str, root: str | None, limit: int = 50, budget_s: float = 25.0
+) -> dict[str, Any]:
+    """Name *or* content match without a search index (text files up to 2 MB): the fallback when the system has
+    no index (no Windows Search, no Tracker) – slower, bounded by ``budget_s``."""
+    roots = [policy.check(root, must_exist=True)] if root else list(policy.roots)
+    needle = query.strip().casefold()
+    if not needle:
+        raise ValueError("query fehlt")
+    raw = needle.encode("utf-8")
+    hits: list[dict[str, Any]] = []
+    deadline = time.monotonic() + budget_s
+    for base in roots:
+        for dirpath, dirnames, filenames in os.walk(base):
+            if time.monotonic() > deadline:
+                return {"results": hits, "complete": False, "source": "scan"}
+            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+            for name in filenames:
+                full = Path(dirpath) / name
+                match = "name" if needle in name.casefold() else ""
+                if not match:
+                    try:
+                        if full.stat().st_size > CONTENT_MAX_FILE:
+                            continue
+                        data = full.read_bytes()
+                    except OSError:
+                        continue
+                    if b"\x00" in data[:8192]:
+                        continue  # binary
+                    if raw not in data.lower() and needle not in data.decode("utf-8", errors="ignore").casefold():
+                        continue
+                    match = "content"
+                try:
+                    policy.check(str(full))
+                except PermissionError:
+                    continue
+                hits.append({"path": str(full), "type": "file", "match": match})
+                if len(hits) >= limit:
+                    return {"results": hits, "complete": False, "source": "scan"}
+    return {"results": hits, "complete": True, "source": "scan"}
+
+
+def from_index(policy: PathPolicy, paths: list[str], roots: list[Path], limit: int) -> list[dict[str, Any]]:
+    """Index hits (Spotlight, Windows Search, Tracker, locate) reduced to what the path policy allows."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in paths:
+        try:
+            p = policy.check(raw)
+        except (PermissionError, OSError, ValueError):
+            continue
+        if not any(p == r or p.is_relative_to(r) for r in roots) or str(p) in seen or not p.exists():
+            continue
+        seen.add(str(p))
+        out.append({"path": str(p), "type": "dir" if p.is_dir() else "file"})
+        if len(out) >= limit:
+            break
+    return out
+
+
 async def run_sync(fn: Any, *args: Any) -> Any:
     return await asyncio.to_thread(fn, *args)
 

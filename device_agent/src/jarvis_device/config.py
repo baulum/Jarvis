@@ -45,6 +45,7 @@ class AgentConfig:
     claude_binary: str = "claude"
     claude_args: list[str] = field(default_factory=lambda: ["--permission-mode", "acceptEdits"])
     browser_automation: bool = True
+    automations: bool = True  # scripts in <config>/automations (and Apple Shortcuts on a Mac) may be run
 
     @property
     def paired(self) -> bool:

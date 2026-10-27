@@ -13,7 +13,8 @@ device → core   {"type": "capabilities", "capabilities": {...}}      (re-probe
 both            {"type": "ping"} / {"type": "pong"}
 
 This file is the contract: ``device_agent/src/jarvis_device/protocol.py`` carries the same tables and a test
-checks that both stay identical.
+checks that both stay identical. Version 1 only grows additively (new actions, capabilities, optional args): an
+older agent does not report a new capability, so the hub answers "vom Gerät nicht gemeldet" instead of sending it.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ ACTIONS: dict[str, str] = {
     "apps.quit": "apps.quit",
     "windows.list": "windows.list",
     "windows.focus": "windows.focus",
+    "windows.frontmost": "windows.frontmost",
     "input.type": "input.keyboard",
     "input.key": "input.keyboard",
     "input.click": "input.mouse",
@@ -54,6 +56,11 @@ ACTIONS: dict[str, str] = {
     "audio.volume": "audio.volume",
     "audio.speak": "audio.speak",
     "audio.play": "audio.play",
+    "ui.tree": "ui.elements",
+    "ui.press": "ui.elements",
+    "automation.list": "automation",
+    "automation.run": "automation",
+    "automation.applescript": "automation.applescript",
 }
 
 # capability → German label (desktop app, tool errors)
@@ -64,6 +71,7 @@ CAPABILITY_LABELS: dict[str, str] = {
     "apps.quit": "Programme beenden",
     "windows.list": "Fenster auflisten",
     "windows.focus": "Fenster in den Vordergrund holen",
+    "windows.frontmost": "Aktives Programm und Fenster erkennen",
     "input.keyboard": "Tastatur (tippen, Tastenkombinationen)",
     "input.mouse": "Maus (klicken, bewegen, scrollen)",
     "screen.capture": "Screenshots",
@@ -79,6 +87,9 @@ CAPABILITY_LABELS: dict[str, str] = {
     "audio.volume": "Lautstärke",
     "audio.speak": "Sprachausgabe auf dem Gerät",
     "audio.play": "Audiodateien abspielen",
+    "ui.elements": "Bedienelemente lesen und drücken (Accessibility / UI Automation / AT-SPI)",
+    "automation": "Automationen (Apple-Kurzbefehle bzw. freigegebene Skripte)",
+    "automation.applescript": "AppleScript (nur macOS)",
 }
 
 # result error codes
@@ -90,6 +101,9 @@ READ_ONLY_ACTIONS = frozenset(
         "system.info",
         "apps.list",
         "windows.list",
+        "windows.frontmost",
+        "ui.tree",
+        "automation.list",
         "screen.capture",
         "clipboard.get",
         "files.list",

@@ -17,11 +17,12 @@ import io
 import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from jarvis_device.actions import browser, files, shell
+from jarvis_device.actions import automations, browser, files, shell
 from jarvis_device.actions.system import system_info
-from jarvis_device.backends.base import BackendError, Capture, DesktopBackend, Unavailable
+from jarvis_device.backends.base import BackendError, Capture, DesktopBackend, UiTarget, Unavailable
 from jarvis_device.backends.keys import KeyError_
 from jarvis_device.config import AgentConfig
 from jarvis_device.protocol import ACTIONS, CAPABILITY_LABELS, READ_ONLY_ACTIONS
@@ -93,11 +94,19 @@ def scale_png(png: bytes, max_width: int) -> tuple[bytes, int, int, float]:
 
 
 class Dispatcher:
-    def __init__(self, backend: DesktopBackend, cfg: AgentConfig, policy: PathPolicy, kill: KillSwitch) -> None:
+    def __init__(
+        self,
+        backend: DesktopBackend,
+        cfg: AgentConfig,
+        policy: PathPolicy,
+        kill: KillSwitch,
+        automations_dir: Path | None = None,
+    ) -> None:
         self.backend = backend
         self.cfg = cfg
         self.policy = policy
         self.kill = kill
+        self.automations_dir = automations_dir
         self.frame = CaptureFrame()
         self.handlers: dict[str, Handler] = {
             "system.info": self._system_info,
@@ -106,6 +115,7 @@ class Dispatcher:
             "apps.quit": self._apps_quit,
             "windows.list": lambda a: self.backend.list_windows(),
             "windows.focus": self._windows_focus,
+            "windows.frontmost": lambda a: self.backend.frontmost(),
             "input.type": self._type,
             "input.key": self._key,
             "input.click": self._click,
@@ -132,6 +142,11 @@ class Dispatcher:
             "audio.volume": self._volume,
             "audio.speak": self._speak,
             "audio.play": self._play,
+            "ui.tree": self._ui_tree,
+            "ui.press": self._ui_press,
+            "automation.list": self._automation_list,
+            "automation.run": self._automation_run,
+            "automation.applescript": self._applescript,
         }
         missing = set(ACTIONS) - set(self.handlers)
         if missing:  # a protocol action without handler is a programming error, caught by the tests
@@ -160,9 +175,32 @@ class Dispatcher:
         except Exception as e:  # a broken probe must not take the agent down
             for cap in set(ACTIONS.values()) - set(caps):
                 caps[cap] = ("unavailable", f"Prüfung fehlgeschlagen: {type(e).__name__}")
+        caps["automation"] = self._automation_cap(caps.get("automation"))
         for cap in set(ACTIONS.values()) - set(caps):
             caps[cap] = ("unavailable", "Auf diesem System nicht umgesetzt")
         return {cap: {"status": st, "reason": why} for cap, (st, why) in sorted(caps.items())}
+
+    def _scripts(self) -> list[dict[str, Any]]:
+        if self.automations_dir is None:
+            return []
+        return automations.list_scripts(self.automations_dir, self._os())
+
+    def _os(self) -> str:
+        return {"windows": "win32", "mac": "darwin"}.get(self.backend.platform, "linux")
+
+    def _automation_cap(self, shortcuts: tuple[str, str] | None) -> tuple[str, str]:
+        """Shortcuts (backend, macOS) and/or scripts in the automations folder."""
+        if not self.cfg.automations:
+            return ("unavailable", "Am Gerät abgeschaltet (jarvis-device config automations on)")
+        if shortcuts is not None and shortcuts[0] != "unavailable":
+            return shortcuts
+        where = str(self.automations_dir) if self.automations_dir else "dem Automationen-Ordner"
+        if self._scripts():
+            if shortcuts is not None:  # a Mac whose bridge is down: the scripts still run
+                return ("degraded", f"Nur Skripte aus {where} – Kurzbefehle: {shortcuts[1]}")
+            return ("available", "")
+        kinds = ".ps1, .cmd, .bat, .py" if self._os() == "win32" else "ausführbare Dateien, .sh, .py"
+        return ("degraded", f"Noch keine Automationen: Skripte ({kinds}) in {where} ablegen")
 
     # ------------------------------------------------------------------ entry point
     async def run(self, action: str, args: dict[str, Any], caps: dict[str, dict[str, str]] | None = None) -> Any:
@@ -308,10 +346,26 @@ class Dispatcher:
         return {"ok": True, "chars": len(text)}
 
     async def _files_search(self, a: dict[str, Any]) -> Any:
+        """mode ``name`` (default): names below the roots, walked like before. mode ``content``: the system's search
+        index (Spotlight, Windows Search, Tracker) for names and contents; without one a bounded scan."""
         q = _str(a, "query", max_len=300) or ""
         root = _str(a, "root", required=False)
         limit = max(1, min(200, int(_num(a, "limit", required=False, default=50))))
-        return await files.run_sync(files.search, self.policy, q, root, limit)
+        mode = _str(a, "mode", required=False) or "name"
+        if mode not in ("name", "content"):
+            raise CommandError("invalid", "mode: name oder content")
+        if mode == "name":
+            return await files.run_sync(files.search, self.policy, q, root, limit)
+        roots = [self.policy.check(root, must_exist=True)] if root else list(self.policy.roots)
+        try:
+            found = await self.backend.index_search(q, [str(r) for r in roots], limit * 4, False)
+        except (Unavailable, BackendError, OSError):
+            found = None
+        if found is not None:
+            source, paths = found
+            hits = await files.run_sync(files.from_index, self.policy, paths, roots, limit)
+            return {"results": hits, "complete": len(hits) < limit, "source": source}
+        return await files.run_sync(files.content_search, self.policy, q, root, limit)
 
     async def _files_write(self, a: dict[str, Any]) -> Any:
         content = a.get("content")
@@ -405,6 +459,59 @@ class Dispatcher:
         text = _str(a, "text", max_len=2000) or ""
         await self.backend.speak(text)
         return {"spoken": len(text)}
+
+    # ------------------------------------------------------------------ controls, automation
+    def _ui_target(self, a: dict[str, Any]) -> UiTarget:
+        return UiTarget(
+            app=_str(a, "app", required=False, max_len=300),
+            pid=_int_opt(a, "pid"),
+            window_id=_int_opt(a, "window_id"),
+        )
+
+    async def _ui_tree(self, a: dict[str, Any]) -> Any:
+        depth = max(1, min(8, int(_num(a, "max_depth", required=False, default=5))))
+        nodes = max(10, min(400, int(_num(a, "max_nodes", required=False, default=250))))
+        return await self.backend.ui_tree(self._ui_target(a), depth, nodes)
+
+    async def _ui_press(self, a: dict[str, Any]) -> Any:
+        path = _str(a, "path", required=False, max_len=512)
+        role = _str(a, "role", required=False, max_len=128)
+        title = _str(a, "title", required=False, max_len=512)
+        if not (path or role or title):
+            raise CommandError("invalid", "path oder role/title angeben")
+        return await self.backend.ui_press(self._ui_target(a), path, role, title)
+
+    async def _automation_list(self, a: dict[str, Any]) -> Any:
+        items: list[dict[str, Any]] = []
+        note = ""
+        try:
+            items += [{"name": n, "kind": "shortcut"} for n in await self.backend.shortcuts_list()]
+        except Unavailable as e:
+            if self.backend.platform == "mac":
+                note = str(e)
+        items += self._scripts()
+        out: dict[str, Any] = {"automations": items}
+        if self.automations_dir is not None:
+            out["folder"] = str(self.automations_dir)
+        if note:
+            out["note"] = note
+        return out
+
+    async def _automation_run(self, a: dict[str, Any]) -> Any:
+        name = _str(a, "name", max_len=256) or ""
+        text = _str(a, "input", required=False, max_len=1_000_000)
+        timeout = max(5.0, min(600.0, _num(a, "timeout_s", required=False, default=300)))
+        script = automations.find_script(self.automations_dir, name, self._os()) if self.automations_dir else None
+        if script is not None:
+            return await automations.run_script(script, text, timeout_s=timeout, platform=self._os())
+        try:
+            return await self.backend.shortcut_run(name, text)
+        except Unavailable:
+            names = ", ".join(s["name"] for s in self._scripts()) or "keine"
+            raise CommandError("invalid", f"Keine Automation „{name}“ auf diesem Gerät (vorhanden: {names})") from None
+
+    async def _applescript(self, a: dict[str, Any]) -> Any:
+        return await self.backend.applescript(_str(a, "source", max_len=20_000) or "")
 
     async def _play(self, a: dict[str, Any]) -> Any:
         path = self.policy.check(_str(a, "path") or "", must_exist=True)

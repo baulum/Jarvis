@@ -13,7 +13,7 @@ import json
 import shutil
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,7 @@ from jarvis_device.backends.base import (
     Capture,
     DesktopBackend,
     Runner,
+    UiTarget,
     Unavailable,
     fuzzy_pick,
     run_process,
@@ -105,9 +106,10 @@ class MacBackend(DesktopBackend):
             "audio.play": ("available", "") if self.have("afplay") else ("unavailable", "afplay fehlt"),
             "browser.open": ("available", "") if self.have("open") else ("unavailable", "open fehlt"),
         }
+        no_osa = ("unavailable", "osascript fehlt")
         if h is None:
             down = ("unavailable", "JarvisBridge läuft nicht (bridge/scripts/build-app.sh, JarvisBridge.app starten)")
-            return {cap: down for cap in _BRIDGE_CAPS} | audio
+            return {cap: down for cap in _BRIDGE_CAPS} | audio | {"automation.applescript": down if osa else no_osa}
         perms = h.get("permissions") or {}
         ax = (
             ("available", "") if perms.get("accessibility", True) else ("unavailable", "Recht „Bedienungshilfen“ fehlt")
@@ -129,6 +131,10 @@ class MacBackend(DesktopBackend):
             "screen.capture": rec,
             "clipboard": ("available", ""),
             "files.reveal": ("available", ""),
+            "windows.frontmost": ("available", ""),
+            "ui.elements": ax,
+            "automation": ("available", "") if self.have("shortcuts") else ("unavailable", "shortcuts fehlt"),
+            "automation.applescript": ("degraded", "Nur wenn die Richtlinie der JarvisBridge AppleScript erlaubt"),
         } | audio
 
     # ------------------------------------------------------------------ programs and windows
@@ -229,6 +235,64 @@ class MacBackend(DesktopBackend):
         if res.returncode != 0:
             raise BackendError("URL konnte nicht geöffnet werden")
 
+    # ------------------------------------------------------------------ controls (Accessibility)
+    async def _selector(self, target: UiTarget) -> dict[str, Any]:
+        if target.pid:
+            return {"pid": target.pid}
+        if target.app:
+            return {"name": target.app}
+        if target.window_id:
+            win = next((w for w in await self.list_windows() if w["window_id"] == target.window_id), None)
+            if win is None:
+                raise BackendError("Fenster nicht gefunden")
+            return {"pid": win["pid"]} if win.get("pid") else {"name": win["app"]}
+        front = await self.frontmost()
+        if not front.get("app"):
+            raise BackendError("Kein Programm im Vordergrund – app angeben")
+        return {"name": front["app"]}
+
+    async def ui_tree(self, target: UiTarget, max_depth: int, max_nodes: int) -> dict[str, Any]:
+        body = await self._selector(target) | {"maxDepth": max_depth, "maxNodes": max_nodes}
+        return dict(await self.bridge("POST", "/ui/tree", body) or {})
+
+    async def ui_press(
+        self, target: UiTarget, path: str | None, role: str | None, title: str | None
+    ) -> dict[str, Any]:
+        body = await self._selector(target)
+        body |= {k: v for k, v in (("path", path), ("role", role), ("title", title)) if v}
+        return dict(await self.bridge("POST", "/ui/press", body) or {})
+
+    # ------------------------------------------------------------------ automation
+    async def shortcuts_list(self) -> list[str]:
+        return [str(n) for n in await self.bridge("GET", "/shortcuts") or []]
+
+    async def shortcut_run(self, name: str, input: str | None) -> dict[str, Any]:
+        body: dict[str, Any] = {"name": name}
+        if input is not None:
+            body["input"] = input
+        return {"kind": "shortcut", **dict(await self.bridge("POST", "/shortcuts/run", body) or {})}
+
+    async def applescript(self, source: str) -> dict[str, Any]:
+        return dict(await self.bridge("POST", "/applescript", {"source": source}) or {})
+
+    # ------------------------------------------------------------------ Spotlight
+    async def index_search(
+        self, query: str, roots: Sequence[str], limit: int, names_only: bool
+    ) -> tuple[str, list[str]] | None:
+        mdfind = self.have("mdfind")
+        if mdfind is None:
+            return None
+        paths: list[str] = []
+        for root in roots:
+            argv = [mdfind, "-onlyin", root] + (["-name", query] if names_only else [query])
+            res = await self.run(argv, timeout=30)
+            if res.returncode != 0:
+                return None
+            paths += [line for line in res.text.splitlines() if line.strip()]
+            if len(paths) >= limit:
+                break
+        return "spotlight", paths[:limit]
+
     # ------------------------------------------------------------------ notifications, audio
     async def _osa(self, script: str, *args: str) -> str:
         osa = self.have("osascript")
@@ -283,4 +347,7 @@ _BRIDGE_CAPS = (
     "screen.capture",
     "clipboard",
     "files.reveal",
+    "windows.frontmost",
+    "ui.elements",
+    "automation",
 )
