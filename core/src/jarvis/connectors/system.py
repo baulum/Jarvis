@@ -21,6 +21,23 @@ def _obj(props: dict[str, Any], req: list[str]) -> dict[str, Any]:
     return {"type": "object", "properties": props, "required": req, "additionalProperties": False}
 
 
+async def _active_coding_jobs() -> list[dict[str, str]]:
+    """Queued, running or paused coding jobs (empty if they cannot be read: switching the chat model must not fail)."""
+    from sqlalchemy import select
+
+    from jarvis.db import session_scope
+    from jarvis.db.models import CodingJob
+
+    try:
+        async with session_scope() as s:
+            rows = (
+                await s.execute(select(CodingJob).where(CodingJob.status.in_(["queued", "running", "paused"])).limit(5))
+            ).scalars()
+            return [{"job_id": str(j.id), "model": str(j.model), "effort": str(j.effort)} for j in rows]
+    except Exception:
+        return []
+
+
 class SystemConnector(Connector):
     manifest = Manifest(
         id="system",
@@ -163,12 +180,21 @@ class SystemConnector(Connector):
                 "session": "für dieses Gespräch",
                 "default": "ab sofort als Standard",
             }
-            return {
+            result: dict[str, Any] = {
                 "ok": True,
                 "model": model or "automatisch",
                 "gilt": where[scope],
                 "hinweis": "Wirkt ab der nächsten Antwort.",
             }
+            if jobs := await _active_coding_jobs():
+                result["warnung_coding_job"] = (
+                    "Geändert wurde nur das CHAT-Modell. Es läuft ein Coding-Job: "
+                    + ", ".join(f"{j['job_id'][:8]} ({j['model']}, {j['effort']})" for j in jobs)
+                    + ". Wollte Sir Modell oder Effort dieses Jobs ändern, hat das nichts bewirkt: Brich ihn mit "
+                    "`coding_cancel_job` ab und starte ihn mit `coding_start_job` neu (model/effort wie von Sir "
+                    "genannt) – und stelle das Chat-Modell auf seinen vorigen Wert zurück."
+                )
+            return result
 
         async def usage(ctx: ToolContext, a: dict[str, Any]) -> Any:
             return st.usage.status()
@@ -184,8 +210,12 @@ class SystemConnector(Connector):
             ),
             ToolSpec(
                 "agent_set_model",
-                "Schaltet das Claude-Modell um, wenn Sir es verlangt (z. B. „nimm Opus“, „nutze Haiku“, "
-                "„wieder automatisch“). "
+                "Schaltet nur das CHAT-Modell (Jarvis' eigenes Modell in diesem Gespräch) um, und nur wenn Sir "
+                "ausdrücklich vom Chat, vom Gespräch oder von Jarvis' eigenem Modell spricht (z. B. „nimm im Chat "
+                "Opus“, „du sollst Haiku nutzen“, „wieder automatisch“). NIEMALS verwenden, wenn Sir im "
+                "Zusammenhang mit einem Coding-Job (laufend, gerade abgeschlossen oder gerade erwähnt) ein Modell "
+                "oder einen Effort nennt („mach das auf medium“, „es soll Sonnet sein“): Das betrifft den Job, nicht "
+                "den Chat – dann `coding_cancel_job` und `coding_start_job` mit model/effort. "
                 "model: haiku (schnell/günstig), sonnet (Standard), opus (stärkste Denkleistung) oder auto. "
                 "scope: turn = nur nächste Antwort, session = dieses Gespräch (Standard), default = dauerhaft.",
                 _obj(

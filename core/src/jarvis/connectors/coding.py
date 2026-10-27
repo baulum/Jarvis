@@ -180,8 +180,14 @@ class CodingConnector(Connector):
                 "Jarvis danach Core und offene Desktop-App neu (result.ship.self_restart, Fehler unter "
                 "result.warnings). "
                 "Optional model (haiku|sonnet|opus|auto) und effort (low|medium|high|xhigh|max): nennt Sir im Auftrag "
-                "ein Modell (z. B. 'Opus 5.5'), hier übergeben; ohne Angabe gilt das Standardmodell bzw. das im Chat "
-                "gewählte. Mit attachments gibt Jarvis Dateien aus dem Chat (Fotos, Screenshots, PDFs, Dokumente) an "
+                "ein Modell (z. B. 'Opus 5.5') oder einen Effort, hier übergeben; ohne Angabe gilt das Standardmodell "
+                "bzw. das im Chat gewählte. Modell- und Effort-Angaben von Sir zu einem Coding-Job gelten für den "
+                "Job, nie für das Chat-Modell (`agent_set_model`). Will Sir einen laufenden oder gerade gestarteten "
+                "Job mit anderem Modell/Effort, erst `coding_cancel_job`, dann hier neu starten (model/effort wie "
+                "genannt, nicht genannte Werte vom bisherigen Job übernehmen) und in der Antwort ausdrücklich "
+                "nennen, mit welchem Modell und Effort gestartet wurde. 'Sonnet'/'Opus'/'Haiku' ohne Zahl = "
+                "aktuelle Version 5.5; '5.5' ohne Familie = Familie des bisherigen Jobs. "
+                "Mit attachments gibt Jarvis Dateien aus dem Chat (Fotos, Screenshots, PDFs, Dokumente) an "
                 "den Job weiter; sie werden kopiert und in den Anweisungen mit Pfad genannt.",
                 _obj(
                     {
@@ -218,7 +224,9 @@ class CodingConnector(Connector):
             ToolSpec("coding_list_jobs", "Letzte Coding-Jobs.", _obj({}), list_jobs, "read", S),
             ToolSpec(
                 "coding_cancel_job",
-                "Bricht einen Coding-Job ab.",
+                "Bricht einen Coding-Job ab. Auch der erste Schritt, wenn Sir einen laufenden Job mit anderem "
+                "Modell oder Effort neu starten will (danach `coding_start_job` mit model/effort); bei "
+                "ausdrücklichem Wunsch ohne Rückfrage ausführen.",
                 _obj({"job_id": {"type": "string"}}, ["job_id"]),
                 cancel,
                 "low",
