@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import sys
 import uuid
 import zipfile
 from datetime import datetime
@@ -134,7 +135,8 @@ def test_save_never_overwrites_and_stores_privately(tmp_path: Path, monkeypatch:
     root = tmp_path / "chat-attachments"
     first = save_attachment(root, "bild.png", PNG)
     assert first.path.read_bytes() == PNG and first.path.parent == root
-    assert oct(first.path.stat().st_mode & 0o777) == "0o600"
+    if sys.platform != "win32":  # Windows has no POSIX mode bits (the profile ACL keeps it private)
+        assert oct(first.path.stat().st_mode & 0o777) == "0o600"
     # the next generated name is taken: a new one is chosen, the existing file stays untouched
     names = iter([first.file, "20261022-141500-deadbeef-bild.png"])
     monkeypatch.setattr(att, "stored_name", lambda *a, **kw: next(names))

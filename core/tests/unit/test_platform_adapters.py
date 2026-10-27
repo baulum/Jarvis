@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 
@@ -67,9 +67,10 @@ def test_mac_adapter_describes_the_existing_mac_paths(tmp_path: Path) -> None:
     for cap in ("host.macos_bridge", "desktop.reveal", "desktop.open", "voice.wakeup_routine", "voice.tts.system",
                 "process.groups", "coding.runner", "shell.run"):  # fmt: skip
         assert caps.state(cap).status == "available", cap
-    assert mac.reveal_command(Path("/x/a b.pdf")) == ["/usr/bin/open", "-R", "/x/a b.pdf"]
+    # paths in the target system's form: the result is the same whichever OS runs the tests
+    assert mac.reveal_command(PurePosixPath("/x/a b.pdf")) == ["/usr/bin/open", "-R", "/x/a b.pdf"]
     assert mac.open_command("https://example.com") == ["/usr/bin/open", "https://example.com"]
-    assert mac.play_command(Path("/s.mp3"), 0.5) == ["/usr/bin/afplay", "-v", "0.50", "/s.mp3"]
+    assert mac.play_command(PurePosixPath("/s.mp3"), 0.5) == ["/usr/bin/afplay", "-v", "0.50", "/s.mp3"]
     assert mac.config_overlay(tmp_path) is None  # the Mac never loads an overlay
     assert mac.file_manager == "Finder"
 
@@ -84,7 +85,8 @@ def test_windows_adapter_reports_missing_mac_features_with_reasons() -> None:
     assert caps.state("voice.capture").status == "unavailable" and "sounddevice" in caps.reason("voice.capture")
     assert caps.state("voice.tts.system").status == "available"  # SAPI over PowerShell
     assert caps.state("process.groups").status == "degraded"
-    assert win.reveal_command(Path("C:/Users/Sir/a.pdf")) == ["C:\\Windows\\explorer.exe", "/select,C:/Users/Sir/a.pdf"]
+    reveal = win.reveal_command(PureWindowsPath("C:/Users/Sir/a.pdf"))
+    assert reveal == ["C:\\Windows\\explorer.exe", "/select,C:\\Users\\Sir\\a.pdf"]
     assert win.file_manager == "Explorer"
 
 
@@ -106,15 +108,15 @@ def test_windows_headless_has_no_explorer() -> None:
 
 def test_linux_desktop_and_headless() -> None:
     desk = LinuxAdapter(which=ALL_TOOLS, environ={"DISPLAY": ":0"}, importable=lambda m: True)
-    argv = desk.reveal_command(Path("/home/sir/Datei mit Leerzeichen.pdf"))
+    argv = desk.reveal_command(PurePosixPath("/home/sir/Datei mit Leerzeichen.pdf"))
     assert argv is not None and argv[0] == "/usr/bin/dbus-send"
     assert "array:string:file:///home/sir/Datei%20mit%20Leerzeichen.pdf" in argv
-    assert desk.play_command(Path("/a.mp3"), 0.4) == [
+    assert desk.play_command(PurePosixPath("/a.mp3"), 0.4) == [
         "/usr/bin/ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "-volume", "40", "/a.mp3",
     ]  # fmt: skip
     assert desk.session_type() == "x11"
     no_dbus = LinuxAdapter(which=which_from("xdg-open"), environ={"DISPLAY": ":0"})
-    assert no_dbus.reveal_command(Path("/home/sir/a.pdf")) == ["/usr/bin/xdg-open", "/home/sir"]
+    assert no_dbus.reveal_command(PurePosixPath("/home/sir/a.pdf")) == ["/usr/bin/xdg-open", "/home/sir"]
     assert no_dbus.capabilities().state("desktop.reveal").status == "degraded"
     headless = LinuxAdapter(which=ALL_TOOLS, environ={}, headless=True, importable=lambda m: False)
     caps = headless.capabilities()
@@ -136,7 +138,7 @@ def test_capability_report_fails_closed_and_explains() -> None:
 def test_config_overlay_is_loaded_only_off_the_mac(monkeypatch: pytest.MonkeyPatch) -> None:
     mac = config_mod.load_settings({"JARVIS_PLATFORM": "mac"})
     assert config_mod.platform_overlay({"JARVIS_PLATFORM": "mac"}) is None
-    assert str(mac.paths.data_dir).endswith("Library/Application Support/Jarvis")
+    assert mac.paths.data_dir.as_posix().endswith("Library/Application Support/Jarvis")
     assert mac.voice.native_audio is True and mac.clients.remote_api is False
     win = config_mod.load_settings({"JARVIS_PLATFORM": "windows"})
     assert win.paths.data_dir.parts[-3:] == ("AppData", "Roaming", "Jarvis")

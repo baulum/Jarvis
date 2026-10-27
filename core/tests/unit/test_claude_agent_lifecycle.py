@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import signal
 import sys
 import uuid
 from collections.abc import AsyncIterator
@@ -100,14 +101,27 @@ class Fake:
         return [json.loads(x) for x in path.read_text().splitlines()] if path.exists() else []
 
 
+def _fake_cli(tmp_path: Path) -> Path:
+    """The fake as a program the agent can start: a script with shebang, or on Windows (no shebangs) a ``.cmd``
+    launcher like the one npm installs for the real ``claude``."""
+    if sys.platform != "win32":
+        script = tmp_path / "fake-claude"
+        script.write_text(f"#!{sys.executable}\n{FAKE_CLI}", encoding="utf-8")
+        script.chmod(0o755)
+        return script
+    source = tmp_path / "fake_claude.py"
+    source.write_text(FAKE_CLI, encoding="utf-8")
+    launcher = tmp_path / "fake-claude.cmd"
+    launcher.write_text(f'@"{sys.executable}" "{source}" %*\r\n', encoding="utf-8")
+    return launcher
+
+
 @pytest.fixture
 async def make_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
     agents: list[ClaudeCodeAgent] = []
 
     def make(*modes: str) -> tuple[ClaudeCodeAgent, Fake]:
-        script = tmp_path / "fake-claude"
-        script.write_text(f"#!{sys.executable}\n{FAKE_CLI}", encoding="utf-8")
-        script.chmod(0o755)
+        script = _fake_cli(tmp_path)
         (tmp_path / "modes").write_text(",".join(modes), encoding="utf-8")
         monkeypatch.setenv("FAKE_CLAUDE_DIR", str(tmp_path))
         state = SimpleNamespace(
@@ -254,7 +268,8 @@ async def test_follow_up_turn_reuses_the_process(make_agent: Any) -> None:
 
 def test_exit_detail() -> None:
     assert exit_detail(3, ["a", "b"]) == "Claude Code wurde unerwartet beendet (Exit-Code 3): a | b"
-    assert exit_detail(-9, []) == "Claude Code wurde unerwartet beendet (Signal SIGKILL)"
+    # SIGTERM: a signal every OS names (Windows has no SIGKILL)
+    assert exit_detail(-signal.SIGTERM, []) == "Claude Code wurde unerwartet beendet (Signal SIGTERM)"
     assert "Exit-Code unbekannt" in exit_detail(None, [])
 
 

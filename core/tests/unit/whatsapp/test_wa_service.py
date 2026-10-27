@@ -6,6 +6,7 @@ import hashlib
 import io
 import shutil
 import subprocess
+import sys
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -132,7 +133,8 @@ async def test_download_stores_checks_and_deduplicates(wa: SimpleNamespace) -> N
     assert path.read_bytes() == data and path.name == "Rechnung 4711.pdf"
     assert path.parent == wa.svc.download_dir() / "Jonathan"
     assert f.sha256 == hashlib.sha256(data).hexdigest() and f.category == "document" and f.mime == "application/pdf"
-    assert (path.stat().st_mode & 0o777) == 0o600
+    if sys.platform != "win32":  # Windows has no POSIX mode bits
+        assert (path.stat().st_mode & 0o777) == 0o600
     # same message again: no second download
     again = await wa.svc.download(await stored_msg(wa, "DOC1"), actor="test")
     assert again.id == f.id and [c for c, _ in wa.sidecar.calls].count("download") == 1

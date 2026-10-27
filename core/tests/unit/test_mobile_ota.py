@@ -2,7 +2,9 @@
 
 import asyncio
 import hashlib
+import os
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -242,7 +244,8 @@ async def test_signing_key_is_created_once_and_never_replaced(tmp_path: Path) ->
     password = secrets_.values["android-release-keystore"]
     assert key.fingerprint == hashlib.sha256(b"DER:" + password.encode()).hexdigest()
     assert (tmp_path / "sign" / KEYSTORE).is_file()
-    assert (tmp_path / "sign").stat().st_mode & 0o777 == 0o700
+    if sys.platform != "win32":  # Windows has no POSIX mode bits
+        assert (tmp_path / "sign").stat().st_mode & 0o777 == 0o700
     assert mgr.info()["fingerprint"] == key.fingerprint
     # the password never appears in an argv (keytool reads it from the environment)
     assert all(password not in " ".join(a) for a in runner.argv)
@@ -276,11 +279,12 @@ async def test_signing_without_password_in_keychain(tmp_path: Path) -> None:
 def test_flutter_must_be_allowlisted_and_found(tmp_path: Path) -> None:
     bin_dir = tmp_path / "flutter" / "bin"
     bin_dir.mkdir(parents=True)
-    exe = bin_dir / "flutter"
+    exe = bin_dir / ("flutter.bat" if sys.platform == "win32" else "flutter")  # the SDK ships flutter.bat on Windows
     exe.write_text("#!/bin/sh\n")
     exe.chmod(0o755)
     cfg = AppUpdateCfg()
-    assert resolve_flutter(cfg, ["git", "flutter"], str(bin_dir)) == str(exe)
+    # normcase: on Windows which() spells the extension like PATHEXT (.BAT)
+    assert os.path.normcase(resolve_flutter(cfg, ["git", "flutter"], str(bin_dir))) == os.path.normcase(exe)
     with pytest.raises(ToolchainError) as e:
         resolve_flutter(cfg, ["git"], str(bin_dir))
     assert e.value.cause == "flutter_not_allowed"
@@ -300,7 +304,7 @@ def test_android_sdk_and_newest_build_tools_are_found(tmp_path: Path) -> None:
         d.mkdir(parents=True)
         (d / "aapt2").write_text("")
         if complete:
-            (d / "apksigner").write_text("")
+            (d / ("apksigner.bat" if sys.platform == "win32" else "apksigner")).write_text("")
     assert find_android_sdk("", environ={}, home=tmp_path) == sdk
     assert find_android_sdk("", environ={"ANDROID_HOME": str(sdk)}, home=tmp_path / "x") == sdk
     assert find_android_sdk("", environ={}, home=tmp_path / "nothing") is None

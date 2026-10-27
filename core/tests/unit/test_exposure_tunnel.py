@@ -1,4 +1,6 @@
 import asyncio
+import sys
+from pathlib import Path
 
 import pytest
 from starlette.applications import Starlette
@@ -56,16 +58,31 @@ def test_tunnel_websockets_only_media_stream() -> None:
             s.receive_text()
 
 
-def test_quick_tunnel_parses_url(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
+FAKE_CLOUDFLARED = """
+import sys, time
+print("INF Requesting new quick Tunnel on trycloudflare.com...", file=sys.stderr, flush=True)
+print("INF |  https://brave-lion-sample.trycloudflare.com  |", file=sys.stderr, flush=True)
+time.sleep(30)
+"""
+
+
+def _fake_cloudflared(tmp_path: Path) -> Path:
+    """A program the tunnel can start: script with shebang, on Windows (no shebangs) a ``.cmd`` launcher."""
+    if sys.platform != "win32":
+        fake = tmp_path / "cloudflared"
+        fake.write_text(f"#!{sys.executable}\n{FAKE_CLOUDFLARED}", encoding="utf-8")
+        fake.chmod(0o755)
+        return fake
+    source = tmp_path / "fake_cloudflared.py"
+    source.write_text(FAKE_CLOUDFLARED, encoding="utf-8")
+    fake = tmp_path / "cloudflared.cmd"
+    fake.write_text(f'@"{sys.executable}" "{source}" %*\r\n', encoding="utf-8")
+    return fake
+
+
+def test_quick_tunnel_parses_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A fake cloudflared prints the banner on stderr like the real one; the URL is picked up."""
-    fake = __import__("pathlib").Path(str(tmp_path)) / "cloudflared"
-    fake.write_text(
-        "#!/bin/sh\n"
-        "echo 'INF Requesting new quick Tunnel on trycloudflare.com...' >&2\n"
-        "echo 'INF |  https://brave-lion-sample.trycloudflare.com  |' >&2\n"
-        "sleep 30\n"
-    )
-    fake.chmod(0o755)
+    fake = _fake_cloudflared(tmp_path)
     monkeypatch.setattr(tunnel, "CANDIDATES", (str(fake),))
     seen: list[str] = []
 

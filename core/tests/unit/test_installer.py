@@ -43,7 +43,7 @@ def test_missing_obsidian_is_reported_with_an_install_hint(tmp_path: Path) -> No
     assert "Obsidian" in lines and "https://obsidian.md/download" in lines
     assert statuses["postgresql"].required and not statuses["postgresql"].found
     assert "xdotool" not in statuses  # Linux-only dependencies are not checked on Windows
-    obsidian_exe = f"{tmp_path}/Local/Programs/Obsidian/Obsidian.exe"
+    obsidian_exe = (tmp_path / "Local" / "Programs" / "Obsidian" / "Obsidian.exe").as_posix()  # same form as exists()
     host = _host(tmp_path, "windows", {"uv"}, {obsidian_exe})
     st = deps.check(next(d for d in deps.DEPENDENCIES if d.id == "obsidian"), host, {"client"})
     assert st.found and st.where is not None and st.where.replace("\\", "/") == obsidian_exe
