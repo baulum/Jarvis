@@ -20,16 +20,21 @@ jobs:
       run:
         working-directory: core
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: core/uv.lock
-      - run: uv sync --frozen
-      - run: uv run ruff check src tests
-      - run: uv run mypy src
+      - id: sync
+        run: uv sync --frozen
+      # every check reports even when an earlier one failed: a red mypy must not hide failing tests
+      - if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
+        run: uv run ruff check src tests
+      - if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
+        run: uv run mypy src
       # integration/e2e tests need Postgres + the running stack and stay local (`-m integration`)
-      - run: uv run pytest -q tests/unit
+      - if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
+        run: uv run pytest -q tests/unit
 
   core-platforms:
     # The PlatformAdapter contract on the real operating systems (the main job above runs on Linux).
@@ -45,8 +50,8 @@ jobs:
       run:
         working-directory: core
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: core/uv.lock
@@ -64,8 +69,8 @@ jobs:
       run:
         working-directory: device_agent
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: device_agent/uv.lock
@@ -78,8 +83,8 @@ jobs:
     name: Installer + scripts (lint, PowerShell syntax)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
       - run: uvx ruff check installer scripts/local-tts/piper_server.py --config installer/pyproject.toml
       - run: bash -n scripts/linux/install.sh && bash -n scripts/linux/start.sh && bash -n scripts/linux/stop.sh
       - name: PowerShell scripts parse
@@ -100,11 +105,11 @@ jobs:
       run:
         working-directory: desktop
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
         with:
           version: 12
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -122,7 +127,7 @@ jobs:
       run:
         working-directory: apps/jarvis_mobile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -138,16 +143,16 @@ jobs:
       run:
         working-directory: bridge
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: swift test
 
   secrets:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
