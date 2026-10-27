@@ -247,7 +247,7 @@ async def test_local_git_checkout_deploys_from_github_when_pushed_else_uploads(t
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "init")
-    _git(repo, "remote", "add", "origin", str(origin))
+    _git(repo, "remote", "add", "origin", origin.as_posix())  # URL form ".../github.com/acme/site.git" on every OS
     _git(repo, "push", "-q", "-u", "origin", "main")
 
     out = await conn.deploy(str(repo))
