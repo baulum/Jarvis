@@ -19,13 +19,17 @@ MAC_LABEL = "com.jarvis.device-agent"
 
 
 def python_gui(executable: str | None = None) -> str:
-    """``pythonw.exe`` next to ``python.exe`` on Windows (no console window), otherwise the interpreter itself."""
-    exe = Path(executable or sys.executable)
-    if exe.name.lower() == "python.exe":
-        windowed = exe.with_name("pythonw.exe")
+    """``pythonw.exe`` next to ``python.exe`` on Windows (no console window), otherwise the interpreter itself.
+
+    Any other path is returned exactly as given: ``str(Path(...))`` would turn ``/usr/bin/python3`` into
+    ``\\usr\\bin\\python3`` when the macOS/Linux entries are rendered on Windows."""
+    exe = executable or sys.executable
+    path = Path(exe)
+    if path.name.lower() == "python.exe":
+        windowed = path.with_name("pythonw.exe")
         if windowed.exists():
             return str(windowed)
-    return str(exe)
+    return exe
 
 
 def agent_command(executable: str | None = None) -> list[str]:
