@@ -35,6 +35,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import psutil
+
 from jarvis.config import REPO_ROOT
 
 logger = logging.getLogger(__name__)
@@ -180,13 +182,9 @@ def _run(argv: list[str], timeout: float) -> tuple[int | None, str]:
 
 
 def alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    """POSIX: ``kill(pid, 0)`` (a pid of another user counts as alive). Not ``os.kill`` on Windows: signal 0 is
+    ``CTRL_C_EVENT`` there and would interrupt every process on the console, the core included."""
+    return bool(psutil.pid_exists(pid))
 
 
 def _err(e: BaseException) -> str:
