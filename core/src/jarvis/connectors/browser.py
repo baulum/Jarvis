@@ -23,6 +23,7 @@ import io
 import ipaddress
 import json
 import logging
+import os
 import re
 import socket
 import time
@@ -32,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import psutil
 from playwright.async_api import Browser, BrowserContext, Playwright, async_playwright
 
 from jarvis.connectors.base import Connector, Health, Manifest
@@ -242,10 +244,7 @@ class BrowserService:
 
 def _clear_stale_lock(profile: Path) -> bool:
     """Remove Chromium's Singleton* files if no running process uses this profile."""
-    import subprocess
-
-    running = subprocess.run(["pgrep", "-f", str(profile)], capture_output=True, text=True).stdout.strip()
-    if running:
+    if _profile_in_use(profile):
         return False
     removed = False
     for name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
@@ -255,6 +254,15 @@ def _clear_stale_lock(profile: Path) -> bool:
             removed = True
     return removed
 
+
+
+def _profile_in_use(profile: Path) -> bool:
+    """Is the profile on the command line of a running process (like ``pgrep -f``, which Windows does not have)?"""
+    needle, me = str(profile), os.getpid()
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        if proc.info["pid"] != me and needle in " ".join(proc.info.get("cmdline") or ()):
+            return True
+    return False
 
 def _is_private_literal(host: str) -> bool:
     try:
