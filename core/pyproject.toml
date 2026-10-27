@@ -72,6 +72,7 @@ addopts = "--import-mode=importlib"  # unit/ and e2e/ both have a test_voice_pip
 markers = [
     "integration: needs running Postgres/Ollama",
     "e2e: needs the full stack running",
+    "coding_runner: needs the coding runner's POSIX process control (skipped on Windows, see tests/conftest.py)",
 ]
 
 [tool.ruff]

@@ -169,6 +169,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     return SimpleNamespace(runner=runner, job=job, jid=jid, events=events, signals=signals)
 
 
+@pytest.mark.coding_runner
 async def test_pause_and_resume_signal_process_group_and_log(env: SimpleNamespace) -> None:
     r = env.runner
     await r.pause(env.jid, "sir")
@@ -183,6 +184,7 @@ async def test_pause_and_resume_signal_process_group_and_log(env: SimpleNamespac
         await r.resume(env.jid, "sir")
 
 
+@pytest.mark.coding_runner
 async def test_cancel_of_paused_job_continues_before_terminating(env: SimpleNamespace) -> None:
     await env.runner.pause(env.jid, "sir")
     env.signals.clear()
@@ -191,6 +193,7 @@ async def test_cancel_of_paused_job_continues_before_terminating(env: SimpleName
     assert env.job.status == "cancelled"
 
 
+@pytest.mark.coding_runner
 async def test_cancel_reports_finished_so_waiting_steps_wake(env: SimpleNamespace) -> None:
     tid = uuid.uuid4()
     env.job.task_id = tid
@@ -203,6 +206,7 @@ async def test_cancel_reports_finished_so_waiting_steps_wake(env: SimpleNamespac
     assert len([t for t, _ in env.events if t == "coding.finished"]) == 1
 
 
+@pytest.mark.coding_runner
 async def test_pause_stops_the_time_budget_and_resume_restores_it(env: SimpleNamespace) -> None:
     r = env.runner
     loop = asyncio.get_running_loop()
@@ -218,6 +222,7 @@ async def test_pause_stops_the_time_budget_and_resume_restores_it(env: SimpleNam
     assert env.jid not in r._budget_left
 
 
+@pytest.mark.coding_runner
 async def test_send_message_queues_and_interrupts_on_request(env: SimpleNamespace) -> None:
     r = env.runner
     res = await r.send_message(env.jid, "  Nimm Port 8080  ", "sir")
@@ -232,6 +237,7 @@ async def test_send_message_queues_and_interrupts_on_request(env: SimpleNamespac
         await r.send_message(env.jid, "zu spät", "sir")
 
 
+@pytest.mark.coding_runner
 async def test_drain_inbox_resumes_session_with_message(env: SimpleNamespace, tmp_path: Path) -> None:
     r, calls = env.runner, []
 
@@ -246,6 +252,7 @@ async def test_drain_inbox_resumes_session_with_message(env: SimpleNamespace, tm
     assert "A" in calls[0][0] and "B" in calls[0][0] and not r._inbox.get(env.jid)
 
 
+@pytest.mark.coding_runner
 async def test_monitor_reads_log_of_runner(env: SimpleNamespace) -> None:
     r = env.runner
     r.logs_dir.mkdir(parents=True)

@@ -236,6 +236,7 @@ def test_plan_without_merge_records_nothing() -> None:
 
 
 # ---------------------------------------------------------------- order inside the runner
+@pytest.mark.coding_runner
 async def test_jarvis_job_restarts_after_delivery_and_result(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     jid = _job(env, monkeypatch, {"core/src/jarvis/neu.py": "x = 1\n"})
     await _run_to_end(env, jid)
@@ -258,6 +259,7 @@ async def test_jarvis_job_restarts_after_delivery_and_result(env: SimpleNamespac
     assert "neu gestartet" in next(d for t, d in env.events if t == "coding.finished")["summary"]
 
 
+@pytest.mark.coding_runner
 async def test_unrelated_open_changes_in_the_checkout_do_not_block_the_restart(
     env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -277,6 +279,7 @@ async def test_unrelated_open_changes_in_the_checkout_do_not_block_the_restart(
     assert len(env.launches) == 1 and ship["self_restart"]["state"] == "started"
 
 
+@pytest.mark.coding_runner
 async def test_open_changes_to_delivered_files_skip_the_restart(
     env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -291,6 +294,7 @@ async def test_open_changes_to_delivered_files_skip_the_restart(
     assert (env.repo / "core" / "src" / "jarvis" / "neu.py").read_text() == "# lokal\n"
 
 
+@pytest.mark.coding_runner
 async def test_job_on_another_project_never_restarts(
     env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -305,6 +309,7 @@ async def test_job_on_another_project_never_restarts(
     assert not (env.data / self_restart.STATUS_FILE).exists()
 
 
+@pytest.mark.coding_runner
 async def test_jarvis_job_with_docs_only_does_not_restart(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     jid = _job(env, monkeypatch, {"docs/NEU.md": "# Neu\n"})
     await _run_to_end(env, jid)
@@ -326,6 +331,7 @@ async def test_red_jarvis_job_does_not_restart(env: SimpleNamespace, monkeypatch
     assert env.launches == []
 
 
+@pytest.mark.coding_runner
 async def test_restart_waits_for_other_running_jobs(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     other_id, release = uuid.uuid4(), asyncio.Event()
     env.runner._tasks[other_id] = asyncio.create_task(release.wait())  # another job still at work
@@ -346,6 +352,7 @@ async def test_restart_waits_for_other_running_jobs(env: SimpleNamespace, monkey
     assert len(env.launches) == 1 and env.launches[0]["busy"] == []
 
 
+@pytest.mark.coding_runner
 async def test_failed_hand_over_is_a_warning_not_a_delivery_error(
     env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -364,6 +371,7 @@ async def test_failed_hand_over_is_a_warning_not_a_delivery_error(
     assert not (env.data / self_restart.STATUS_FILE).exists()
 
 
+@pytest.mark.coding_runner
 async def test_kill_switch_skips_the_restart(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     other_id, release = uuid.uuid4(), asyncio.Event()
     env.runner._tasks[other_id] = asyncio.create_task(release.wait())  # keeps the restart waiting
@@ -600,6 +608,7 @@ def _helper(run: FakeRun, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *proc
 LAUNCHD = {"launchctl print": (0, "state = running")}
 
 
+@pytest.mark.coding_runner
 def test_restart_without_desktop_app_only_restarts_the_core(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """No desktop app running (or not even installed): the core is restarted, the app is neither quit nor opened."""
     run = FakeRun({"ps -axo": (0, "  101 /usr/sbin/cfprefsd agent\n"), **LAUNCHD})
@@ -613,6 +622,7 @@ def test_restart_without_desktop_app_only_restarts_the_core(tmp_path: Path, monk
     )
 
 
+@pytest.mark.coding_runner
 def test_restart_with_running_desktop_app_restarts_both(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     app = subprocess.Popen(["sleep", "60"])  # stands in for the running desktop app
     try:
@@ -631,6 +641,7 @@ def test_restart_with_running_desktop_app_restarts_both(tmp_path: Path, monkeypa
     assert ["open", APP] in run.calls and not any(c[0] == "osascript" for c in run.calls)
 
 
+@pytest.mark.coding_runner
 def test_desktop_app_ignoring_sigterm_is_killed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     app = subprocess.Popen(["bash", "-c", "trap '' TERM; echo ready; exec sleep 60"], stdout=subprocess.PIPE, text=True)
     try:
@@ -644,6 +655,7 @@ def test_desktop_app_ignoring_sigterm_is_killed(tmp_path: Path, monkeypatch: pyt
     assert how == "per SIGKILL" and app.returncode == -signal.SIGKILL
 
 
+@pytest.mark.coding_runner
 def test_failed_desktop_check_still_restarts_the_core(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = FakeRun({"ps -axo": (127, "No such file or directory: 'ps'"), **LAUNCHD})
     out = _helper(run, tmp_path, monkeypatch).restart()
@@ -654,6 +666,7 @@ def test_failed_desktop_check_still_restarts_the_core(tmp_path: Path, monkeypatc
     assert out["state"] == "failed"  # reported to Sir, the core restart itself went through
 
 
+@pytest.mark.coding_runner
 def test_core_under_launchd_is_kickstarted(tmp_path: Path) -> None:
     run = FakeRun({"launchctl print": (0, "state = running")})
     method = _restarter(run, tmp_path).restart_core()
@@ -663,6 +676,7 @@ def test_core_under_launchd_is_kickstarted(tmp_path: Path) -> None:
     assert run.calls[1][3].endswith("/com.jarvis.core")
 
 
+@pytest.mark.coding_runner
 def test_core_from_the_start_script_is_stopped_and_started_again(tmp_path: Path) -> None:
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "start.sh").write_text("#!/bin/bash\n")
@@ -676,6 +690,7 @@ def test_core_from_the_start_script_is_stopped_and_started_again(tmp_path: Path)
     assert not (tmp_path / "run" / "core.pid").exists()  # the start script would otherwise think the core still runs
 
 
+@pytest.mark.coding_runner
 def test_failing_start_script_is_an_error(tmp_path: Path) -> None:
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "start.sh").write_text("#!/bin/bash\n")

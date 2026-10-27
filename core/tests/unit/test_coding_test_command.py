@@ -51,12 +51,14 @@ async def test_steps_run_in_order_and_stop_at_the_first_failure(tmp_path: Path) 
     assert "nie\n" not in res["output"]
 
 
+@pytest.mark.coding_runner
 async def test_all_steps_green(tmp_path: Path) -> None:
     res = await _runner(tmp_path)._run_tests(tmp_path, "python3 -c \"print('a')\" && python3 -c \"print('b')\"")
     assert res == {"passed": True, "exit_code": 0, "output": res["output"]}
     assert "a\n" in res["output"] and "b\n" in res["output"]
 
 
+@pytest.mark.coding_runner
 async def test_worktree_src_leads_pythonpath_and_import_path_is_logged(tmp_path: Path, monkeypatch) -> None:
     pkg = tmp_path / "core" / "src" / "jarvis"
     pkg.mkdir(parents=True)
@@ -76,6 +78,7 @@ async def test_invalid_stored_command_fails_without_running(tmp_path: Path) -> N
     assert not (tmp_path / "pwned").exists()
 
 
+@pytest.mark.coding_runner
 async def test_timeout_covers_the_whole_chain(tmp_path: Path) -> None:
     cmd = 'python3 -c "print(\'a\')" && python3 -c "import time; time.sleep(5)"'
     res = await _runner(tmp_path)._run_tests(tmp_path, cmd, timeout_s=1)

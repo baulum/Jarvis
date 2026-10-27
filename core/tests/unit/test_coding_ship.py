@@ -21,6 +21,8 @@ from jarvis.coding.runner import CodingRunner, parse_github_repo, supabase_proje
 from jarvis.connectors.coding import CodingConnector
 from jarvis.tools.executor import ToolUserError
 
+pytestmark = pytest.mark.coding_runner  # the runner's delivery flow (push, PR, merge, deploy)
+
 BRANCH = "jarvis/job"
 
 

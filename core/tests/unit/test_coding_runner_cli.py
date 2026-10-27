@@ -54,12 +54,14 @@ def _runner(tmp_path: Path, **cfg: Any) -> CodingRunner:
 
 
 # ------------------------------------------------------------------ command / env
+@pytest.mark.coding_runner
 def test_real_program_wins_over_alias(tmp_path: Path) -> None:
     b = _exe(tmp_path, "claudeb")
     _exe(tmp_path, "claude")
     assert resolve_command("claudeb", {"claudeb": ["claude"]}, path=str(tmp_path)) == [str(b)]
 
 
+@pytest.mark.coding_runner
 def test_alias_expands_to_target_with_args(tmp_path: Path) -> None:
     c = _exe(tmp_path, "claude")
     assert resolve_command("claudeb", {"claudeb": ["claude", "--x"]}, path=str(tmp_path)) == [str(c), "--x"]
@@ -87,12 +89,14 @@ async def test_auth_status_reports_missing(tmp_path: Path, monkeypatch: pytest.M
     assert st["ok"] is False and "claudeb nicht gefunden" in st["error"]
 
 
+@pytest.mark.coding_runner
 def test_env_appends_extra_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     r = _runner(tmp_path, extra_path=["~/fl-sdk/bin"])
     assert r._env()["PATH"] == f"/usr/bin:/bin:{Path('~/fl-sdk/bin').expanduser()}:/opt/homebrew/bin:/usr/local/bin"
 
 
+@pytest.mark.coding_runner
 def test_env_applies_claude_env_and_refuses_api_keys(tmp_path: Path) -> None:
     r = _runner(tmp_path, claude_env={"CLAUDE_CONFIG_DIR": "~/.claude-b"})
     env = r._env()
@@ -127,6 +131,7 @@ def test_effort_resolution(tmp_path: Path) -> None:
 
 
 # ------------------------------------------------------------------ argv
+@pytest.mark.coding_runner
 def test_argv_model_effort_dirs_and_rights(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     c = _exe(tmp_path, "claude")
     monkeypatch.setenv("PATH", str(tmp_path))
@@ -146,6 +151,7 @@ def test_argv_model_effort_dirs_and_rights(tmp_path: Path, monkeypatch: pytest.M
     assert "einzeln" in hint and str(dl.resolve()) in hint
 
 
+@pytest.mark.coding_runner
 def test_argv_continue_and_unrestricted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _exe(tmp_path, "claude")
     monkeypatch.setenv("PATH", str(tmp_path))
@@ -154,6 +160,7 @@ def test_argv_continue_and_unrestricted(tmp_path: Path, monkeypatch: pytest.Monk
     assert "--restricted" not in _runner(tmp_path, restricted=False)._claude_argv("p", None)
 
 
+@pytest.mark.coding_runner
 def test_bypass_flag_refused_with_restricted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _exe(tmp_path, "claude")
     monkeypatch.setenv("PATH", str(tmp_path))

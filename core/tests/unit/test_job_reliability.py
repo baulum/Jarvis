@@ -10,6 +10,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from jarvis.coding.runner import CodingRunner
 from jarvis.events import Event
 from jarvis.jobs.notify import Notifier, _alert_for
@@ -83,6 +85,7 @@ async def test_watch_on_completed_job_still_calls(tmp_path: Path) -> None:
     assert dispatched[0].call_requested and dispatched[0].call_message == "Fertig, Sir."
 
 
+@pytest.mark.coding_runner
 async def test_stop_process_terminates_and_escalates() -> None:
     polite = await asyncio.create_subprocess_exec("sleep", "30", start_new_session=True)
     await CodingRunner._stop_process(polite, grace_s=5)
@@ -96,6 +99,7 @@ async def test_stop_process_terminates_and_escalates() -> None:
     assert stubborn.returncode == -signal.SIGKILL
 
 
+@pytest.mark.coding_runner
 async def test_shutdown_ends_agent_processes(tmp_path: Path, monkeypatch: Any) -> None:
     signals: list[tuple[int, int]] = []
     monkeypatch.setattr(os, "killpg", lambda pid, sig: signals.append((pid, sig)))
