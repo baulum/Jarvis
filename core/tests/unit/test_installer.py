@@ -52,7 +52,7 @@ def test_missing_obsidian_is_reported_with_an_install_hint(tmp_path: Path) -> No
 def test_roles_select_the_dependencies(tmp_path: Path) -> None:
     host = _host(tmp_path, "linux", set())
     device_only = {s.dep.id for s in deps.check_all(host, {"device"})}
-    assert {"uv", "tailscale", "xdotool", "xclip", "notify-send"} <= device_only
+    assert {"uv", "tailscale", "xdotool", "xclip", "notify-send", "atspi"} <= device_only
     assert "postgresql" not in device_only and "obsidian" not in device_only
     required = {s.dep.id for s in deps.check_all(host, {"core"}) if s.required}
     assert {"uv", "claude", "git", "postgresql"} <= required
@@ -168,6 +168,8 @@ def test_windows_device_and_client_setup(tmp_path: Path) -> None:
         calls.append(list(argv))
         if argv[:3] == ["uv", "tool", "dir"]:
             return 0, "C:/Users/Sir/.local/bin"
+        if argv[1:] == ["automations"]:
+            return 0, "Automationen-Ordner: C:/Users/Sir/AppData/Roaming/JarvisDevice/automations\n  (noch keine)\n"
         return 0, ""
 
     opts = Options(repo=tmp_path / "repo", roles={"device", "client"}, install_missing=False,
@@ -184,6 +186,7 @@ def test_windows_device_and_client_setup(tmp_path: Path) -> None:
     assert any("Obsidian" in line for line in summary.open)  # reported, not silently ignored
     report = json.loads((host.data_dir / "install-report.json").read_text())
     assert "Device Agent gekoppelt" in report["done"]
+    assert any("JarvisDevice/automations" in line for line in report["done"])
 
 
 def test_core_setup_downloads_models_and_prepares_the_voice(tmp_path: Path) -> None:

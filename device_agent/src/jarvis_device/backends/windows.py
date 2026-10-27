@@ -340,7 +340,7 @@ elseif ($el.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePatter
 }
 else { throw 'Element lässt sich nicht drücken (kein Invoke/Toggle/Select) – per Klick auf seine Position bedienen' }
 @{ ok = $true; title = $el.Current.Name; role = (Role $el); method = $how } | ConvertTo-Json -Compress
-"""
+"""  # noqa: E501 - PowerShell source
 
 # Windows Search (the index behind Explorer's search box) over OLE DB; query and folders arrive in environment
 # variables and are only used as SQL string literals with doubled quotes.
@@ -356,7 +356,7 @@ $c.Open("Provider=Search.CollatorDSO;Extended Properties='Application=Windows';"
 $rs = $c.Execute($sql)
 while (-not $rs.EOF) { [Console]::Out.WriteLine($rs.Fields.Item('System.ItemPathDisplay').Value); $rs.MoveNext() }
 $rs.Close(); $c.Close()
-"""
+"""  # noqa: E501 - PowerShell source
 
 
 def search_literal(query: str) -> str:
@@ -874,9 +874,7 @@ class WindowsBackend(DesktopBackend):
         hwnd = await self._ui_window(target)
         return await self._uia({"op": "tree", "hwnd": hwnd, "max_depth": max_depth, "max_nodes": max_nodes})
 
-    async def ui_press(
-        self, target: UiTarget, path: str | None, role: str | None, title: str | None
-    ) -> dict[str, Any]:
+    async def ui_press(self, target: UiTarget, path: str | None, role: str | None, title: str | None) -> dict[str, Any]:
         hwnd = await self._ui_window(target)
         req = {"op": "press", "hwnd": hwnd, "path": path, "role": uia_role(role) if role else None, "title": title}
         return await self._uia(req)
@@ -921,6 +919,8 @@ _DESKTOP_CAPS = (
     "apps.quit",
     "windows.list",
     "windows.focus",
+    "windows.frontmost",
+    "ui.elements",
     "input.keyboard",
     "input.mouse",
     "screen.capture",

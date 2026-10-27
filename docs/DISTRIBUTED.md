@@ -1,6 +1,6 @@
 # J.A.R.V.I.S. verteilt: Core Server, Clients und Device Agents (Windows, Linux, Mac)
 
-Stand: 2026-10-23. Umsetzung der Entscheidungen aus [CROSS_PLATFORM.md](CROSS_PLATFORM.md) (Audit) – Raspberry Pi bleibt vorerst
+Stand: 2026-10-27 (Erweiterung um Bedienelemente, Automationen, Inhaltssuche und Vordergrundfenster). Umsetzung der Entscheidungen aus [CROSS_PLATFORM.md](CROSS_PLATFORM.md) (Audit) – Raspberry Pi bleibt vorerst
 außen vor, der Coding-Runner ist unverändert.
 
 ## 1. Drei Komponenten
@@ -72,10 +72,14 @@ Das Token öffnet **nur** diese WebSocket: `device_agent` ist keine Rolle der AP
 
 ### Werkzeuge (`devices`-Connector, nur sichtbar, wenn mindestens ein Agent gekoppelt ist)
 `device_list`, `device_system_info`, `device_apps_list`, `device_app_open`, `device_app_quit`, `device_windows_list`,
-`device_window_focus`, `device_screenshot` (Analyse wie `mac_screenshot`), `device_click`, `device_mouse_move`, `device_scroll`,
-`device_type_text`, `device_key`, `device_clipboard_get/set`, `device_files_list/search/mkdir/move/reveal`, `device_file_read/write`,
-`device_shell_run`, `device_claude_code`, `device_open_url`, `device_browser_automate`, `device_notify`, `device_audio`.
-Risiken wie bei `mac_*`: Tippen, Klicken, Terminal, Claude Code = `high` (Freigabe). Eingaben mit `app` aktivieren das Programm und
+`device_window_focus`, `device_frontmost`, `device_screenshot` (Analyse wie `mac_screenshot`), `device_ui_tree`,
+`device_ui_press`, `device_click`, `device_mouse_move`, `device_scroll`, `device_type_text`, `device_key`,
+`device_clipboard_get/set`, `device_files_list/search/mkdir/move/reveal` (`device_files_search` mit `mode: content` nutzt
+den Suchindex des Systems), `device_file_read/write`, `device_shell_run`, `device_claude_code`, `device_open_url`,
+`device_browser_automate`, `device_notify`, `device_audio`, `device_automations_list`, `device_automation_run`,
+`device_applescript` (nur gekoppelte Macs).
+Risiken wie bei `mac_*`: Tippen, Klicken, Bedienelement drücken, Terminal, Claude Code, AppleScript = `high` (Freigabe),
+Automation ausführen = `medium`. Eingaben mit `app` aktivieren das Programm und
 prüfen den Vordergrund, sonst wird abgebrochen. Klick-Koordinaten sind Pixel des letzten Screenshots (der Agent rechnet zurück).
 
 ### Umsetzung je Betriebssystem
@@ -86,13 +90,24 @@ prüfen den Vordergrund, sonst wird abgebrochen. Klick-Koordinaten sind Pixel de
 | Maus/Tastatur | SendInput (Unicode), nicht in Admin-Fenster (UIPI) | xdotool | Tastatur über wtype, Maus nicht verfügbar | JarvisBridge (Klick, Tasten; kein Bewegen) |
 | Screenshots | mss (DPI-bewusst) | mss | grim / gnome-screenshot | JarvisBridge (ScreenCaptureKit) |
 | Zwischenablage | Win32 | xclip/xsel | wl-clipboard | JarvisBridge |
+| Vordergrundfenster | GetForegroundWindow | xdotool (sonst AT-SPI) | AT-SPI (Programm + Titel) | JarvisBridge |
+| Bedienelemente (`ui.tree`/`ui.press`) | UI Automation (PowerShell, .NET) | AT-SPI (`python3-gi`) | AT-SPI | JarvisBridge (Accessibility) |
+| Automationen | Skripte im Automationen-Ordner (`.ps1/.cmd/.bat/.py/.exe`) | Skripte (`.sh/.py`, ausführbar) | wie X11 | Apple-Kurzbefehle + Skripte; AppleScript, wenn die Bridge-Richtlinie es erlaubt |
+| Inhaltssuche (`files.search` `mode: content`) | Windows-Suche (SYSTEMINDEX) | Tracker/LocalSearch, Namen: plocate | wie X11 | Spotlight (`mdfind`) |
 | Benachrichtigung | Toast (WinRT) | notify-send | notify-send | osascript |
 | Lautstärke/Sprache/Abspielen | Core Audio, SAPI, MediaPlayer | pactl/wpctl/amixer, espeak-ng, ffplay | wie X11 | osascript, say, afplay |
 | Dateien, Terminal, Claude Code, Systeminfo, Browser (Playwright) | plattformneutral, nur unterhalb der freigegebenen Ordner | | | |
 
+Ohne Suchindex durchsucht der Agent die freigegebenen Ordner selbst (Textdateien bis 2 MB, Zeitlimit 25 s); Treffer aus
+einem Index werden auf die freigegebenen Ordner beschränkt. Protokoll v1 wächst nur additiv: ein älterer Agent meldet
+die neuen Fähigkeiten nicht, der Core antwortet dann „… ist auf <Gerät> nicht verfügbar“ statt den Befehl zu senden.
+
 Lokale Schutzschicht: freigegebene Ordner (`jarvis-device roots add …`, Standard: Benutzerordner; `.ssh`, `.gnupg`, die eigene
 Konfiguration sind gesperrt), Terminal abschaltbar (`jarvis-device config terminal off`), lokaler Not-Aus
 (`jarvis-device killswitch on`) zusätzlich zum Not-Aus des Core (beide erlauben nur noch lesende Aktionen).
+Automationen: nur Skripte, die der Benutzer selbst in den Automationen-Ordner legt (`jarvis-device automations` zeigt ihn;
+er liegt in der geschützten Konfiguration, der Core kann dort nichts schreiben), abschaltbar mit
+`jarvis-device config automations off`.
 
 ## 4. Netzwerk: Tailscale
 
@@ -142,7 +157,8 @@ Desktop-App ruft diese Skripte selbst auf – außer sie ist nur Client.
 scripts/linux/install.sh            # gleicher Installer; Hinweise mit apt-Paketnamen
 scripts/linux/start.sh / stop.sh    # Core-Dienste (headless: ohne Voice und App)
 ```
-Für den Device Agent unter X11: `sudo apt install xdotool wmctrl xclip libnotify-bin` (Wayland: `wtype wl-clipboard grim`).
+Für den Device Agent unter X11: `sudo apt install xdotool wmctrl xclip libnotify-bin` (Wayland: `wtype wl-clipboard grim`),
+für Bedienelemente und das aktive Fenster unter Wayland zusätzlich `python3-gi gir1.2-atspi-2.0` (prüft der Installer).
 Autostart: XDG-Autostart-Eintrag `~/.config/autostart/jarvis-device.desktop` (läuft in der Desktop-Sitzung).
 
 ## 7. Tests
@@ -150,7 +166,7 @@ Autostart: XDG-Autostart-Eintrag `~/.config/autostart/jarvis-device.desktop` (l�
 | Bereich | Befehl | Inhalt |
 |---|---|---|
 | Core | `cd core && uv run pytest -q tests/unit` | u. a. `test_platform_adapters.py` (Adapter-Vertrag auf jedem Host), `test_capability_gate.py` (Mac-Golden-Test), `test_cross_platform_core.py` (frühere Absturzstellen), `test_devices.py` (Hub, API, Werkzeuge, Gateway, Protokoll-Contract), `test_installer.py` |
-| Device Agent | `cd device_agent && uv run pytest -q` | Dispatcher, Sicherheitsregeln, Backends ohne Betriebssystem (Strukturen, Kommandozeilen), echte WebSocket-Sitzung gegen einen Test-Core, Autostart |
+| Device Agent | `cd device_agent && uv run pytest -q` | Dispatcher, Sicherheitsregeln, Backends ohne Betriebssystem (Strukturen, Kommandozeilen), echte WebSocket-Sitzung gegen einen Test-Core, Autostart, `test_automation_ui.py` (Automationen, Bedienelemente, Inhaltssuche je Plattform) |
 | Desktop | `cd desktop && pnpm test` | u. a. `connection.test.ts` |
 | CI | `.github/workflows/ci.yml` | Core zusätzlich auf Windows/macOS (nicht blockierend), Device Agent auf Linux/Windows/macOS, PowerShell-Syntax |
 

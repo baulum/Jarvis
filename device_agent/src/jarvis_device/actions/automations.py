@@ -59,15 +59,17 @@ def find_script(root: Path, name: str, platform: str = sys.platform) -> Path | N
     scripts = list_scripts(root, platform)
     exact = [s for s in scripts if s["file"].casefold() == want]
     if exact:
-        return root / exact[0]["file"]
+        return root / str(exact[0]["file"])
     by_stem = [s for s in scripts if s["name"].casefold() == want]
     if len(by_stem) > 1:
         files = ", ".join(s["file"] for s in by_stem)
         raise ValueError(f"Mehrere Automationen heißen „{name}“ – Dateinamen angeben ({files})")
-    return root / by_stem[0]["file"] if by_stem else None
+    return root / str(by_stem[0]["file"]) if by_stem else None
 
 
-def argv_for(script: Path, platform: str = sys.platform, which: Callable[[str], str | None] = shutil.which) -> list[str]:
+def argv_for(
+    script: Path, platform: str = sys.platform, which: Callable[[str], str | None] = shutil.which
+) -> list[str]:
     suffix = script.suffix.lower()
     if _is_windows(platform):
         if suffix == ".ps1":

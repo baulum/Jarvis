@@ -172,9 +172,7 @@ class DesktopBackend(abc.ABC):
         """The program's controls as a tree; every node has an ``id`` (path) that ``ui_press`` accepts."""
         raise Unavailable("Bedienelemente lesen ist hier nicht umgesetzt")
 
-    async def ui_press(
-        self, target: UiTarget, path: str | None, role: str | None, title: str | None
-    ) -> dict[str, Any]:
+    async def ui_press(self, target: UiTarget, path: str | None, role: str | None, title: str | None) -> dict[str, Any]:
         raise Unavailable("Bedienelemente drücken ist hier nicht umgesetzt")
 
     # ------------------------------------------------------------------ automation

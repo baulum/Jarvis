@@ -94,12 +94,14 @@ class FakeRun:
 
     def __init__(self, answers: dict[str, ProcResult] | None = None) -> None:
         self.calls: list[tuple[list[str], bytes | None]] = []
+        self.envs: list[Any] = []
         self.answers = answers or {}
 
     async def __call__(
         self, argv: list[str], *, input: bytes | None = None, timeout: float = 30, env: Any = None
     ) -> ProcResult:
         self.calls.append((list(argv), input))
+        self.envs.append(env)
         name = Path(argv[0]).name
         key = " ".join([name, *argv[1:2]])
         return self.answers.get(key) or self.answers.get(name) or ProcResult(0, b"", b"")

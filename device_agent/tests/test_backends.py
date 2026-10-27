@@ -147,9 +147,10 @@ def test_session_detection():
     assert session_type({}) == "headless"
 
 
-def _linux(environ, tools, answers=None):
+def _linux(environ, tools, answers=None, atspi=("unavailable", "AT-SPI fehlt")):
     run = FakeRun(answers)
-    return LinuxBackend(run=run, which=lambda n: f"/usr/bin/{n}" if n in tools else None, environ=environ), run
+    which = lambda n: f"/usr/bin/{n}" if n in tools else None  # noqa: E731
+    return LinuxBackend(run=run, which=which, environ=environ, atspi_probe=lambda: atspi), run
 
 
 def test_linux_capabilities_explain_what_is_missing():

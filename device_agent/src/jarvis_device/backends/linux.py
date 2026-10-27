@@ -751,9 +751,7 @@ class LinuxBackend(DesktopBackend):
         req = await self._ui_req("tree", target) | {"max_depth": max_depth, "max_nodes": max_nodes}
         return await self._atspi_call(req)
 
-    async def ui_press(
-        self, target: UiTarget, path: str | None, role: str | None, title: str | None
-    ) -> dict[str, Any]:
+    async def ui_press(self, target: UiTarget, path: str | None, role: str | None, title: str | None) -> dict[str, Any]:
         req = await self._ui_req("press", target) | {"path": path, "role": role, "title": title}
         return await self._atspi_call(req)
 
@@ -845,6 +843,8 @@ _DESKTOP_CAPS = (
     "apps.quit",
     "windows.list",
     "windows.focus",
+    "windows.frontmost",
+    "ui.elements",
     "input.keyboard",
     "input.mouse",
     "screen.capture",

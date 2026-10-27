@@ -268,6 +268,59 @@ async def test_device_tools_map_errors_and_analyse_screenshots(tmp_path: Path) -
     assert agent.frames[-1]["args"] == {"x": 10, "y": 20, "app": "Editor"}  # "device" is routing, not an argument
 
 
+async def test_controls_automations_and_content_search_tools(tmp_path: Path) -> None:
+    hub = DeviceHub(default_timeout_s=5)
+    tree = {
+        "id": "0", "role": "Window", "title": "Rechner", "value": "", "app": {"name": "Rechner"},
+        "children": [{"id": "0/0", "role": "Button", "title": "Gleich", "enabled": True, "description": None,
+                      "bounds": {"x": 1, "y": 2, "width": 3, "height": 4}}],
+    }  # fmt: skip
+    caps = dict(ALL_AVAILABLE) | {"automation.applescript": {"status": "unavailable", "reason": "nur macOS"}}
+    agent = FakeAgent(
+        hub,
+        "PC",
+        caps,
+        **{
+            "ui.tree": tree,
+            "automation.run": {"name": "backup", "exit_code": 0, "output": "fertig", "stderr": ""},
+        },
+    )
+    await hub.attach(agent.conn)
+    tools = {t.name: t for t in _connector(hub, tmp_path).tools()}
+    ctx: Any = None
+    assert tools["device_ui_press"].risk == "high" and tools["device_applescript"].risk == "high"
+    assert tools["device_ui_tree"].risk == "read" and tools["device_ui_tree"].untrusted_output
+    assert tools["device_automation_run"].risk == "medium" and tools["device_automations_list"].risk == "read"
+
+    out = await tools["device_ui_tree"].handler(ctx, {"app": "Rechner", "max_depth": 20})
+    assert agent.frames[-1]["action"] == "ui.tree"
+    assert agent.frames[-1]["args"] == {"app": "Rechner", "max_depth": 8, "max_nodes": 250}
+    assert "value" not in out and out["app"] == {"name": "Rechner"}
+    assert out["children"] == [
+        {
+            "id": "0/0",
+            "role": "Button",
+            "title": "Gleich",
+            "enabled": True,
+            "bounds": {"x": 1, "y": 2, "width": 3, "height": 4},
+        }
+    ]
+
+    await tools["device_ui_press"].handler(ctx, {"device": "PC", "window_id": 7, "role": "Button", "title": ""})
+    assert agent.frames[-1]["action"] == "ui.press" and agent.frames[-1]["args"] == {"window_id": 7, "role": "Button"}
+
+    res = await tools["device_automation_run"].handler(ctx, {"name": "backup", "timeout_s": 60})
+    assert agent.frames[-1]["timeout_s"] == 70 and agent.frames[-1]["args"] == {"name": "backup", "timeout_s": 60}
+    assert "fertig" in json.dumps(res["output"], ensure_ascii=False) and res["output"] != "fertig"  # marked untrusted
+
+    await tools["device_files_search"].handler(ctx, {"query": "Rechnung", "mode": "content"})
+    assert agent.frames[-1]["args"] == {"query": "Rechnung", "mode": "content"}
+    await tools["device_frontmost"].handler(ctx, {})
+    assert agent.frames[-1]["action"] == "windows.frontmost"
+    with pytest.raises(ToolUserError, match="AppleScript \\(nur macOS\\) ist auf PC nicht verfügbar"):
+        await tools["device_applescript"].handler(ctx, {"source": "beep"})
+
+
 # --------------------------------------------------------------------------- gateway exposure
 def test_gateway_paths_for_agents_phones_and_remote_clients() -> None:
     assert mobile_path_allowed("POST", "/api/devices/agents/register")

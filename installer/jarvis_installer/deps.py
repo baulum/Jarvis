@@ -234,6 +234,21 @@ DEPENDENCIES: tuple[Dependency, ...] = (
         oses=_all("linux"),
     ),
     Dependency(
+        "atspi",
+        "AT-SPI (python3-gi)",
+        "Bedienelemente lesen/drücken und unter Wayland das aktive Fenster erkennen",
+        frozenset({"device"}),
+        paths={
+            "linux": (
+                "/usr/lib/*/girepository-1.0/Atspi-2.0.typelib",
+                "/usr/lib/girepository-1.0/Atspi-2.0.typelib",
+                "/usr/lib64/girepository-1.0/Atspi-2.0.typelib",
+            )
+        },
+        hints={"linux": "sudo apt install python3-gi gir1.2-atspi-2.0"},
+        oses=_all("linux"),
+    ),
+    Dependency(
         "espeak",
         "espeak-ng",
         "Systemstimme als letzte Rückfallstufe (Core) bzw. Vorlesen auf dem Gerät",

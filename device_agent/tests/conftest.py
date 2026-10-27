@@ -22,10 +22,10 @@ def root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def make_dispatcher(tmp_path: Path, root: Path) -> Callable[..., Dispatcher]:
-    def make(backend: DesktopBackend | None = None, **cfg_kw: Any) -> Dispatcher:
+    def make(backend: DesktopBackend | None = None, automations_dir: Path | None = None, **cfg_kw: Any) -> Dispatcher:
         cfg = AgentConfig(allowed_roots=[str(root)], **cfg_kw)
         home = tmp_path / "agent-home"
         policy = PathPolicy(cfg.roots(), protected=[home])
-        return Dispatcher(backend or FakeBackend(), cfg, policy, KillSwitch(home / "KILL"))
+        return Dispatcher(backend or FakeBackend(), cfg, policy, KillSwitch(home / "KILL"), automations_dir)
 
     return make

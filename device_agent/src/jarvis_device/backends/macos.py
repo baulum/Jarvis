@@ -255,9 +255,7 @@ class MacBackend(DesktopBackend):
         body = await self._selector(target) | {"maxDepth": max_depth, "maxNodes": max_nodes}
         return dict(await self.bridge("POST", "/ui/tree", body) or {})
 
-    async def ui_press(
-        self, target: UiTarget, path: str | None, role: str | None, title: str | None
-    ) -> dict[str, Any]:
+    async def ui_press(self, target: UiTarget, path: str | None, role: str | None, title: str | None) -> dict[str, Any]:
         body = await self._selector(target)
         body |= {k: v for k, v in (("path", path), ("role", role), ("title", title)) if v}
         return dict(await self.bridge("POST", "/ui/press", body) or {})

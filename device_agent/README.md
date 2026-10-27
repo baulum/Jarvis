@@ -1,7 +1,8 @@
 # Jarvis Device Agent (`jarvis-device`)
 
 Lässt den Jarvis Core Server diesen Rechner steuern: Programme, Fenster, Maus, Tastatur, Screenshots, Zwischenablage,
-Dateien, Terminal, Claude Code, Browser (Playwright), Benachrichtigungen, Audio und Systeminformationen.
+Bedienelemente (Accessibility / UI Automation / AT-SPI), Dateien samt Inhaltssuche, Terminal, Claude Code, Browser
+(Playwright), Automationen, Benachrichtigungen, Audio und Systeminformationen.
 Windows (Win32), Linux (X11, Wayland soweit erlaubt) und macOS (über die JarvisBridge). Architektur, Protokoll und
 Sicherheitsregeln: [docs/DISTRIBUTED.md](../docs/DISTRIBUTED.md).
 
@@ -27,12 +28,23 @@ jarvis-device run                         # oder im Vordergrund starten
 | `jarvis-device roots list\|add\|remove <Ordner>` | Ordner, auf die der Core zugreifen darf (Standard: Benutzerordner) |
 | `jarvis-device config terminal on\|off` | Terminal-Befehle erlauben/sperren |
 | `jarvis-device config browser on\|off` | Browser-Automatisierung erlauben/sperren |
+| `jarvis-device config automations on\|off` | Automationen (Skripte, auf dem Mac auch Apple-Kurzbefehle) erlauben/sperren |
 | `jarvis-device config claude <Programm>` | Claude-Code-Programm (Standard `claude`) |
+| `jarvis-device automations` | legt den Automationen-Ordner an und listet die Skripte darin |
 | `jarvis-device killswitch on\|off` | lokaler Not-Aus: nur noch lesende Aktionen |
 | `jarvis-device unpair` | Token löschen (im Core zusätzlich widerrufen) |
 
 Konfiguration und Log: `%APPDATA%\JarvisDevice` (Windows), `~/.config/jarvis-device` (Linux),
 `~/Library/Application Support/JarvisDevice` (macOS).
+
+**Automationen:** Skripte im Unterordner `automations` der Konfiguration startet Jarvis per Namen
+(`device_automation_run`) – Windows: `.ps1`, `.cmd`, `.bat`, `.py`, `.exe`; Linux/macOS: ausführbare Dateien, `.sh`,
+`.py`. Die Eingabe kommt über stdin und `JARVIS_INPUT`. Der Ordner liegt in der geschützten Konfiguration: Jarvis kann
+dort nichts ablegen, nur ausführen, was Sie selbst hineinlegen.
+
+**Linux, Bedienelemente:** `sudo apt install python3-gi gir1.2-atspi-2.0` (der Agent ruft dafür das System-`python3`
+auf); unter Wayland erkennt er darüber auch das aktive Fenster. Chromium/Electron-Programme zeigen ihre Elemente erst
+mit `--force-renderer-accessibility`.
 
 ## Entwicklung
 

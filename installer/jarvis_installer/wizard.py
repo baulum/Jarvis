@@ -297,6 +297,10 @@ class Wizard:
             self.summary.open.append(f"Kopplung fehlgeschlagen: {out[-200:]}")
             return
         self.summary.done.append("Device Agent gekoppelt")
+        code, out = self.run([agent, "automations"])
+        if code == 0 and out.strip():
+            folder = out.strip().splitlines()[0].removeprefix("Automationen-Ordner: ")
+            self.summary.done.append(f"Automationen-Ordner {folder} (Skripte dort startet Jarvis per Namen)")
         if self.confirm("Device Agent bei jeder Anmeldung automatisch starten?", True):
             code, out = self.run([agent, "autostart", "enable"])
             (self.summary.done if code == 0 else self.summary.open).append(

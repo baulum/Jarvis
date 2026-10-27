@@ -123,6 +123,22 @@ class DevicesConnector(Connector):
                         data[k] = data[k][-n:]
             return data
 
+        def automation_out(data: Any) -> Any:
+            if isinstance(data, dict):
+                for k, n in (("output", 8000), ("stderr", 4000)):
+                    if isinstance(data.get(k), str):
+                        data[k] = wrap_untrusted(data[k][-n:], "automation", n)
+            return data
+
+        def ui_target(a: dict[str, Any]) -> dict[str, Any]:
+            return {k: a[k] for k in ("app", "pid", "window_id") if k in a}
+
+        def ui_tree_args(a: dict[str, Any]) -> dict[str, Any]:
+            return ui_target(a) | {"max_depth": min(int(a.get("max_depth", 5)), 8), "max_nodes": 250}
+
+        def ui_press_args(a: dict[str, Any]) -> dict[str, Any]:
+            return ui_target(a) | {k: a[k] for k in ("path", "role", "title") if a.get(k)}
+
         return [
             ToolSpec(
                 "device_list",
@@ -176,6 +192,54 @@ class DevicesConnector(Connector):
                 action("windows.focus"),
                 "low",
                 S,
+            ),
+            ToolSpec(
+                "device_frontmost",
+                "Aktives Programm und Fenstertitel eines Geräts.",
+                _obj({}),
+                action("windows.frontmost"),
+                "read",
+                S,
+            ),
+            ToolSpec(
+                "device_ui_tree",
+                "Liest die Bedienelemente eines Programms auf einem Gerät (macOS Accessibility, Windows UI Automation, "
+                "Linux AT-SPI); ohne app/pid/window_id das Programm im Vordergrund. Elemente haben eine id (Pfad) für "
+                "device_ui_press und meist bounds (Bildschirmkoordinaten).",
+                _obj(
+                    {
+                        "app": {"type": "string"},
+                        "pid": {"type": "integer"},
+                        "window_id": {"type": "integer"},
+                        "max_depth": {"type": "integer", "minimum": 1, "maximum": 8},
+                    }
+                ),
+                action("ui.tree", build=ui_tree_args, timeout=lambda a: 60, wrap=_compact_tree),
+                "read",
+                S,
+                untrusted_output=True,
+            ),
+            ToolSpec(
+                "device_ui_press",
+                "Drückt ein Bedienelement (Button, Menüpunkt, Kontrollkästchen) auf einem Gerät – per path aus "
+                "device_ui_tree oder per role/title (z. B. role='Button', title='OK').",
+                _obj(
+                    {
+                        "app": {"type": "string"},
+                        "pid": {"type": "integer"},
+                        "window_id": {"type": "integer"},
+                        "path": {"type": "string"},
+                        "role": {"type": "string"},
+                        "title": {"type": "string"},
+                    }
+                ),
+                action("ui.press", build=ui_press_args, timeout=lambda a: 60),
+                "high",
+                S,
+                summarize=lambda a: (
+                    f"Bedienelement drücken{_on(a)}: {a.get('title') or a.get('path') or a.get('role')}"
+                    + (f" in {a['app']}" if a.get("app") else "")
+                ),
             ),
             ToolSpec(
                 "device_screenshot",
@@ -309,12 +373,15 @@ class DevicesConnector(Connector):
             ),
             ToolSpec(
                 "device_files_search",
-                "Sucht Dateien nach Namen auf einem Gerät (unterhalb eines freigegebenen Ordners).",
+                "Sucht Dateien auf einem Gerät (unterhalb der freigegebenen Ordner): mode 'name' (Standard) nach "
+                "Dateinamen, mode 'content' auch nach Inhalt über den Suchindex des Systems (Spotlight, Windows-Suche, "
+                "Tracker), ohne Index per Durchsuchen.",
                 _obj(
                     {
                         "query": {"type": "string", "minLength": 1},
                         "root": {"type": "string"},
                         "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                        "mode": {"type": "string", "enum": ["name", "content"]},
                     },
                     ["query"],
                 ),
@@ -426,6 +493,42 @@ class DevicesConnector(Connector):
                 summarize=lambda a: f"Benachrichtigung{_on(a)}: {a['title']}",
             ),
             ToolSpec(
+                "device_automations_list",
+                "Automationen eines Geräts: Skripte aus dem Automationen-Ordner des Agents (Windows/Linux/Mac) und "
+                "Apple-Kurzbefehle (Mac).",
+                _obj({}),
+                action("automation.list", timeout=lambda a: 30),
+                "read",
+                S,
+            ),
+            ToolSpec(
+                "device_automation_run",
+                "Führt eine Automation auf einem Gerät aus (Skriptname oder Apple-Kurzbefehl); input geht an "
+                "stdin bzw. den Kurzbefehl.",
+                _obj(
+                    {
+                        "name": {"type": "string", "minLength": 1, "maxLength": 256},
+                        "input": {"type": "string", "maxLength": 100000},
+                        "timeout_s": {"type": "integer", "minimum": 5, "maximum": 600},
+                    },
+                    ["name"],
+                ),
+                action("automation.run", timeout=lambda a: float(a.get("timeout_s", 300)) + 10, wrap=automation_out),
+                "medium",
+                S,
+                timeout_s=640,
+                summarize=lambda a: f"Automation ausführen{_on(a)}: {a['name']}",
+            ),
+            ToolSpec(
+                "device_applescript",
+                "Führt AppleScript auf einem gekoppelten Mac aus (nur wenn dessen JarvisBridge es erlaubt).",
+                _obj({"source": {"type": "string", "minLength": 1, "maxLength": 20000}}, ["source"]),
+                action("automation.applescript", timeout=lambda a: 90),
+                "high",
+                S,
+                summarize=lambda a: f"AppleScript{_on(a)}: {a['source'][:120]}",
+            ),
+            ToolSpec(
                 "device_audio",
                 "Audio auf einem Gerät: Lautstärke lesen/setzen (level 0–100), stumm/laut, Text vorlesen, "
                 "Datei abspielen.",
@@ -496,3 +599,20 @@ class DevicesConnector(Connector):
             "scale": shot.get("scale"),
             "analysis": wrap_untrusted(description, "bildschirminhalt", 4000),
         }
+
+
+TREE_KEYS = ("id", "role", "title", "value", "description", "enabled", "automation_id", "bounds")
+
+
+def _compact_tree(node: Any) -> Any:
+    """The controls tree without empty fields; the root keeps app/pid/truncation hints."""
+    if not isinstance(node, dict):
+        return node
+    out = {k: node[k] for k in TREE_KEYS if node.get(k) not in (None, "", [])}
+    for k in ("app", "pid", "nodeCount", "truncated"):
+        if node.get(k) not in (None, ""):
+            out[k] = node[k]
+    kids = node.get("children") or []
+    if kids:
+        out["children"] = [_compact_tree(c) for c in kids if isinstance(c, dict)]
+    return out

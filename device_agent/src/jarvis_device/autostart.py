@@ -106,11 +106,9 @@ def enable(platform: str | None = None) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         (Path.home() / "Library" / "Logs" / "JarvisDevice").mkdir(parents=True, exist_ok=True)
         path.write_bytes(mac_plist())
-        uid = os.getuid()
-        subprocess.run(["launchctl", "bootout", f"gui/{uid}", str(path)], capture_output=True, check=False)
-        res = subprocess.run(
-            ["launchctl", "bootstrap", f"gui/{uid}", str(path)], capture_output=True, text=True, check=False
-        )
+        domain = _gui_domain()
+        subprocess.run(["launchctl", "bootout", domain, str(path)], capture_output=True, check=False)
+        res = subprocess.run(["launchctl", "bootstrap", domain, str(path)], capture_output=True, text=True, check=False)
         if res.returncode != 0:
             raise RuntimeError(res.stderr.strip())
         return f"LaunchAgent {path}"
@@ -120,6 +118,13 @@ def enable(platform: str | None = None) -> str:
     return f"Autostart-Eintrag {path} (wirkt ab der nächsten Anmeldung)"
 
 
+def _gui_domain() -> str:
+    """launchctl domain of the logged-in user (macOS only; the check keeps Windows type checks happy)."""
+    if sys.platform == "win32":
+        raise RuntimeError("launchctl gibt es nur auf macOS")
+    return f"gui/{os.getuid()}"
+
+
 def disable(platform: str | None = None) -> str:
     plat = sys.platform if platform is None else platform
     if plat.startswith("win"):
@@ -127,7 +132,7 @@ def disable(platform: str | None = None) -> str:
         return "Aufgabe entfernt"
     if plat == "darwin":
         path = mac_plist_path()
-        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(path)], capture_output=True, check=False)
+        subprocess.run(["launchctl", "bootout", _gui_domain(), str(path)], capture_output=True, check=False)
         path.unlink(missing_ok=True)
         return "LaunchAgent entfernt"
     linux_autostart_path().unlink(missing_ok=True)
