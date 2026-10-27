@@ -73,6 +73,12 @@ Overrides in `permissions.yaml` können Risiken nur **erhöhen**.
   `coding.ship` auditiert. Rote, fehlgeschlagene oder abgebrochene Jobs pushen nur ihren `jarvis/*`-Branch (Sicherung).
   Nach dem Merge löscht der Runner nur den eigenen `jarvis/*`-Branch und den Worktree im Jarvis-Workspace, und nur wenn
   der Worktree sauber ist und der Branch noch auf dem gemergten Commit steht. Manuelles Nachholen (`coding_ship_job`) und Draft-PR (`coding_prepare_pr`) bleiben `high`.
+- Supabase-Datenbankpasswörter liegen nur im Schlüsselbund (`supabase-db-password`, je Projekt
+  `supabase-db-password-<project-ref>`) und gehen nur als `SUPABASE_DB_PASSWORD` an `supabase db push`; in der CLI-Ausgabe
+  werden sie geschwärzt. Pro Deploy genau ein Anmeldeversuch, danach wartet die Auslieferung auf Sir.
+  `coding_supabase_password` (`high`) legt das genannte Passwort schon vor der Freigabe ab und entfernt es aus den
+  Argumenten – Freigabe, Audit, Idempotenz-Ledger und die Werkzeuganzeige der Chat-Timeline sehen es nicht (Sirs eigene
+  Chatnachricht mit dem Passwort bleibt im Verlauf).
 - `claude --restricted` ignoriert Projekt-/Benutzer-Settings und Hooks fremder Repos, Datei-Tools auf den Worktree beschränkt.
 - `--strict-mcp-config` (keine MCP-Server aus dem Repo), Tool-Allowlist, `--permission-prompts none`.
 - macOS-Seatbelt-Sandbox für Bash mit `failIfUnavailable`, Netzwerk-Allowlist (npm, PyPI, GitHub, Fonts-CDNs).

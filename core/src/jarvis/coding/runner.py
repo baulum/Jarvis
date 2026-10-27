@@ -30,6 +30,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 from sqlalchemy import select
 
@@ -40,6 +41,7 @@ from jarvis.config import CUSTOMER_SITES_DIR, REPO_ROOT
 from jarvis.db import session_scope
 from jarvis.db.models import CodingJob
 from jarvis.events import bus, spawn
+from jarvis.secrets import secret_store
 from jarvis.security.audit import audit
 from jarvis.tools.executor import ToolUserError
 
@@ -198,6 +200,42 @@ def supabase_projects(paths: list[str]) -> dict[str, dict[str, Any]]:
         for root, info in sorted(found.items())
         if info["functions"] or info["migrations"]
     }
+
+
+# Database password for ``supabase db push``, kept only in Jarvis' Keychain (never in code, files or git). Sir's
+# standard password goes under SUPABASE_PASSWORD_SECRET; a project's own password under
+# ``supabase_password_secret(project_ref)``.
+SUPABASE_PASSWORD_SECRET = "supabase-db-password"  # noqa: S105 - Keychain entry name, not a password
+_SUPABASE_REF_RE = re.compile(r"^[a-z0-9]{6,40}$")
+# The database refused the login: wrong password (Postgres SQLSTATE 28P01) or the CLI had none and wanted to prompt.
+_SUPABASE_AUTH_RE = re.compile(
+    r"password authentication failed|SQLSTATE 28P01|failed SASL auth|Enter your database password", re.IGNORECASE
+)
+
+
+def supabase_password_secret(project_ref: str) -> str:
+    """Keychain name of the database password of one Supabase project (``supabase-db-password-<ref>``)."""
+    if not _SUPABASE_REF_RE.match(project_ref):
+        raise CodingError(f"Ungültige Supabase-Projekt-ID: {project_ref!r}")
+    return f"{SUPABASE_PASSWORD_SECRET}-{project_ref}"
+
+
+def supabase_project_ref(project_dir: Path) -> str | None:
+    """Project ref of the linked Supabase project (``supabase link`` writes ``supabase/.temp/project-ref``)."""
+    try:
+        ref = (project_dir / "supabase" / ".temp" / "project-ref").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return ref if _SUPABASE_REF_RE.match(ref) else None
+
+
+def _hide(text: str, secret: str | None) -> str:
+    """``text`` without ``secret`` (also URL-encoded, as in a connection string)."""
+    if not secret:
+        return text
+    for form in {secret, quote(secret, safe="")}:
+        text = text.replace(form, "***")
+    return text
 
 
 # Commit identity when the global git config has none (overridable via JARVIS_GIT_NAME / JARVIS_GIT_EMAIL).
@@ -1393,12 +1431,14 @@ class CodingRunner:
             raise CodingError("GitHub-Connector ist nicht eingerichtet")
         return gh
 
-    async def _exec(self, cwd: Path, argv: list[str], timeout_s: float) -> tuple[int | None, str]:
+    async def _exec(
+        self, cwd: Path, argv: list[str], timeout_s: float, extra_env: dict[str, str] | None = None
+    ) -> tuple[int | None, str]:
         """Runs a command (no shell); returns (exit code, combined output tail). Exit code None = timeout."""
         proc = await asyncio.create_subprocess_exec(
             *argv,
             cwd=cwd,
-            env=self._env(),
+            env={**self._env(), **(extra_env or {})},
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
@@ -1831,7 +1871,8 @@ class CodingRunner:
             ship["message"] = f"{ship['message']} Job-Branch (lokal und auf origin) und Worktree entfernt."
 
     async def _ship_deploy(self, ship: dict[str, Any], repo: Path) -> None:
-        """After the merge: deploy Supabase migrations / edge functions found on the merged base branch."""
+        """After the merge: deploy Supabase migrations / edge functions found on the merged base branch. A refused
+        database login leaves the delivery waiting for Sir's project password (``ship["state"] == "waiting_input"``)."""
         base, pr = ship["base"], ship["pr"]
         ship["stage"] = "deploy"
         await self._git(repo, "fetch", "origin", base)
@@ -1870,13 +1911,103 @@ class CodingRunner:
             if info["functions"]:
                 steps.append(("functions deploy", [cli, "functions", "deploy"]))
             for name, argv in steps:
-                code, out = await self._exec(repo / root, argv, timeout_s)
+                ref, source, password = None, "none", None
+                if name == "db push":  # only the migrations log in to the database; functions use the access token
+                    # Order (see _supabase_password): standard password, then project password, then ask Sir.
+                    ref = supabase_project_ref(repo / root)
+                    source, password = self._supabase_password(ref)
+                    ship["supabase"].setdefault("password", {})[root or "."] = source
+                code, out = await self._exec(
+                    repo / root, argv, timeout_s, {"SUPABASE_DB_PASSWORD": password} if password else None
+                )
+                out = _hide(out, password)
+                if code != 0 and name == "db push" and _SUPABASE_AUTH_RE.search(out):
+                    # Step 3: the password was refused – no further attempts, the delivery waits for Sir.
+                    await self._supabase_ask_password(ship, root, ref, source, merged_note)
+                    return
                 if code != 0:
                     raise CodingError(f"supabase {name} in '{root or '.'}' fehlgeschlagen (Exit {code}): {out.strip()}")
                 ship["supabase"]["deployed"].append(f"{root + ': ' if root else ''}{name}")
         ship["state"] = "shipped"
         ship["message"] = f"Ausgeliefert: {merged_note} Supabase deployt ({', '.join(ship['supabase']['deployed'])})."
         await self._ship_vercel(ship, repo, listing.splitlines())
+
+    @staticmethod
+    def _supabase_password(ref: str | None) -> tuple[str, str | None]:
+        """(source, password) for ``supabase db push`` of one project. Exactly one password is tried per deploy:
+
+        1. Standard password (Keychain ``supabase-db-password``): Sir mostly uses the same database password, so
+           every project starts with it.
+        2. Project password (Keychain ``supabase-db-password-<project-ref>``): once Sir has given one for this
+           project (after step 3), it is preferred over the standard password for exactly this project.
+        3. Asking Sir: if the database refuses the password used, nothing else is tried – the delivery waits
+           (``ship["state"] == "waiting_input"``) and Sir is asked for this project's password
+           (``_supabase_ask_password``, answered via ``coding_supabase_password``).
+
+        Neither stored: no password is passed, the Supabase CLI uses its own login (``supabase link``)."""
+        if ref and (project := secret_store.get(supabase_password_secret(ref))):
+            return "project", project
+        if standard := secret_store.get(SUPABASE_PASSWORD_SECRET):
+            return "default", standard
+        return "none", None
+
+    async def _supabase_ask_password(
+        self, ship: dict[str, Any], root: str, ref: str | None, tried: str, merged_note: str
+    ) -> None:
+        """Step 3 of ``_supabase_password``: the database refused the login. The delivery waits for Sir's project
+        password (no further attempts, no password in the result or the message); Sir is notified."""
+        where = f"'{root}'" if root else "Projektwurzel"
+        refused = {
+            "default": "mit dem Standard-Datenbankpasswort",
+            "project": "mit dem hinterlegten Projektpasswort",
+            "none": "ohne hinterlegtes Datenbankpasswort",
+        }[tried]
+        if ref is None:
+            raise CodingError(
+                f"Supabase-Anmeldung ({where}) {refused} abgelehnt, und das Projekt ist nicht per 'supabase link' "
+                "verknüpft – ohne Projekt-ID lässt sich kein Projektpasswort zuordnen"
+            )
+        ship["state"] = "waiting_input"
+        ship["supabase"]["password_request"] = {
+            "project_ref": ref,
+            "root": root,
+            "tried": tried,
+            "secret": supabase_password_secret(ref),
+        }
+        ship["message"] = (
+            f"Auslieferung wartet: {merged_note} Supabase-Anmeldung für Projekt {ref} ({where}) {refused} "
+            "abgelehnt – es wurde nicht weiter probiert. Ich brauche das Datenbankpasswort dieses Supabase-Projekts "
+            "(coding_supabase_password); es wird im Schlüsselbund gespeichert und der Deploy fortgesetzt."
+        )
+        notifier = getattr(self.state, "notifier", None)
+        if notifier is not None:
+            try:
+                await notifier.notify(
+                    "coding.supabase_password",
+                    f"Supabase-Passwort für Projekt {ref} benötigt",
+                    f"Die Datenbank hat die Anmeldung {refused} abgelehnt. Der Deploy wartet, bis Sir das "
+                    "Datenbankpasswort dieses Projekts nennt.",
+                    level="warning",
+                    data={"project_ref": ref, "root": root, "tried": tried},
+                )
+            except Exception:
+                logger.warning("Benachrichtigung über fehlendes Supabase-Passwort fehlgeschlagen", exc_info=True)
+
+    async def store_supabase_password(self, job_id: uuid.UUID, password: str) -> str:
+        """Sir's answer to step 3: stores the database password of the Supabase project the job's delivery is
+        waiting for in the Keychain (``supabase-db-password-<ref>``, used first from now on). Returns the ref."""
+        async with session_scope() as s:
+            job = await s.get(CodingJob, job_id)
+            ship = dict((job.result or {}).get("ship") or {}) if job is not None else {}
+        request = (ship.get("supabase") or {}).get("password_request") or {}
+        if ship.get("state") != "waiting_input" or not request.get("project_ref"):
+            raise CodingError("Die Auslieferung dieses Jobs wartet nicht auf ein Supabase-Passwort")
+        if not password.strip():
+            raise CodingError("Leeres Passwort")
+        ref = str(request["project_ref"])
+        secret_store.set(supabase_password_secret(ref), password)
+        await audit("coding-runner", "coding.supabase_password", target=str(job_id), details={"project_ref": ref})
+        return ref
 
     async def _ship_vercel(self, ship: dict[str, Any], repo: Path, listing: list[str]) -> None:
         """After merge (and Supabase): production deploy on Vercel if the project has a ``vercel.json`` or a local

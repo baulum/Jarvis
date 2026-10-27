@@ -14,8 +14,8 @@ from jarvis.agent.attachments import (
     stage_for_job,
 )
 from jarvis.agent.model_router import EFFORTS
-from jarvis.coding.runner import CodingError, CodingRunner, slug
-from jarvis.connectors.base import Connector, Health, Manifest
+from jarvis.coding.runner import SUPABASE_PASSWORD_SECRET, CodingError, CodingRunner, slug
+from jarvis.connectors.base import Connector, Health, Manifest, SecretField
 from jarvis.tools.executor import ToolUserError
 from jarvis.tools.registry import ToolContext, ToolSpec
 
@@ -32,6 +32,15 @@ class CodingConnector(Connector):
         "CLI (Subscription-Login) übergeben – isoliert in Git-Worktrees mit Sandbox.",
         category="developer",
         auth="local",
+        secrets=[
+            SecretField(
+                SUPABASE_PASSWORD_SECRET,
+                "Supabase-Standard-Datenbankpasswort",
+                "Wird beim Supabase-Deploy (db push) zuerst verwendet. Lehnt ein Projekt es ab, fragt Jarvis nach "
+                "dem Passwort dieses Projekts und merkt es sich pro Projekt.",
+                required=False,
+            )
+        ],
         default_enabled=True,
         setup_instructions="Claude Code installieren und einmalig den unter coding.claude_command konfigurierten "
         "Befehl (Standard `claudeb`) starten → /login mit der Claude-Subscription.",
@@ -146,6 +155,28 @@ class CodingConnector(Connector):
             except CodingError as e:
                 raise ToolUserError(str(e)) from e
 
+        async def store_supabase_password(ctx: ToolContext, a: dict[str, Any]) -> dict[str, Any]:
+            # Runs before the approval: the password goes straight into the Keychain, so what is approved,
+            # executed, audited and kept in the idempotency ledger afterwards only names job and project.
+            if "password" not in a:
+                return a
+            try:
+                ref = await runner().store_supabase_password(_uuid(a["job_id"]), a["password"])
+            except CodingError as e:
+                raise ToolUserError(str(e)) from e
+            return {"job_id": a["job_id"], "project_ref": ref}
+
+        async def supabase_password(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            if "password" in a:
+                a = await store_supabase_password(ctx, a)
+            elif not a.get("project_ref"):
+                raise ToolUserError("Das Datenbankpasswort fehlt (password)")
+            try:
+                ship = await runner().ship(_uuid(a["job_id"]), ctx.principal.label)
+            except CodingError as e:
+                raise ToolUserError(str(e)) from e
+            return {"project_ref": a["project_ref"], "password_stored": True, "ship": ship}
+
         return [
             ToolSpec(
                 "project_create",
@@ -255,7 +286,9 @@ class CodingConnector(Connector):
                 "coding_ship_job",
                 "Liefert einen grünen Coding-Job erneut aus, wenn die automatische Auslieferung nicht durchlief "
                 "(Ergebnis unter result.ship): Job-Branch pushen, Pull Request erstellen und mergen, danach "
-                "Supabase deployen (falls im Projekt). Setzt nach bereits erfolgtem PR/Merge dort fort.",
+                "Supabase deployen (falls im Projekt). Setzt nach bereits erfolgtem PR/Merge dort fort. Wartet die "
+                "Auslieferung auf ein Supabase-Datenbankpasswort (result.ship.state = 'waiting_input'), Sir danach "
+                "fragen und coding_supabase_password nutzen.",
                 _obj({"job_id": {"type": "string"}}, ["job_id"]),
                 ship_job,
                 "high",
@@ -263,6 +296,33 @@ class CodingConnector(Connector):
                 writes=True,
                 timeout_s=1800,
                 summarize=lambda a: f"Job {a['job_id'][:8]} ausliefern: PR mergen und Supabase deployen",
+            ),
+            ToolSpec(
+                "coding_supabase_password",
+                "Nur wenn eine Auslieferung auf das Supabase-Datenbankpasswort wartet (result.ship.state = "
+                "'waiting_input', result.ship.supabase.password_request): password = das Datenbankpasswort, das Sir "
+                "für dieses Supabase-Projekt nennt. Es wird pro Projekt im Schlüsselbund gespeichert (künftig vor "
+                "dem Standardpasswort verwendet) und der Deploy fortgesetzt. Das Passwort nie wiederholen, "
+                "zusammenfassen oder anderswo speichern.",
+                _obj(
+                    {
+                        "job_id": {"type": "string"},
+                        "password": {"type": "string", "minLength": 1},
+                        "project_ref": {"type": "string"},
+                    },
+                    ["job_id"],
+                ),
+                supabase_password,
+                "high",
+                S,
+                writes=True,
+                timeout_s=1800,
+                prepare=store_supabase_password,
+                private_args=("password",),
+                summarize=lambda a: (
+                    f"Supabase-Passwort für Projekt {a.get('project_ref') or '?'} gespeichert – "
+                    f"Job {a['job_id'][:8]} weiter ausliefern (Supabase deployen)"
+                ),
             ),
             ToolSpec(
                 "coding_prepare_pr",

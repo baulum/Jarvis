@@ -35,6 +35,7 @@ from jarvis.agent.llm import AgentEvent
 from jarvis.agent.model_router import MODELS
 from jarvis.agent.persona import host_note, render_soul, whatsapp_note
 from jarvis.events import spawn
+from jarvis.logging_setup import hide_secret_args
 from jarvis.platform.procs import terminate_group
 
 if TYPE_CHECKING:
@@ -529,14 +530,15 @@ class ClaudeCodeAgent:
                     use_id = str(block.get("id") or "")
                     if use_id:
                         p.tool_names[use_id] = name
+                    shown = hide_secret_args(block.get("input"))
                     out.append(
                         AgentEvent(
                             "tool_started",
                             data={
                                 "name": name,
                                 "tool_use_id": use_id,
-                                "args": json.dumps(block.get("input"))[:300],
-                                "input": block.get("input"),
+                                "args": json.dumps(shown)[:300],
+                                "input": shown,
                             },
                         )
                     )

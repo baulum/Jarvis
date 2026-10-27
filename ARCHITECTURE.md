@@ -155,7 +155,11 @@ Fehleranalyse (zweiter Lauf mit Testausgabe, `--resume`) → Abschluss (`CodingR
 nach Ausnahme oder Abbruch): offene Änderungen committen (WIP-Commit, wenn nicht grün), `result.commit` = Spitze des
 Job-Branches inkl. Commits des Agenten → Auslieferung (`CodingRunner._ship_flow`, `coding.auto_ship`): bei grünem Ergebnis
 Branch pushen → PR (kein Draft) → PR mergen (405 „noch nicht mergebar“ wird ~10 min wiederholt) → Supabase deployen
-(`db push`, `functions deploy`, falls `supabase/` im Projekt; sonst übersprungen und vermerkt) → Vercel deployen
+(`db push`, `functions deploy`, falls `supabase/` im Projekt; sonst übersprungen und vermerkt; Datenbankpasswort für
+`db push` per `SUPABASE_DB_PASSWORD` aus dem Schlüsselbund: Projektpasswort `supabase-db-password-<project-ref>`, sonst
+Standardpasswort `supabase-db-password`; lehnt die Datenbank es ab, wird nichts weiter probiert – `result.ship.state =
+"waiting_input"`, Benachrichtigung an Sir, Antwort über `coding_supabase_password`, das Passwort pro Projekt speichert und
+den Deploy fortsetzt) → Vercel deployen
 (`CodingRunner._ship_vercel` → `VercelConnector.deploy_after_merge`, nur bei `vercel.json` bzw. `.vercel/project.json` und
 aktivem Connector; ist das Vercel-Projekt schon mit dem Repo verbunden, übernimmt die Git-Integration; ein Fehler steht in
 `result.ship.vercel` und macht den Merge nicht rückgängig) → Job-Branch auf origin und

@@ -36,6 +36,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from jarvis.db import session_scope
 from jarvis.db.models import ChatEvent, ChatMessage
+from jarvis.logging_setup import hide_secret_args
 from jarvis.tools.artifacts import ArtifactStore, artifacts
 
 if TYPE_CHECKING:
@@ -498,7 +499,7 @@ class TurnRecorder:
         name = str(d.get("name") or d.get("tool") or "werkzeug")
         use_id = str(d.get("tool_use_id") or "") or new_id("use")
         started = self.clock()
-        raw_input = d.get("input", d.get("args"))
+        raw_input = hide_secret_args(d.get("input", d.get("args")))
         item = await self._new(
             "tool",
             {

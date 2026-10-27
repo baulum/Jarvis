@@ -28,6 +28,19 @@ def redact(text: str) -> str:
     return _REDACT.sub("[REDACTED]", text)
 
 
+# Tool arguments that carry a password Sir typed (e.g. coding_supabase_password): never shown or stored as is.
+_SECRET_ARG_KEYS = {"password"}
+
+
+def hide_secret_args(value: Any) -> Any:
+    """Tool input with password fields replaced (for the chat timeline and events)."""
+    if isinstance(value, dict):
+        return {k: "[verborgen]" if k in _SECRET_ARG_KEYS else hide_secret_args(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [hide_secret_args(v) for v in value]
+    return value
+
+
 class RingBuffer(logging.Handler):
     def __init__(self, capacity: int = 2000) -> None:
         super().__init__()

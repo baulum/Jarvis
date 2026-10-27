@@ -71,6 +71,28 @@ class FakeGitHub:
         return {"merged": True, "sha": sha}
 
 
+class FakeSecrets:
+    """Stands in for the Keychain (tests never touch the real one)."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    def get(self, name: str) -> str | None:
+        return self.values.get(name)
+
+    def set(self, name: str, value: str) -> None:
+        self.values[name] = value
+
+
+class FakeNotifier:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    async def notify(self, event: str, title: str, body: str = "", **kw: Any) -> list[str]:
+        self.sent.append({"event": event, "title": title, "body": body, **kw})
+        return ["desktop"]
+
+
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     store: dict[uuid.UUID, Any] = {}
@@ -89,6 +111,8 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     monkeypatch.setattr(runner_mod, "session_scope", scope)
     monkeypatch.setattr(runner_mod, "audit", audit)
     monkeypatch.setattr(runner_mod.bus, "publish", publish)
+    secrets = FakeSecrets()
+    monkeypatch.setattr(runner_mod, "secret_store", secrets)
 
     origin = tmp_path / "github.com" / "acme" / "app.git"
     origin.mkdir(parents=True)
@@ -122,6 +146,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         settings=SimpleNamespace(coding=cfg, paths=SimpleNamespace(workspaces_dir=workspaces, data_dir=tmp_path / "d")),
         connectors=SimpleNamespace(connectors={"github": gh}),
         kill_switch=SimpleNamespace(engaged=False),
+        notifier=FakeNotifier(),
     )
     runner = CodingRunner(state)  # type: ignore[arg-type]
     runner.merge_retry_delays = (0, 0)
@@ -129,6 +154,8 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         runner=runner,
         gh=gh,
         cfg=cfg,
+        secrets=secrets,
+        notifier=state.notifier,
         store=store,
         events=events,
         origin=origin,
@@ -515,6 +542,166 @@ async def test_ship_tool_registered_with_high_risk(env: SimpleNamespace) -> None
     jid = _store_job(env, {"state": "shipped"})
     with pytest.raises(ToolUserError, match="bereits ausgeliefert"):
         await specs["coding_ship_job"].handler(ctx, {"job_id": str(jid)})  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------- Supabase database password
+REF = "abcdefghijklmnopqrst"
+DEFAULT_PW = "Standard-Pw#1"
+PROJECT_PW = "Projekt Pw/2"
+
+
+def _fake_supabase_db(env: SimpleNamespace, accept: str) -> None:
+    """``db push`` succeeds only with SUPABASE_DB_PASSWORD == accept; a refused login echoes the password it got,
+    like a connection string in the CLI output would."""
+    script = env.tmp / "bin" / "supabase"
+    script.parent.mkdir(exist_ok=True)
+    script.write_text(
+        "#!/bin/sh\n"
+        f'echo "$1 ${{SUPABASE_DB_PASSWORD-<none>}}" >> "{env.supabase_log}"\n'
+        f'if [ "$1" = db ] && [ "$SUPABASE_DB_PASSWORD" != "{accept}" ]; then\n'
+        '  echo "postgresql://postgres:$SUPABASE_DB_PASSWORD@db.example: failed SASL auth '
+        '(FATAL: password authentication failed for user \\"postgres\\" (SQLSTATE 28P01))"\n'
+        "  exit 1\n"
+        "fi\n"
+        "echo ok\n"
+    )
+    script.chmod(0o755)
+
+
+def _link(env: SimpleNamespace, ref: str = REF) -> None:
+    """What ``supabase link`` leaves in the local checkout (untracked)."""
+    path = env.repo / "supabase" / ".temp" / "project-ref"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{ref}\n")
+
+
+def _calls(env: SimpleNamespace) -> list[str]:
+    return env.supabase_log.read_text().splitlines()
+
+
+def test_supabase_password_names() -> None:
+    assert runner_mod.SUPABASE_PASSWORD_SECRET == "supabase-db-password"
+    assert runner_mod.supabase_password_secret(REF) == f"supabase-db-password-{REF}"
+    with pytest.raises(runner_mod.CodingError):
+        runner_mod.supabase_password_secret("../evil")
+
+
+async def test_db_push_uses_the_standard_password(env: SimpleNamespace) -> None:
+    _commit(env, SUPABASE_FILES)
+    _link(env)
+    env.secrets.values["supabase-db-password"] = DEFAULT_PW
+    _fake_supabase_db(env, accept=DEFAULT_PW)
+    ship = await _flow(env)
+
+    assert ship["state"] == "shipped", ship
+    assert _calls(env) == [f"db {DEFAULT_PW}", "functions <none>"]  # the functions use the access token
+    assert ship["supabase"]["password"] == {".": "default"}
+    assert env.notifier.sent == []
+
+
+async def test_refused_standard_password_waits_for_sir_without_retrying(env: SimpleNamespace) -> None:
+    head = _commit(env, SUPABASE_FILES)
+    _link(env)
+    env.secrets.values["supabase-db-password"] = DEFAULT_PW
+    _fake_supabase_db(env, accept=PROJECT_PW)
+    ship = await _flow(env)
+
+    assert ship["state"] == "waiting_input" and ship["stage"] == "deploy" and ship["merged"] is True
+    assert _origin_main(env) == head
+    assert _calls(env) == [f"db {DEFAULT_PW}"]  # one attempt, no functions deploy, nothing else tried
+    assert ship["supabase"]["password_request"] == {
+        "project_ref": REF,
+        "root": "",
+        "tried": "default",
+        "secret": f"supabase-db-password-{REF}",
+    }
+    assert ship["supabase"]["deployed"] == []
+    assert "Standard-Datenbankpasswort" in ship["message"] and "coding_supabase_password" in ship["message"]
+    assert [n["event"] for n in env.notifier.sent] == ["coding.supabase_password"]
+    assert REF in env.notifier.sent[0]["title"]
+    dump = repr(ship) + repr(env.notifier.sent)
+    assert DEFAULT_PW not in dump and "Standard-Pw%231" not in dump
+
+
+async def test_project_password_from_sir_is_stored_and_the_delivery_continues(env: SimpleNamespace) -> None:
+    _commit(env, SUPABASE_FILES)
+    _link(env)
+    env.secrets.values["supabase-db-password"] = DEFAULT_PW
+    _fake_supabase_db(env, accept=PROJECT_PW)
+    jid = _store_job(env, await _flow(env))
+
+    assert await env.runner.store_supabase_password(jid, PROJECT_PW) == REF
+    assert env.secrets.values[f"supabase-db-password-{REF}"] == PROJECT_PW
+    ship = await env.runner.ship(jid, "test")
+
+    assert ship["state"] == "shipped", ship
+    assert len(env.gh.merged) == 1  # continued after the merge
+    assert _calls(env)[1:] == [f"db {PROJECT_PW}", "functions <none>"]
+    assert ship["supabase"]["password"] == {".": "project"}
+    assert PROJECT_PW not in repr(ship)
+
+
+async def test_stored_project_password_is_preferred_and_asked_again_when_refused(env: SimpleNamespace) -> None:
+    _commit(env, SUPABASE_FILES)
+    _link(env)
+    env.secrets.values["supabase-db-password"] = DEFAULT_PW
+    env.secrets.values[f"supabase-db-password-{REF}"] = "altes Passwort"
+    _fake_supabase_db(env, accept=DEFAULT_PW)
+    ship = await _flow(env)
+
+    # the project password wins over the standard one; refused → wait, the standard password is not tried as well
+    assert _calls(env) == ["db altes Passwort"]
+    assert ship["state"] == "waiting_input" and ship["supabase"]["password_request"]["tried"] == "project"
+    assert "hinterlegten Projektpasswort" in ship["message"] and "altes Passwort" not in repr(ship)
+
+
+async def test_refused_login_without_project_link_fails(env: SimpleNamespace) -> None:
+    _commit(env, SUPABASE_FILES)  # no supabase/.temp/project-ref
+    env.secrets.values["supabase-db-password"] = DEFAULT_PW
+    _fake_supabase_db(env, accept=PROJECT_PW)
+    ship = await _flow(env)
+
+    assert ship["state"] == "failed" and "supabase link" in ship["message"]
+    assert DEFAULT_PW not in ship["message"] and env.notifier.sent == []
+
+
+async def test_store_supabase_password_only_while_waiting(env: SimpleNamespace) -> None:
+    jid = _store_job(env, {"state": "failed", "merged": True})
+    with pytest.raises(runner_mod.CodingError, match="wartet nicht"):
+        await env.runner.store_supabase_password(jid, PROJECT_PW)
+    assert env.secrets.values == {}
+
+
+async def test_supabase_password_tool_keeps_the_password_out_of_its_arguments(env: SimpleNamespace) -> None:
+    _commit(env, SUPABASE_FILES)
+    _link(env)
+    _fake_supabase_db(env, accept=PROJECT_PW)
+    jid = _store_job(env, await _flow(env))  # no password stored at all: the CLI's own login is refused
+    assert env.store[jid].result["ship"]["supabase"]["password_request"]["tried"] == "none"
+
+    conn = CodingConnector.__new__(CodingConnector)
+    conn.state = SimpleNamespace(coding=env.runner)  # type: ignore[assignment]
+    spec = {t.name: t for t in conn.tools()}["coding_supabase_password"]
+    assert spec.risk == "high" and spec.private_args == ("password",) and spec.prepare is not None
+    ctx = SimpleNamespace(principal=SimpleNamespace(label="test"))
+    args = await spec.prepare(ctx, {"job_id": str(jid), "password": PROJECT_PW})  # type: ignore[arg-type]
+
+    assert args == {"job_id": str(jid), "project_ref": REF}  # what approval, audit and ledger get to see
+    assert env.secrets.values == {f"supabase-db-password-{REF}": PROJECT_PW}
+    assert PROJECT_PW not in spec.describe(args)
+    result = await spec.handler(ctx, args)  # type: ignore[arg-type]
+    assert result["ship"]["state"] == "shipped" and result["project_ref"] == REF
+
+
+def test_hide_secret_args() -> None:
+    from jarvis.logging_setup import hide_secret_args
+
+    assert hide_secret_args({"job_id": "1", "password": "x", "n": [{"password": "y"}]}) == {
+        "job_id": "1",
+        "password": "[verborgen]",
+        "n": [{"password": "[verborgen]"}],
+    }
+    assert hide_secret_args("text") == "text"
 
 
 # ---------------------------------------------------------------- through _run (job status → ship)
