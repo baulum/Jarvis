@@ -160,8 +160,11 @@ Branch pushen → PR (kein Draft) → PR mergen (405 „noch nicht mergebar“ w
 aktivem Connector; ist das Vercel-Projekt schon mit dem Repo verbunden, übernimmt die Git-Integration; ein Fehler steht in
 `result.ship.vercel` und macht den Merge nicht rückgängig) → Job-Branch auf origin und
 lokal sowie Worktree löschen (nur wenn nichts Ungemergtes darin ist). Rot, Fehler oder Abbruch: Job-Branch wird gepusht
-(Sicherung), aber nichts auf `main`, kein Merge, kein Deploy, der Worktree bleibt für „Wiederholen“. Ergebnis in
-`result.ship`, Probleme in `result.delivery_error`. Erneuter Versuch: `coding_ship_job`; Draft-PR nur noch auf Wunsch über
+(Sicherung), aber nichts auf `main`, kein Merge, kein Deploy, der Worktree bleibt für „Wiederholen“. Lief der Job direkt
+auf `main` (Kundenseite ohne eigenen Worktree): grün → `main` ohne PR nach origin pushen (nur Fast-Forward), rot → gar
+nichts pushen; Commits werden gegen `origin/main` gezählt. Ist origin leer (frisch angelegtes GitHub-Repo), wird `main`
+zuerst initial gepusht (ohne lokalen `main` wird der Job-Branch zu `main`), vermerkt in `result.ship.empty_repo`.
+Ergebnis in `result.ship`, Probleme in `result.delivery_error`. Erneuter Versuch: `coding_ship_job`; Draft-PR nur noch auf Wunsch über
 `coding_prepare_pr`. Parallelität: `CodingRunner._slot` vergibt bis zu `coding.max_parallel_jobs` Plätze (Semaphore), Jobs
 für dieselbe Kundenseite (ohne eigenen Worktree) zusätzlich nacheinander; eine Sperre je Repository (`_repo_lock`)
 serialisiert Worktree anlegen/entfernen und die ganze Auslieferung, sodass parallele Jobs nacheinander nach `main` gehen.

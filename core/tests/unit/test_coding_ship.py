@@ -1077,3 +1077,231 @@ async def test_ship_retry_syncs_the_local_project(env: SimpleNamespace) -> None:
     assert _local_head(env) == head and (env.repo / "app.py").exists()
     assert env.store[jid].result["ship"]["local_sync"] == {"state": "synced", "reason": None, "head": head}
     assert "Lokales Projekt auf origin/main aktualisiert" in ship["message"]
+
+
+# ---------------------------------------------------------------- empty origin (fresh GitHub repo) / job on the base branch
+def _empty_origin(env: SimpleNamespace, name: str) -> Path:
+    """Like ``gh repo create --source … --remote origin``: the GitHub repository exists, but has no branch yet."""
+    origin = env.tmp / "github.com" / "acme" / f"{name}.git"
+    origin.mkdir(parents=True)
+    _git(origin, "init", "-q", "--bare", "-b", "main")
+    return origin
+
+
+def _site(env: SimpleNamespace, origin: Path) -> Path:
+    """A customer site outside the workspace, edited in place: the job works on main in the project folder."""
+    site = env.tmp / "Kunden-Seiten" / "praxis"
+    site.mkdir(parents=True)
+    _git(site, "init", "-q", "-b", "main")
+    (site / "index.html").write_text("hi\n")
+    _git(site, "add", "-A")
+    _git(site, "commit", "-q", "-m", "init")
+    _git(site, "remote", "add", "origin", str(origin))
+    return site
+
+
+def _site_commit(site: Path, name: str) -> str:
+    (site / name).write_text(f"{name}\n")
+    _git(site, "add", "-A")
+    _git(site, "commit", "-q", "-m", name)
+    return _git(site, "rev-parse", "HEAD")
+
+
+async def _site_flow(env: SimpleNamespace, site: Path, *, green: bool = True) -> dict[str, Any]:
+    return await env.runner._ship_flow(
+        uuid.uuid4(),
+        repo=site,
+        worktree=site,
+        branch="main",
+        title="Feature",
+        body="Zusammenfassung",
+        green=green,
+        reason="Die Tests sind rot",
+    )
+
+
+def _branches(origin: Path) -> list[str]:
+    return _git(origin, "branch", "--format=%(refname:short)").split()
+
+
+async def test_empty_origin_job_on_base_pushes_main_initially(env: SimpleNamespace) -> None:
+    """Job f46bf23c: origin freshly created and empty → 'git fetch origin: couldn't find remote ref main'."""
+    origin = _empty_origin(env, "praxis")
+    site = _site(env, origin)
+    head = _site_commit(site, "about.html")
+    ship = await _site_flow(env, site)
+
+    assert ship["state"] == "shipped", ship
+    assert ship["pushed"] is True and ship["merged"] is True and ship["on_base"] is True
+    assert ship["empty_repo"] == "Leeres Repo: main initial gepusht."
+    assert _branches(origin) == ["main"] and _git(origin, "rev-parse", "main") == head
+    assert _git(site, "rev-parse", "--abbrev-ref", "main@{upstream}") == "origin/main"
+    assert env.gh.created == [] and env.gh.merged == []  # no PR needed
+    assert ship["message"].startswith("Ausgeliefert: Leeres Repo: main initial gepusht. Job lief direkt auf main")
+    assert "cleanup" not in ship and "Aufräumen" not in ship["message"]
+    assert ship["local_sync"]["state"] == "synced" and _git(site, "rev-parse", "HEAD") == head
+    assert site.is_dir() and (site / "about.html").exists()
+
+
+async def test_job_on_base_with_existing_origin_pushes_without_pr(env: SimpleNamespace) -> None:
+    origin = _empty_origin(env, "praxis")
+    site = _site(env, origin)
+    _git(site, "push", "-q", "-u", "origin", "main")
+    head = _site_commit(site, "about.html")
+    ship = await _site_flow(env, site)
+
+    assert ship["state"] == "shipped" and "empty_repo" not in ship
+    assert _git(origin, "rev-parse", "main") == head and env.gh.created == []
+    assert "Job lief direkt auf main, nach origin gepusht – kein PR nötig." in ship["message"]
+    assert "Aufräumen" not in ship["message"]
+
+
+async def test_job_on_base_without_changes_has_nothing_to_ship(env: SimpleNamespace) -> None:
+    origin = _empty_origin(env, "praxis")
+    site = _site(env, origin)
+    _git(site, "push", "-q", "-u", "origin", "main")
+    ship = await _site_flow(env, site)
+
+    assert ship["nothing_to_ship"] is True and ship["state"] == "not_shipped"
+    assert ship["message"] == "Nichts auszuliefern: keine Änderungen gegenüber origin/main."
+    assert "cleanup" not in ship
+
+
+async def test_job_on_base_rejected_push_keeps_commits_local(env: SimpleNamespace) -> None:
+    origin = _empty_origin(env, "praxis")
+    site = _site(env, origin)
+    _git(site, "push", "-q", "-u", "origin", "main")
+    other = env.tmp / "other"
+    _git(env.tmp, "clone", "-q", str(origin), str(other))
+    remote_head = _site_commit(other, "elsewhere.html")
+    _git(other, "push", "-q", "origin", "main")
+    _site_commit(site, "about.html")
+    ship = await _site_flow(env, site)
+
+    assert ship["state"] == "failed" and ship["merged"] is False
+    assert _git(origin, "rev-parse", "main") == remote_head  # never overwritten
+    assert "die Commits bleiben lokal auf main" in ship["message"]
+
+
+async def test_empty_origin_with_job_branch_pushes_main_then_merges_pr(env: SimpleNamespace) -> None:
+    origin = _empty_origin(env, "fresh")
+    _git(env.repo, "remote", "set-url", "origin", str(origin))
+    env.origin = env.gh.origin = origin
+    base = _git(env.repo, "rev-parse", "main")
+    head = _commit(env, {"app.py": "print(1)\n"})
+    ship = await _flow(env)
+
+    assert ship["state"] == "shipped", ship
+    assert ship["empty_repo"] == "Leeres Repo: main initial gepusht."
+    assert env.gh.created == [
+        {"repo": "acme/fresh", "head": BRANCH, "base": "main", "title": "Jarvis: Feature", "draft": False}
+    ]
+    assert env.gh.merged[0]["sha"] == head and _origin_main(env) == head
+    assert _git(origin, "merge-base", "--is-ancestor", base, "main") == ""
+    assert ship["message"].startswith("Ausgeliefert: Leeres Repo: main initial gepusht. PR #7 in main gemergt")
+    _assert_cleaned_up(env, ship)
+
+
+async def test_empty_origin_without_local_base_turns_job_branch_into_main(env: SimpleNamespace) -> None:
+    origin = _empty_origin(env, "fresh")
+    _git(env.repo, "remote", "set-url", "origin", str(origin))
+    env.origin = env.gh.origin = origin
+    _git(env.repo, "checkout", "-q", "--detach")
+    _git(env.repo, "branch", "-D", "main")
+    head = _commit(env, {"app.py": "print(1)\n"})
+    ship = await _flow(env)
+
+    assert ship["state"] == "shipped", ship
+    assert ship["empty_repo"] == "Leeres Repo: main aus dem Job-Branch angelegt und gepusht."
+    assert _branches(origin) == ["main"] and _origin_main(env) == head
+    assert env.gh.created == [] and ship["direct"] is True
+    _assert_cleaned_up(env, ship)
+
+
+async def test_red_job_on_base_with_empty_origin_pushes_nothing(env: SimpleNamespace) -> None:
+    origin = _empty_origin(env, "praxis")
+    site = _site(env, origin)
+    _site_commit(site, "about.html")
+    ship = await _site_flow(env, site, green=False)
+
+    assert ship["state"] == "not_shipped" and ship["pushed"] is False and ship["merged"] is False
+    assert _branches(origin) == []
+    assert "der Job lief direkt auf main – nichts gepusht" in ship["message"]
+    assert site.is_dir() and env.gh.created == []
+
+
+async def test_red_job_branch_with_empty_origin_backs_up_only_the_job_branch(env: SimpleNamespace) -> None:
+    origin = _empty_origin(env, "fresh")
+    _git(env.repo, "remote", "set-url", "origin", str(origin))
+    _commit(env, {"app.py": "print(1)\n"})
+    ship = await _flow(env, green=False)
+
+    assert ship["state"] == "not_shipped" and ship["pushed"] is True
+    assert _branches(origin) == [BRANCH]  # main never reaches origin from a red job
+    assert env.gh.created == [] and env.gh.merged == []
+
+
+def _site_job(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, site: Path, *, tests_pass: bool) -> uuid.UUID:
+    async def agent_commits(env: SimpleNamespace) -> dict[str, Any]:
+        _site_commit(site, "agent.html")  # the agent commits itself …
+        (site / "runner.html").write_text("x\n")  # … and leaves one change for the runner's commit
+        return {"is_error": False, "result": "Fertig", "session_id": "s"}
+
+    monkeypatch.setattr(runner_mod, "CUSTOMER_SITES_DIR", site.parent)
+    jid = _prepare_job(env, monkeypatch, tests_pass=tests_pass, agent=agent_commits)
+    record = env.store[jid]
+    record.repo_path = record.worktree_path = str(site)
+    record.branch = "main"
+    return jid
+
+
+async def test_run_job_on_base_counts_its_commits_against_origin(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Job f46bf23c reported ``commits: 0`` and ``commit: null``: main was compared with itself."""
+    origin = _empty_origin(env, "praxis")
+    site = _site(env, origin)
+    _git(site, "push", "-q", "-u", "origin", "main")
+    jid = _site_job(env, monkeypatch, site, tests_pass=True)
+    await env.runner._run(jid)
+    job = env.store[jid]
+
+    assert job.status == "completed" and job.result["delivery_error"] is None
+    assert job.result["commits"] == 2
+    assert job.result["commit"] == _git(site, "rev-parse", "--short", "HEAD")
+    assert "agent.html" in job.result["diffstat"] and "runner.html" in job.result["diffstat"]
+    assert job.result["ship"]["state"] == "shipped"
+    assert _git(origin, "rev-parse", "main") == _git(site, "rev-parse", "HEAD")
+
+
+async def test_run_job_on_base_with_empty_origin_counts_all_commits(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin = _empty_origin(env, "praxis")
+    site = _site(env, origin)
+    jid = _site_job(env, monkeypatch, site, tests_pass=True)
+    await env.runner._run(jid)
+    job = env.store[jid]
+
+    assert job.status == "completed" and job.result["delivery_error"] is None
+    assert job.result["commits"] == 3  # init + agent + runner: nothing of it is on origin yet
+    assert job.result["commit"] == _git(site, "rev-parse", "--short", "HEAD")
+    ship = job.result["ship"]
+    assert ship["state"] == "shipped" and ship["empty_repo"] == "Leeres Repo: main initial gepusht."
+    assert _git(origin, "rev-parse", "main") == _git(site, "rev-parse", "HEAD")
+    assert "Leeres Repo: main initial gepusht." in _finished(env)["summary"]
+
+
+async def test_run_red_job_on_base_with_empty_origin_never_reaches_main(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin = _empty_origin(env, "praxis")
+    site = _site(env, origin)
+    jid = _site_job(env, monkeypatch, site, tests_pass=False)
+    await env.runner._run(jid)
+    job = env.store[jid]
+
+    assert job.status == "failed"
+    assert job.result["commits"] == 3 and job.result["ship"]["pushed"] is False  # init + two agent rounds
+    assert _branches(origin) == []
+    assert _git(site, "status", "--porcelain") == ""  # everything committed, but only locally

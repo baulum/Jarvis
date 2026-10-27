@@ -1328,19 +1328,22 @@ class CodingRunner:
 
     async def _branch_work(self, wt: Path) -> dict[str, Any]:
         """Commits on the job branch that are not on the base branch (local or origin) – no matter who made them:
-        the agent often commits itself, then the runner's own commit is empty. ``commit`` is the branch head."""
+        the agent often commits itself, then the runner's own commit is empty. ``commit`` is the branch head.
+        A job that ran directly on the base branch (customer site edited in place) is compared with origin only –
+        against itself it would never have commits; with an empty origin all of its commits are new."""
         base = getattr(self.cfg, "ship_base_branch", "main")
+        on_base = await self._git(wt, "rev-parse", "--abbrev-ref", "HEAD", check=False) == base
         refs = [
             ref
-            for ref in (f"origin/{base}", base)
+            for ref in ((f"origin/{base}",) if on_base else (f"origin/{base}", base))
             if await self._git(wt, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
         ]
         head = await self._git(wt, "rev-parse", "--short", "HEAD", check=False) or None
-        if not refs:  # no base branch to compare with
+        if not refs and not on_base:  # no base branch to compare with
             return {"commit": head, "commits": None, "diffstat": ""}
-        count = await self._git(wt, "rev-list", "--count", "HEAD", "--not", *refs, check=False)
+        count = await self._git(wt, "rev-list", "--count", "HEAD", *(("--not", *refs) if refs else ()), check=False)
         commits = int(count) if count.isdigit() else 0
-        fork = await self._git(wt, "merge-base", "HEAD", *refs, check=False) if commits else ""
+        fork = await self._git(wt, "merge-base", "HEAD", *refs, check=False) if commits and refs else ""
         diffstat = await self._git(wt, "diff", "--stat", fork, "HEAD", check=False) if fork else ""
         return {"commit": head if commits else None, "commits": commits, "diffstat": diffstat[-3000:]}
 
@@ -1463,9 +1466,11 @@ class CodingRunner:
     ) -> dict[str, Any]:
         """Green: push the job branch, open a (non-draft) PR, merge it, deploy Supabase, then delete the job branch
         (remote and local) and the worktree; after a merge the local project is fast-forwarded to origin when that is
-        safe (``result["ship"]["local_sync"]``). Red / error / cancelled: the job branch is pushed as a backup, but
-        nothing reaches main or Supabase and the worktree stays. Never raises (except cancellation); the outcome
-        is the returned dict, stored as ``result["ship"]``."""
+        safe (``result["ship"]["local_sync"]``). A job that ran directly on the base branch (customer site) pushes
+        that branch without a PR; an empty origin first gets the base branch (``result["ship"]["empty_repo"]``).
+        Red / error / cancelled: the job branch is pushed as a backup (never the base branch), but nothing reaches
+        main or Supabase and the worktree stays. Never raises (except cancellation); the outcome is the returned
+        dict, stored as ``result["ship"]``."""
         base = self.cfg.ship_base_branch
         prior = prior or {}
         ship: dict[str, Any] = {
@@ -1500,6 +1505,7 @@ class CodingRunner:
                     "vercel",
                     "cleanup",
                     "local_sync",
+                    "empty_repo",
                     "message",
                 )
             },
@@ -1531,16 +1537,23 @@ class CodingRunner:
             except Exception as e:  # any error (also network/HTTP) must end up in the result, not drop the job's
                 pr = ship["pr"]
                 ship["state"] = "failed"
-                aftermath = (
-                    f"Der Merge ist bereits erfolgt (PR #{pr['number']}), nur der Deploy fehlt."
-                    if ship["merged"] and pr
-                    else f"Nichts gemergt oder deployt; Job-Branch {branch} bleibt bestehen"
-                    + (f", PR: {pr['url']}." if pr else ".")
-                )
+                if ship["merged"] and pr:
+                    aftermath = f"Der Merge ist bereits erfolgt (PR #{pr['number']}), nur der Deploy fehlt."
+                elif branch == ship["base"]:
+                    aftermath = (
+                        f"{branch} ist bereits auf origin, nur der Deploy fehlt."
+                        if ship["merged"]
+                        else f"Nichts gepusht oder deployt; die Commits bleiben lokal auf {branch}."
+                    )
+                else:
+                    aftermath = f"Nichts gemergt oder deployt; Job-Branch {branch} bleibt bestehen" + (
+                        f", PR: {pr['url']}." if pr else "."
+                    )
                 ship["message"] = (
                     f"Auslieferung fehlgeschlagen ({ship['stage']}): {str(e) or type(e).__name__}. {aftermath}"[:900]
                 )
-            if ship["merged"] or ship.get("nothing_to_ship"):
+            # a job that ran directly on the base branch has no job branch or worktree of its own to remove
+            if (ship["merged"] or ship.get("nothing_to_ship")) and branch != ship["base"]:
                 try:
                     await self._ship_cleanup(ship, repo, worktree, branch)
                 except Exception as e:
@@ -1607,6 +1620,9 @@ class CodingRunner:
         if getattr(getattr(self.state, "kill_switch", None), "engaged", False):
             ship["message"] = f"{note}; Not-Aus aktiv – Job-Branch {branch} nur lokal gesichert (Worktree {wt})."
             return
+        if branch == ship["base"]:  # the job ran directly on the base branch: a backup push would deliver it
+            ship["message"] = f"{note}; der Job lief direkt auf {branch} – nichts gepusht, die Commits bleiben lokal."
+            return
         ship["stage"] = "backup"
         try:
             if not (await self._branch_work(wt))["commits"]:
@@ -1658,7 +1674,15 @@ class CodingRunner:
         repo_name = parse_github_repo(origin)
         if repo_name is None:
             raise CodingError(f"origin ist kein GitHub-Repository: {origin}")
+        empty = not await self._git(wt, "ls-remote", "--heads", "origin", f"refs/heads/{base}")
+        if branch == base:  # customer site edited in place: no job branch, no PR
+            await self._ship_on_base(ship, wt, empty)
+            return
         gh = self._github()
+        if empty:
+            await self._ship_initial_base(ship, wt)
+            if ship["merged"]:
+                return
         await self._git(wt, "fetch", "origin", base)
         head = await self._git(wt, "rev-parse", "HEAD")
         ship["head"] = head
@@ -1708,6 +1732,44 @@ class CodingRunner:
         ship["merged"] = True
         ship["merge_sha"] = head
         ship["direct"] = True
+
+    async def _ship_on_base(self, ship: dict[str, Any], wt: Path, empty: bool) -> None:
+        """The job ran directly on the base branch: push it to origin as it is (fast-forward only, a diverged
+        origin is never overwritten). An empty origin gets the base branch as its first push."""
+        base = ship["base"]
+        head = await self._git(wt, "rev-parse", "HEAD")
+        ship["head"] = head
+        if not empty:
+            await self._git(wt, "fetch", "origin", base)
+            if await self._git(wt, "rev-list", "--count", f"origin/{base}..HEAD") == "0":
+                ship["nothing_to_ship"] = True
+                ship["message"] = f"Nichts auszuliefern: keine Änderungen gegenüber origin/{base}."
+                return
+        await self._git(wt, "push", "-u", "origin", base)
+        ship["pushed"] = True
+        ship["merged"] = True
+        ship["merge_sha"] = head
+        ship["direct"] = True
+        ship["on_base"] = True
+        if empty:
+            ship["empty_repo"] = f"Leeres Repo: {base} initial gepusht."
+
+    async def _ship_initial_base(self, ship: dict[str, Any], wt: Path) -> None:
+        """origin is empty (freshly created on GitHub) and the job has its own branch: push the local base branch
+        first so the PR has something to go into. Without a local base branch the job branch becomes the base."""
+        base = ship["base"]
+        if await self._git(wt, "rev-parse", "--verify", "--quiet", f"refs/heads/{base}^{{commit}}", check=False):
+            await self._git(wt, "push", "-u", "origin", base)
+            ship["empty_repo"] = f"Leeres Repo: {base} initial gepusht."
+            return
+        head = await self._git(wt, "rev-parse", "HEAD")
+        await self._git(wt, "push", "origin", f"HEAD:refs/heads/{base}")
+        ship["head"] = head
+        ship["pushed"] = True
+        ship["merged"] = True
+        ship["merge_sha"] = head
+        ship["direct"] = True
+        ship["empty_repo"] = f"Leeres Repo: {base} aus dem Job-Branch angelegt und gepusht."
 
     async def _merge_when_ready(self, gh: Any, repo_name: str, number: int, head: str) -> Any:
         """Merges the PR. Right after it was opened GitHub may refuse with 405 (mergeability still being computed,
@@ -1775,9 +1837,15 @@ class CodingRunner:
         await self._git(repo, "fetch", "origin", base)
         listing = await self._git(repo, "ls-tree", "-r", "--name-only", f"origin/{base}")
         projects = supabase_projects(listing.splitlines())
-        merged_note = (
-            f"PR #{pr['number']} in {base} gemergt ({pr['url']})." if pr else f"Direkt nach {base} gemergt und gepusht."
-        )
+        if pr:
+            merged_note = f"PR #{pr['number']} in {base} gemergt ({pr['url']})."
+        elif ship.get("on_base"):
+            pushed = "" if ship.get("empty_repo") else ", nach origin gepusht"
+            merged_note = f"Job lief direkt auf {base}{pushed} – kein PR nötig."
+        else:
+            merged_note = f"Direkt nach {base} gemergt und gepusht."
+        if ship.get("empty_repo"):
+            merged_note = f"{ship['empty_repo']} {merged_note}"
         if not projects:
             ship["supabase"] = {"present": False, "note": "Supabase nicht im Projekt – übersprungen"}
             ship["state"] = "shipped"
