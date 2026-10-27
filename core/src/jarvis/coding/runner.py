@@ -319,9 +319,10 @@ class CodingRunner:
 
     # ------------------------------------------------------------------ environment
     def git_identity(self) -> tuple[str, str]:
-        if getattr(self, "_identity", None) is None:
-            self._identity = git_identity()
-        return self._identity
+        identity = getattr(self, "_identity", None)
+        if identity is None:
+            identity = self._identity = git_identity()
+        return identity
 
     def _env(self) -> dict[str, str]:
         env = {
