@@ -15,6 +15,7 @@ import { dirname } from "node:path";
 import { Transform, type TransformCallback } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import makeWASocket, {
+  ALL_WA_PATCH_NAMES,
   Browsers,
   DisconnectReason,
   downloadMediaMessage,
@@ -31,6 +32,7 @@ import makeWASocket, {
   type Chat,
   type Contact,
   type WAMessage,
+  type WAPatchName,
   type WAMessageKey,
 } from "@whiskeysockets/baileys";
 import type { Logger } from "pino";
@@ -63,6 +65,8 @@ export interface SocketLike {
   fetchMessageHistory(count: number, oldestMsgKey: WAMessageKey, oldestMsgTimestamp: number): Promise<string>;
   groupMetadata(jid: string): Promise<{ subject: string; participants: { id: string; admin?: string | null }[] }>;
   onWhatsApp(...jids: string[]): Promise<{ jid: string; exists: unknown }[] | undefined>;
+  groupFetchAllParticipating?(): Promise<Record<string, { id: string; subject?: string }>>;
+  resyncAppState?(collections: readonly WAPatchName[], isInitialSync: boolean): Promise<void>;
   logout(msg?: string): Promise<void>;
   end(error: Error | undefined): void;
 }
@@ -88,7 +92,7 @@ export const realSocketFactory: SocketFactory = (cfg) =>
     syncFullHistory: cfg.syncFullHistory,
     generateHighQualityLinkPreview: false,
     getMessage: cfg.getMessage,
-    shouldIgnoreJid: (jid: string) => isJidStatusBroadcast(jid) || jid.endsWith("@newsletter"),
+    shouldIgnoreJid: (jid?: string) => !jid || isJidStatusBroadcast(jid) || jid.endsWith("@newsletter"),
   }) as unknown as SocketLike;
 
 export async function resolveWaVersion(): Promise<WAVersion | undefined> {
@@ -354,6 +358,8 @@ export class WhatsAppConnection {
       "chats.update",
       "contacts.upsert",
       "contacts.update",
+      "groups.upsert",
+      "groups.update",
     ] as const) {
       sock.ev.removeAllListeners(ev);
     }
@@ -371,11 +377,14 @@ export class WhatsAppConnection {
     const { state, saveCreds } = await useEncryptedAuthState(this.store);
     const version = await this.resolveVersion();
     if (gen !== this.generation) return; // disconnected meanwhile
+    // WhatsApp currently answers a socket that asks for the full history with close code 428 (no QR, no login), so
+    // the option stays off whatever the setting says; the recent history WhatsApp sends on its own is still stored
+    const syncFullHistory = false;
     const sock = this.factory({
       auth: state,
       logger: this.opts.logger,
       ...(version ? { version } : {}),
-      syncFullHistory: this.opts.syncFullHistory,
+      syncFullHistory,
       getMessage: async (key) => (key.id ? this.sent.get(key.id) : undefined),
     });
     this.sock = sock;
@@ -433,6 +442,12 @@ export class WhatsAppConnection {
     sock.ev.on("chats.update", (chats) => {
       if (live()) this.emitChats(chats as Partial<Chat>[]);
     });
+    sock.ev.on("groups.upsert", (groups) => {
+      if (live()) this.emitGroupNames(groups);
+    });
+    sock.ev.on("groups.update", (groups) => {
+      if (live()) this.emitGroupNames(groups);
+    });
     sock.ev.on("contacts.upsert", (contacts) => {
       if (live()) this.emitContacts(contacts);
     });
@@ -465,6 +480,7 @@ export class WhatsAppConnection {
       const user = sock.user;
       if (user?.id) this.me = { jid: jidNormalizedUser(user.id), ...(user.name ? { name: user.name } : {}) };
       this.setState("open");
+      void this.refreshDirectory(sock);
     } else if (u.connection === "close") {
       await this.onClose(u.lastDisconnect?.error);
     }
@@ -527,6 +543,26 @@ export class WhatsAppConnection {
         void this.onClose(e);
       });
     }, delay);
+  }
+
+  /** Group subjects and address book names are not part of the chat list: fetch them once the link is open. */
+  private async refreshDirectory(sock: SocketLike): Promise<void> {
+    const live = () => this.sock === sock;
+    try {
+      const groups = await sock.groupFetchAllParticipating?.();
+      if (groups && live()) this.emitGroupNames(Object.values(groups));
+    } catch (e) {
+      this.opts.logger.warn({ err: String(e) }, "could not fetch group names");
+    }
+    try {
+      if (live()) await sock.resyncAppState?.(ALL_WA_PATCH_NAMES, true);
+    } catch (e) {
+      this.opts.logger.warn({ err: String(e) }, "could not sync the address book");
+    }
+  }
+
+  private emitGroupNames(groups: { id?: string | null; subject?: string | null }[]): void {
+    this.emitChats(groups.filter((g) => g.id && g.subject).map((g) => ({ id: g.id!, name: g.subject! })));
   }
 
   // ------------------------------------------------------------------ incoming

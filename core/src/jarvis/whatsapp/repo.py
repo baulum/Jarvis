@@ -219,7 +219,7 @@ class WhatsAppRepo:
             hq = select(WhatsAppChat.jid, WhatsAppChat.name)
             if jids is not None:
                 ids = list(set(jids))
-                cq = cq.where(WhatsAppContact.jid.in_(ids))
+                cq = cq.where(or_(WhatsAppContact.jid.in_(ids), WhatsAppContact.lid.in_(ids)))
                 hq = hq.where(WhatsAppChat.jid.in_(ids))
             contacts = (await s.execute(cq)).scalars().all()
             chats = (await s.execute(hq)).all()
@@ -231,6 +231,8 @@ class WhatsAppRepo:
             best = c.name or out.get(c.jid) or c.verified_name or c.notify
             if best:
                 out[c.jid] = best
+                if c.lid and c.lid not in out:  # chats of "anonymous" contacts are addressed by their @lid
+                    out[c.lid] = best
         return out
 
     async def list_chats(

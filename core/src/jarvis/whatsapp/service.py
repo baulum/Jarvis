@@ -401,7 +401,11 @@ class WhatsAppService:
                 stage=data.get("stage"),
             )
         elif name == "sidecar":
-            if data.get("state") in ("exited", "unavailable"):
+            if data.get("state") == "ready":
+                # after a (re)start the status shown so far is stale: pick up what the sidecar resumed on its own
+                with contextlib.suppress(SidecarError):
+                    await self._apply_status(await self.sidecar.request("status", {}, timeout=10))
+            elif data.get("state") in ("exited", "unavailable"):
                 self.status = {
                     **self.status,
                     "state": "stopped" if data.get("state") == "unavailable" else "restarting",

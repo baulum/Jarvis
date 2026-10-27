@@ -35,6 +35,11 @@ export interface EncryptedAuthState {
   saveCreds: () => Promise<void>;
 }
 
+/** Baileys never sets `registered` when a device is linked by QR or pairing code – the account in `me` is what counts. */
+export function isLinked(creds: Pick<AuthenticationCreds, "registered" | "me"> | null | undefined): boolean {
+  return Boolean(creds?.registered || creds?.me?.id);
+}
+
 export class EncryptedFileStore {
   private readonly keys: SessionKeys;
   private readonly lock = new KeyedLock();
@@ -110,7 +115,7 @@ export class EncryptedFileStore {
 
   async hasCreds(): Promise<boolean> {
     const creds = await this.read<AuthenticationCreds>(CREDS);
-    return Boolean(creds?.registered);
+    return isLinked(creds);
   }
 
   async clear(): Promise<void> {

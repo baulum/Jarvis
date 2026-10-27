@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { EncryptedFileStore, useEncryptedAuthState } from "../src/authState.js";
+import { EncryptedFileStore, isLinked, useEncryptedAuthState } from "../src/authState.js";
 import { deriveKeys, fileNameFor, open, seal } from "../src/crypto.js";
 import { SECRET, tempDir } from "./helpers.js";
 
