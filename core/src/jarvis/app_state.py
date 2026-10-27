@@ -59,6 +59,7 @@ from jarvis.mobile.calls import CallService
 from jarvis.mobile.gateway import GatewayServer
 from jarvis.mobile.livekit_server import LiveKitServer
 from jarvis.mobile.location import LocationStore
+from jarvis.mobile.ota.service import AppUpdateService
 from jarvis.mobile.pairing import PairingService
 from jarvis.mobile.phone_control import PhoneControl
 from jarvis.mobile.push import PushService
@@ -162,6 +163,10 @@ class AppState:
         self.calls = CallService(self)
         self.location = LocationStore(self.push)
         self.phone = PhoneControl(self.push)
+        # OTA updates of the Android app: signed APK when the app's code changes on main (jarvis.mobile.ota)
+        self.app_update: AppUpdateService | None = (
+            AppUpdateService(self) if settings.mobile.enabled and settings.mobile.app_update.enabled else None
+        )
         # Jarvis Device Agents: remote computers (Windows, Linux, Mac) connected over Tailscale/LAN
         self.device_hub = DeviceHub(settings.devices.command_timeout_s, lambda: self.kill_switch.engaged)
         self.device_hub.on_paired_change = self._on_devices_paired_change
@@ -265,6 +270,8 @@ class AppState:
             await self.livekit.start()
             self.alerts.start()
             self.calls.start()
+        if self.app_update is not None:
+            self.app_update.start()
         await self.mcp_hub.start()
         if self.agent is not None:
             await self._start_claude_agent()
@@ -342,6 +349,8 @@ class AppState:
         await self.backup.stop()
         await self.memory.stop()
         await self.alerts.stop()
+        if self.app_update is not None:
+            await self.app_update.stop()
         await self.livekit.stop()
         await self.push.close()
         await self.location.stop()
