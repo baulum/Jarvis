@@ -193,7 +193,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "mss", specifier = ">=9" },
-    { name = "pillow", specifier = ">=11" },
+    { name = "pillow", specifier = ">=13" },
     { name = "playwright", marker = "extra == 'browser'", specifier = ">=1.49" },
     { name = "psutil", specifier = ">=6.1" },
     { name = "websockets", specifier = ">=14" },

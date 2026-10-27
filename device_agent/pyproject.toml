@@ -7,7 +7,7 @@ dependencies = [
     "websockets>=14",
     "psutil>=6.1",
     "mss>=9",
-    "pillow>=11",
+    "pillow>=13",
 ]
 
 [project.optional-dependencies]
