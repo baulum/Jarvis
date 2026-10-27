@@ -17,6 +17,7 @@ ACTIONS: dict[str, str] = {
     "apps.quit": "apps.quit",
     "windows.list": "windows.list",
     "windows.focus": "windows.focus",
+    "windows.frontmost": "windows.frontmost",
     "input.type": "input.keyboard",
     "input.key": "input.keyboard",
     "input.click": "input.mouse",
@@ -43,6 +44,11 @@ ACTIONS: dict[str, str] = {
     "audio.volume": "audio.volume",
     "audio.speak": "audio.speak",
     "audio.play": "audio.play",
+    "ui.tree": "ui.elements",
+    "ui.press": "ui.elements",
+    "automation.list": "automation",
+    "automation.run": "automation",
+    "automation.applescript": "automation.applescript",
 }
 
 # capability → German label
@@ -53,6 +59,7 @@ CAPABILITY_LABELS: dict[str, str] = {
     "apps.quit": "Programme beenden",
     "windows.list": "Fenster auflisten",
     "windows.focus": "Fenster in den Vordergrund holen",
+    "windows.frontmost": "Aktives Programm und Fenster erkennen",
     "input.keyboard": "Tastatur (tippen, Tastenkombinationen)",
     "input.mouse": "Maus (klicken, bewegen, scrollen)",
     "screen.capture": "Screenshots",
@@ -68,6 +75,9 @@ CAPABILITY_LABELS: dict[str, str] = {
     "audio.volume": "Lautstärke",
     "audio.speak": "Sprachausgabe auf dem Gerät",
     "audio.play": "Audiodateien abspielen",
+    "ui.elements": "Bedienelemente lesen und drücken (Accessibility / UI Automation / AT-SPI)",
+    "automation": "Automationen (Apple-Kurzbefehle bzw. freigegebene Skripte)",
+    "automation.applescript": "AppleScript (nur macOS)",
 }
 
 ERROR_CODES = ("unavailable", "invalid", "denied", "kill_switch", "failed", "timeout", "unknown_action", "offline")
@@ -78,6 +88,9 @@ READ_ONLY_ACTIONS = frozenset(
         "system.info",
         "apps.list",
         "windows.list",
+        "windows.frontmost",
+        "ui.tree",
+        "automation.list",
         "screen.capture",
         "clipboard.get",
         "files.list",

@@ -4,7 +4,8 @@ jarvis-device pair --core https://mac.tailnet.ts.net:8767 --code <Code> --finger
 jarvis-device run                      # connect and execute the Core's commands (foreground)
 jarvis-device status | capabilities
 jarvis-device roots list|add|remove <Ordner>
-jarvis-device config terminal on|off | browser on|off | claude <Programm>
+jarvis-device config terminal on|off | browser on|off | automations on|off | claude <Programm>
+jarvis-device automations              Ordner für Automationen (Skripte) anlegen und auflisten
 jarvis-device killswitch on|off        # local emergency stop: only read-only actions
 jarvis-device autostart enable|disable
 jarvis-device unpair
@@ -40,7 +41,7 @@ def build_runtime(cfg: AgentConfig) -> Dispatcher:
 
     home = config_dir()
     policy = PathPolicy(cfg.roots(), protected=[home])
-    return Dispatcher(create_backend(), cfg, policy, KillSwitch(home / "KILL"))
+    return Dispatcher(create_backend(), cfg, policy, KillSwitch(home / "KILL"), home / "automations")
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -161,10 +162,32 @@ def cmd_config(a: argparse.Namespace) -> int:
             print("browser on|off", file=sys.stderr)
             return 1
         cfg.browser_automation = a.value == "on"
+    elif a.key == "automations":
+        if a.value not in ("on", "off"):
+            print("automations on|off", file=sys.stderr)
+            return 1
+        cfg.automations = a.value == "on"
     elif a.key == "claude":
         cfg.claude_binary = a.value
     cfg.save(path)
     print("Gespeichert. Der laufende Agent meldet die Änderung spätestens nach 5 Minuten (oder nach Neustart).")
+    return 0
+
+
+def cmd_automations(_: argparse.Namespace) -> int:
+    """Creates the automations folder and lists what Jarvis may run from it."""
+    from jarvis_device.actions import automations
+
+    folder = automations.folder(config_dir())
+    folder.mkdir(parents=True, exist_ok=True)
+    scripts = automations.list_scripts(folder)
+    print(f"Automationen-Ordner: {folder}")
+    kinds = ".ps1, .cmd, .bat, .py, .exe" if sys.platform.startswith("win") else "ausführbare Dateien, .sh, .py"
+    print(f"Jarvis darf hier abgelegte Skripte ({kinds}) per Namen starten; Eingabe kommt über stdin und JARVIS_INPUT.")
+    for s in scripts:
+        print(f"  • {s['name']}  ({s['file']})")
+    if not scripts:
+        print("  (noch keine)")
     return 0
 
 
@@ -221,10 +244,15 @@ def main(argv: list[str] | None = None) -> int:
     ro.add_argument("action", choices=["list", "add", "remove"])
     ro.add_argument("path", nargs="?")
     ro.set_defaults(fn=cmd_roots)
-    co = sub.add_parser("config", help="Einstellungen: terminal on|off, browser on|off, claude <Programm>")
-    co.add_argument("key", choices=["terminal", "browser", "claude"])
+    co = sub.add_parser(
+        "config", help="Einstellungen: terminal on|off, browser on|off, automations on|off, claude <Programm>"
+    )
+    co.add_argument("key", choices=["terminal", "browser", "automations", "claude"])
     co.add_argument("value")
     co.set_defaults(fn=cmd_config)
+    sub.add_parser("automations", help="Automationen-Ordner anlegen und Skripte auflisten").set_defaults(
+        fn=cmd_automations
+    )
     ks = sub.add_parser("killswitch", help="Lokaler Not-Aus")
     ks.add_argument("state", choices=["on", "off"])
     ks.set_defaults(fn=cmd_killswitch)

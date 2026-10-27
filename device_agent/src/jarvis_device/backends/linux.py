@@ -4,20 +4,26 @@ PulseAudio/PipeWire for volume.
 
 Wayland deliberately forbids global input injection and window lists for normal programs; there the probe
 reports mouse/window control as unavailable *with the reason* (X11 session or ydotool needed).
+
+Controls (``ui.tree``/``ui.press``) go through AT-SPI, the accessibility bus – on X11 *and* Wayland. Its Python
+binding (PyGObject) comes from the distribution, not from pip, so the agent runs a small helper with the system's
+``python3`` (``apt install python3-gi gir1.2-atspi-2.0``). On Wayland the same helper also tells which program is in
+the foreground. The search index is Tracker/LocalSearch (GNOME) when it is there.
 """
 
 from __future__ import annotations
 
 import asyncio
 import configparser
+import json
 import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import psutil
 
@@ -27,6 +33,7 @@ from jarvis_device.backends.base import (
     Capture,
     DesktopBackend,
     Runner,
+    UiTarget,
     Unavailable,
     fuzzy_pick,
     run_process,
@@ -34,6 +41,160 @@ from jarvis_device.backends.base import (
 from jarvis_device.backends.keys import xdotool_combo
 
 XDOTOOL_BUTTON = {"left": "1", "middle": "2", "right": "3"}
+
+ATSPI_CHECK = "import gi; gi.require_version('Atspi', '2.0'); from gi.repository import Atspi"
+ATSPI_MISSING = "AT-SPI fehlt (apt install python3-gi gir1.2-atspi-2.0)"
+
+# Runs with the system python3 (PyGObject); request on stdin, one JSON object on stdout. Paths are child indices
+# from the program's accessible root ("0", "0/1", "0/1/4") – the same ones ui.tree reports.
+ATSPI_SCRIPT = r"""
+import json, sys
+try:
+    import gi
+    gi.require_version("Atspi", "2.0")
+    from gi.repository import Atspi
+except Exception as e:
+    print(json.dumps({"error": "AT-SPI nicht verfügbar: %s" % e})); sys.exit(0)
+
+req = json.load(sys.stdin)
+PRESS = ("click", "press", "activate", "toggle", "jump", "open", "select")
+
+def apps():
+    d = Atspi.get_desktop(0)
+    for i in range(d.get_child_count()):
+        a = d.get_child_at_index(i)
+        if a is not None:
+            yield a
+
+def active_window(app):
+    for i in range(app.get_child_count()):
+        w = app.get_child_at_index(i)
+        if w is not None and w.get_state_set().contains(Atspi.StateType.ACTIVE):
+            return w
+    return None
+
+def find_app():
+    pid, name = req.get("pid"), (req.get("app") or "").casefold()
+    cands = list(apps())
+    if pid:
+        for a in cands:
+            if a.get_process_id() == pid:
+                return a
+    if name:
+        for exact in (True, False):
+            for a in cands:
+                n = (a.get_name() or "").casefold()
+                if (n == name) if exact else (name in n or n in name and n):
+                    return a
+        return None
+    for a in cands:
+        if active_window(a) is not None:
+            return a
+    return None
+
+count = 0
+def node(acc, path, depth):
+    global count
+    count += 1
+    n = {"id": path, "role": acc.get_role_name() or "", "title": acc.get_name() or ""}
+    desc = acc.get_description()
+    if desc:
+        n["description"] = desc[:200]
+    n["enabled"] = acc.get_state_set().contains(Atspi.StateType.ENABLED)
+    try:
+        comp = acc.get_component_iface()
+        if comp is not None:
+            e = comp.get_extents(Atspi.CoordType.SCREEN)
+            if e.width > 0 and e.height > 0:
+                n["bounds"] = {"x": e.x, "y": e.y, "width": e.width, "height": e.height}
+    except Exception:
+        pass
+    if depth < req.get("max_depth", 5):
+        kids = []
+        for i in range(min(acc.get_child_count(), 200)):
+            if count >= req.get("max_nodes", 250):
+                break
+            c = acc.get_child_at_index(i)
+            if c is not None:
+                kids.append(node(c, "%s/%d" % (path, i), depth + 1))
+        if kids:
+            n["children"] = kids
+    return n
+
+def resolve(root, path):
+    acc = root
+    for part in path.split("/")[1:]:
+        acc = acc.get_child_at_index(int(part))
+        if acc is None:
+            raise LookupError("Bedienelement %s nicht gefunden (ui.tree neu lesen)" % path)
+    return acc
+
+def search(root, role, title):
+    stack, seen = [root], 0
+    while stack and seen < 5000:
+        acc = stack.pop(0)
+        seen += 1
+        r = (acc.get_role_name() or "").replace(" ", "").casefold()
+        t = (acc.get_name() or "").casefold()
+        if (not role or r == role) and (not title or t == title):
+            return acc
+        for i in range(min(acc.get_child_count(), 200)):
+            c = acc.get_child_at_index(i)
+            if c is not None:
+                stack.append(c)
+    raise LookupError("Kein passendes Bedienelement gefunden")
+
+def press(acc):
+    act = acc.get_action_iface()
+    n = act.get_n_actions() if act is not None else 0
+    if n <= 0:
+        raise ValueError("Element lässt sich nicht drücken (keine Aktion) – per Klick auf seine Position bedienen")
+    names = [(act.get_action_name(i) or "").casefold() for i in range(n)]
+    idx = next((i for i, nm in enumerate(names) if nm in PRESS), 0)
+    act.do_action(idx)
+    return names[idx]
+
+try:
+    op = req.get("op")
+    if op == "frontmost":
+        for a in apps():
+            w = active_window(a)
+            if w is not None:
+                print(json.dumps({"app": a.get_name() or "", "title": w.get_name() or "", "pid": a.get_process_id()}))
+                break
+        else:
+            print(json.dumps({"app": "", "title": ""}))
+        sys.exit(0)
+    app = find_app()
+    if app is None:
+        raise LookupError("Programm nicht gefunden oder ohne Barrierefreiheit (AT-SPI)")
+    if op == "tree":
+        out = node(app, "0", 0)
+        out["pid"] = app.get_process_id()
+        print(json.dumps(out))
+    else:
+        if req.get("path"):
+            el = resolve(app, req["path"])
+        else:
+            role = (req.get("role") or "").replace(" ", "").casefold()
+            if role.startswith("ax"):
+                role = role[2:]
+            el = search(app, role, (req.get("title") or "").casefold())
+        how = press(el)
+        print(json.dumps({"ok": True, "title": el.get_name() or "", "role": el.get_role_name() or "", "method": how}))
+except Exception as e:
+    print(json.dumps({"error": str(e) or type(e).__name__}))
+"""
+
+
+def parse_tracker(text: str) -> list[str]:
+    """``tracker3 search`` / ``localsearch search`` print file:// URIs (with colours and snippets around them)."""
+    out: list[str] = []
+    for m in re.finditer(r"file://(/[^\s\x1b]+)", text):
+        path = unquote(m.group(1))
+        if path not in out:
+            out.append(path)
+    return out
 
 
 def session_type(environ: Mapping[str, str]) -> str:
@@ -111,20 +272,68 @@ class LinuxBackend(DesktopBackend):
         run: Runner = run_process,
         which: Callable[[str], str | None] = shutil.which,
         environ: Mapping[str, str] | None = None,
+        atspi_probe: Callable[[], CapStatus] | None = None,
     ) -> None:
         super().__init__(run, which)
         self.environ = os.environ if environ is None else environ
         self.kind = session_type(self.environ)
         self._entries: list[dict[str, str]] | None = None
+        self._atspi_probe = atspi_probe or self._probe_atspi
+        self._atspi: CapStatus | None = None
 
     def session(self) -> str:
         return self.kind
+
+    # ------------------------------------------------------------------ AT-SPI helper
+    def system_python(self) -> str | None:
+        """The distribution's python3 (it has PyGObject; the agent's own venv does not)."""
+        return "/usr/bin/python3" if Path("/usr/bin/python3").exists() else self.have("python3")
+
+    def _probe_atspi(self) -> CapStatus:
+        py = self.system_python()
+        if py is None:
+            return ("unavailable", "python3 fehlt")
+        try:
+            res = subprocess.run([py, "-c", ATSPI_CHECK], capture_output=True, timeout=10, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return ("unavailable", ATSPI_MISSING)
+        if res.returncode != 0:
+            return ("unavailable", ATSPI_MISSING)
+        return ("available", "")
+
+    def atspi(self) -> CapStatus:
+        if self._atspi is None:
+            self._atspi = self._atspi_probe()
+        return self._atspi
+
+    async def _atspi_call(self, req: dict[str, Any]) -> dict[str, Any]:
+        state, why = self.atspi()
+        py = self.system_python()
+        if state == "unavailable" or py is None:
+            raise Unavailable(why or ATSPI_MISSING)
+        res = await self.run([py, "-c", ATSPI_SCRIPT], input=json.dumps(req).encode(), timeout=40)
+        try:
+            data = json.loads(res.text.strip().splitlines()[-1])
+        except (ValueError, IndexError) as e:
+            raise BackendError("AT-SPI: " + res.stderr.decode("utf-8", errors="replace").strip()[:200]) from e
+        if not isinstance(data, dict):
+            raise BackendError("AT-SPI lieferte keine lesbare Antwort")
+        if data.get("error"):
+            raise BackendError(str(data["error"])[:300])
+        return data
 
     # ------------------------------------------------------------------ capabilities
     def probe(self) -> dict[str, CapStatus]:
         if self.kind == "headless":
             reason = "Keine grafische Sitzung (DISPLAY/WAYLAND_DISPLAY fehlen)"
             return {cap: ("unavailable", reason) for cap in _DESKTOP_CAPS} | self._audio_caps()
+        at_state, at_why = self.atspi()
+        ui: CapStatus = (
+            ("degraded", "AT-SPI: nur Programme mit Barrierefreiheit (GTK, Qt, Firefox; Chromium/Electron mit "
+             "--force-renderer-accessibility)")
+            if at_state != "unavailable"
+            else ("unavailable", at_why)
+        )  # fmt: skip
         x11 = self.kind == "x11"
         xdo, wm = self.have("xdotool"), self.have("wmctrl")
         wayland_input = self.have("wtype")
@@ -153,6 +362,13 @@ class LinuxBackend(DesktopBackend):
             )
             clip = self.have("xclip", "xsel")
             caps["clipboard"] = ("available", "") if clip else ("unavailable", "xclip fehlt (apt install xclip)")
+            caps["windows.frontmost"] = (
+                ("available", "")
+                if xdo
+                else ("degraded", "Über AT-SPI (xdotool fehlt)")
+                if at_state != "unavailable"
+                else ("unavailable", "xdotool fehlt (apt install xdotool)")
+            )
         else:
             no_wl = "Wayland erlaubt anderen Programmen keine Fensterliste – X11-Sitzung verwenden"
             caps["windows.list"] = ("unavailable", no_wl)
@@ -177,6 +393,11 @@ class LinuxBackend(DesktopBackend):
                 if self.have("wl-paste") and self.have("wl-copy")
                 else ("unavailable", "wl-clipboard fehlt (apt install wl-clipboard)")
             )
+            caps["windows.frontmost"] = (
+                ("degraded", "Über AT-SPI: Programm und Fenstertitel, keine Fenster-ID")
+                if at_state != "unavailable"
+                else ("unavailable", "Wayland nennt das aktive Fenster nicht – AT-SPI installieren (" + at_why + ")")
+            )
         caps["apps.launch"] = (
             ("available", "")
             if self.have("gtk-launch", "gio")
@@ -195,6 +416,7 @@ class LinuxBackend(DesktopBackend):
         caps["notifications"] = (
             ("available", "") if self.have("notify-send") else ("unavailable", "notify-send fehlt (libnotify-bin)")
         )
+        caps["ui.elements"] = ui
         return caps | self._audio_caps()
 
     def _audio_caps(self) -> dict[str, CapStatus]:
@@ -332,7 +554,9 @@ class LinuxBackend(DesktopBackend):
     async def frontmost(self) -> dict[str, Any]:
         xdo = self.have("xdotool")
         if self.kind != "x11" or xdo is None:
-            raise Unavailable("Vordergrundfenster nur unter X11 mit xdotool bekannt")
+            if self.kind != "headless" and self.atspi()[0] != "unavailable":
+                return await self._atspi_call({"op": "frontmost"})
+            raise Unavailable("Vordergrundfenster nur unter X11 mit xdotool oder über AT-SPI bekannt")
         wid = await self._active_id()
         if wid is None:
             return {"app": "", "title": ""}
@@ -510,6 +734,48 @@ class LinuxBackend(DesktopBackend):
         if ns is None:
             raise Unavailable("notify-send fehlt (libnotify-bin)")
         await self._ok([ns, "--app-name=J.A.R.V.I.S.", "--", title, message])
+
+    # ------------------------------------------------------------------ controls (AT-SPI)
+    async def _ui_req(self, op: str, target: UiTarget) -> dict[str, Any]:
+        if self.kind == "headless":
+            raise Unavailable("Keine grafische Sitzung")
+        req: dict[str, Any] = {"op": op, "app": target.app, "pid": target.pid}
+        if target.window_id and not (target.app or target.pid):
+            win = next((w for w in await self.list_windows() if w["window_id"] == target.window_id), None)
+            if win is None:
+                raise BackendError("Fenster nicht gefunden")
+            req["pid"] = win["pid"]
+        return req
+
+    async def ui_tree(self, target: UiTarget, max_depth: int, max_nodes: int) -> dict[str, Any]:
+        req = await self._ui_req("tree", target) | {"max_depth": max_depth, "max_nodes": max_nodes}
+        return await self._atspi_call(req)
+
+    async def ui_press(
+        self, target: UiTarget, path: str | None, role: str | None, title: str | None
+    ) -> dict[str, Any]:
+        req = await self._ui_req("press", target) | {"path": path, "role": role, "title": title}
+        return await self._atspi_call(req)
+
+    # ------------------------------------------------------------------ search index
+    async def index_search(
+        self, query: str, roots: Sequence[str], limit: int, names_only: bool
+    ) -> tuple[str, list[str]] | None:
+        if names_only:
+            if loc := self.have("plocate", "locate"):
+                res = await self.run([loc, "-i", "-l", str(limit * 5), "--", query], timeout=20)
+                if res.returncode in (0, 1):  # 1 = nothing found
+                    paths = [p for p in res.text.splitlines() if query.casefold() in Path(p).name.casefold()]
+                    return Path(loc).name, paths
+            return None
+        for exe in ("localsearch", "tracker3"):
+            if tool := self.have(exe):
+                res = await self.run(
+                    [tool, "search", "--disable-color", "--limit", str(limit), "--", query], timeout=30
+                )
+                if res.returncode == 0:
+                    return "tracker", parse_tracker(res.text)
+        return None  # no index (or Tracker off): the agent scans the allowed folders itself
 
     # ------------------------------------------------------------------ audio
     async def volume(self, op: str, level: int | None) -> dict[str, Any]:

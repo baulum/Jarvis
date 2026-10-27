@@ -64,6 +64,16 @@ async def run_process(
 
 
 @dataclass(slots=True)
+class UiTarget:
+    """Which program's controls ``ui.tree``/``ui.press`` mean: a window, a process or a program name – or, with
+    nothing set, the program in the foreground."""
+
+    app: str | None = None
+    pid: int | None = None
+    window_id: int | None = None
+
+
+@dataclass(slots=True)
 class Capture:
     png: bytes
     width: int
@@ -156,6 +166,37 @@ class DesktopBackend(abc.ABC):
 
     async def play(self, path: str) -> None:
         raise Unavailable("Audiowiedergabe ist hier nicht umgesetzt")
+
+    # ------------------------------------------------------------------ controls (accessibility)
+    async def ui_tree(self, target: UiTarget, max_depth: int, max_nodes: int) -> dict[str, Any]:
+        """The program's controls as a tree; every node has an ``id`` (path) that ``ui_press`` accepts."""
+        raise Unavailable("Bedienelemente lesen ist hier nicht umgesetzt")
+
+    async def ui_press(
+        self, target: UiTarget, path: str | None, role: str | None, title: str | None
+    ) -> dict[str, Any]:
+        raise Unavailable("Bedienelemente drücken ist hier nicht umgesetzt")
+
+    # ------------------------------------------------------------------ automation
+    async def shortcuts_list(self) -> list[str]:
+        """Apple Shortcuts (macOS only); Windows and Linux use the agent's script folder instead."""
+        raise Unavailable("Apple-Kurzbefehle gibt es nur auf macOS")
+
+    async def shortcut_run(self, name: str, input: str | None) -> dict[str, Any]:
+        raise Unavailable("Apple-Kurzbefehle gibt es nur auf macOS")
+
+    async def applescript(self, source: str) -> dict[str, Any]:
+        raise Unavailable(
+            "AppleScript gibt es nur auf macOS – hier Automationen (Skripte) oder Terminal-Befehle verwenden"
+        )
+
+    # ------------------------------------------------------------------ search index
+    async def index_search(
+        self, query: str, roots: Sequence[str], limit: int, names_only: bool
+    ) -> tuple[str, list[str]] | None:
+        """Paths from the system's search index (Spotlight, Windows Search, Tracker/locate) – unfiltered, the
+        dispatcher applies the path policy. None: no index here, the agent searches the folders itself."""
+        return None
 
 
 def fuzzy_pick(name: str, candidates: Sequence[tuple[str, Any]]) -> Any | None:

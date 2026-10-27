@@ -1,5 +1,6 @@
 """Windows 10/11 backend: Win32 (ctypes) for windows, mouse, keyboard and clipboard; PowerShell for Start-menu
-apps, toasts, volume (Core Audio) and speech (SAPI); mss for screenshots.
+apps, toasts, volume (Core Audio), speech (SAPI), controls (UI Automation) and the Windows Search index; mss for
+screenshots.
 
 The agent runs in the user's interactive session (Task Scheduler "at log on"), never as a service – UI
 automation, the clipboard and audio only exist there. Windows of elevated programs (UAC) ignore input from a
@@ -18,7 +19,7 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import psutil
@@ -29,6 +30,7 @@ from jarvis_device.backends.base import (
     Capture,
     DesktopBackend,
     Runner,
+    UiTarget,
     Unavailable,
     fuzzy_pick,
     run_process,
@@ -267,6 +269,112 @@ $p.Close()
 """
 
 
+# UI Automation (System.Windows.Automation, part of .NET Framework): the request arrives as JSON in JARVIS_UIA.
+# Paths are child indices in the control view from the window ("0", "0/2", "0/2/1"); tree and press use the same
+# walker, so a path read by ui.tree finds the same element again.
+UIA_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$req = $env:JARVIS_UIA | ConvertFrom-Json
+$AE = [System.Windows.Automation.AutomationElement]
+$walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+$root = $AE::FromHandle([IntPtr][long]$req.hwnd)
+if ($root -eq $null) { throw 'Fenster nicht gefunden' }
+$script:count = 0
+function Role($el) { return $el.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '' }
+function Node($el, [string]$id, [int]$depth) {
+  $script:count++
+  $c = $el.Current
+  $n = [ordered]@{ id = $id; role = (Role $el); title = $c.Name; enabled = $c.IsEnabled }
+  if ($c.AutomationId) { $n.automation_id = $c.AutomationId }
+  $r = $c.BoundingRectangle
+  if (-not $r.IsEmpty) { $n.bounds = @{ x = [int]$r.X; y = [int]$r.Y; width = [int]$r.Width; height = [int]$r.Height } }
+  $vp = $null
+  if ($el.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$vp)) {
+    $v = [string]$vp.Current.Value
+    if ($v) { $n.value = $v.Substring(0, [Math]::Min(200, $v.Length)) }
+  }
+  if ($depth -lt [int]$req.max_depth) {
+    $kids = New-Object System.Collections.ArrayList
+    $child = $walker.GetFirstChild($el); $i = 0
+    while ($child -ne $null -and $script:count -lt [int]$req.max_nodes) {
+      [void]$kids.Add((Node $child "$id/$i" ($depth + 1)))
+      $child = $walker.GetNextSibling($child); $i++
+    }
+    if ($kids.Count) { $n.children = $kids }
+  }
+  return $n
+}
+function Resolve([string]$path) {
+  $el = $root
+  foreach ($part in ($path -split '/' | Select-Object -Skip 1)) {
+    $child = $walker.GetFirstChild($el)
+    for ($i = 0; $i -lt [int]$part -and $child -ne $null; $i++) { $child = $walker.GetNextSibling($child) }
+    if ($child -eq $null) { throw "Bedienelement $path nicht gefunden (Fenster hat sich geändert? ui.tree neu lesen)" }
+    $el = $child
+  }
+  return $el
+}
+if ($req.op -eq 'tree') { Node $root '0' 0 | ConvertTo-Json -Depth 64 -Compress; exit 0 }
+if ($req.path) { $el = Resolve ([string]$req.path) }
+else {
+  $conds = New-Object System.Collections.ArrayList
+  if ($req.title) { [void]$conds.Add((New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, [string]$req.title))) }
+  if ($req.role) {
+    $field = [System.Windows.Automation.ControlType].GetField([string]$req.role)
+    if ($field -eq $null) { throw "Unbekannte Rolle $($req.role) (z. B. Button, MenuItem, CheckBox, Hyperlink)" }
+    [void]$conds.Add((New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $field.GetValue($null))))
+  }
+  if ($conds.Count -gt 1) { $cond = New-Object System.Windows.Automation.AndCondition -ArgumentList (,[System.Windows.Automation.Condition[]]$conds.ToArray()) }
+  else { $cond = $conds[0] }
+  $el = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+  if ($el -eq $null) { throw 'Kein passendes Bedienelement gefunden' }
+}
+$p = $null
+if ($el.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$p)) { $p.Invoke(); $how = 'invoke' }
+elseif ($el.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$p)) { $p.Toggle(); $how = 'toggle' }
+elseif ($el.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$p)) { $p.Select(); $how = 'select' }
+elseif ($el.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$p)) {
+  if ($p.Current.ExpandCollapseState -eq 'Collapsed') { $p.Expand(); $how = 'expand' } else { $p.Collapse(); $how = 'collapse' }
+}
+else { throw 'Element lässt sich nicht drücken (kein Invoke/Toggle/Select) – per Klick auf seine Position bedienen' }
+@{ ok = $true; title = $el.Current.Name; role = (Role $el); method = $how } | ConvertTo-Json -Compress
+"""
+
+# Windows Search (the index behind Explorer's search box) over OLE DB; query and folders arrive in environment
+# variables and are only used as SQL string literals with doubled quotes.
+SEARCH_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+function Lit([string]$s) { return $s.Replace("'", "''") }
+$q = Lit $env:JARVIS_QUERY
+$scopes = ($env:JARVIS_ROOTS -split "`n" | Where-Object { $_ } | ForEach-Object { "SCOPE='file:" + (Lit $_) + "'" }) -join ' OR '
+$match = if ($env:JARVIS_NAMES -eq '1') { "System.FileName LIKE '%$q%'" } else { "(System.FileName LIKE '%$q%' OR FREETEXT(*, '$q'))" }
+$sql = "SELECT TOP $([int]$env:JARVIS_LIMIT) System.ItemPathDisplay FROM SYSTEMINDEX WHERE ($scopes) AND $match"
+$c = New-Object -ComObject ADODB.Connection
+$c.Open("Provider=Search.CollatorDSO;Extended Properties='Application=Windows';")
+$rs = $c.Execute($sql)
+while (-not $rs.EOF) { [Console]::Out.WriteLine($rs.Fields.Item('System.ItemPathDisplay').Value); $rs.MoveNext() }
+$rs.Close(); $c.Close()
+"""
+
+
+def search_literal(query: str) -> str:
+    """Query text safe for the Windows Search SQL: no control characters, no wildcards/quotes of its own."""
+    return "".join(ch for ch in query if ch.isprintable() and ch not in '%_[]"').strip()[:200]
+
+
+def uia_role(role: str) -> str:
+    """macOS-style roles (AXButton, button) → UI Automation ControlType names (Button)."""
+    r = role.strip()
+    if r.startswith("AX") and len(r) > 2:
+        r = r[2:]
+    aliases = {"menuitem": "MenuItem", "checkbox": "CheckBox", "radiobutton": "RadioButton", "link": "Hyperlink",
+               "textfield": "Edit", "statictext": "Text", "combobox": "ComboBox", "tab": "TabItem",
+               "popupbutton": "SplitButton"}  # fmt: skip
+    return aliases.get(r.lower(), r[:1].upper() + r[1:])
+
+
 def _load(name: str) -> Any:
     if sys.platform != "win32":
         return None
@@ -368,6 +476,8 @@ class WindowsBackend(DesktopBackend):
             "apps.quit": ("available", ""),
             "windows.list": ("available", ""),
             "windows.focus": ("available", ""),
+            "windows.frontmost": ("available", ""),
+            "ui.elements": ("degraded", "UI Automation; " + uipi) if ps else no_ps,
             "input.keyboard": ("degraded", uipi),
             "input.mouse": ("degraded", uipi),
             "screen.capture": shot,
@@ -737,6 +847,58 @@ class WindowsBackend(DesktopBackend):
 
     async def notify(self, title: str, message: str) -> None:
         await self._ps(TOAST_SCRIPT, {"JARVIS_TITLE": title, "JARVIS_MESSAGE": message})
+
+    # ------------------------------------------------------------------ controls (UI Automation)
+    async def _ui_window(self, target: UiTarget) -> int:
+        if target.window_id:
+            return target.window_id
+        wins = await self.list_windows()
+        if target.pid:
+            win = next((w for w in wins if w["pid"] == target.pid), None)
+        elif target.app:
+            win = self._match_windows(wins, None, target.app)
+        else:
+            win = next((w for w in wins if w["active"]), None)
+        if win is None:
+            raise BackendError("Kein passendes Fenster gefunden – app, pid oder window_id angeben")
+        return int(win["window_id"])
+
+    async def _uia(self, req: dict[str, Any]) -> dict[str, Any]:
+        out = await self._ps(UIA_SCRIPT, {"JARVIS_UIA": json.dumps(req)}, timeout=60)
+        try:
+            return dict(json.loads(out.splitlines()[-1]))
+        except (ValueError, IndexError) as e:
+            raise BackendError("UI Automation lieferte keine lesbare Antwort") from e
+
+    async def ui_tree(self, target: UiTarget, max_depth: int, max_nodes: int) -> dict[str, Any]:
+        hwnd = await self._ui_window(target)
+        return await self._uia({"op": "tree", "hwnd": hwnd, "max_depth": max_depth, "max_nodes": max_nodes})
+
+    async def ui_press(
+        self, target: UiTarget, path: str | None, role: str | None, title: str | None
+    ) -> dict[str, Any]:
+        hwnd = await self._ui_window(target)
+        req = {"op": "press", "hwnd": hwnd, "path": path, "role": uia_role(role) if role else None, "title": title}
+        return await self._uia(req)
+
+    # ------------------------------------------------------------------ Windows Search
+    async def index_search(
+        self, query: str, roots: Sequence[str], limit: int, names_only: bool
+    ) -> tuple[str, list[str]] | None:
+        q = search_literal(query)
+        if not q or self.powershell() is None:
+            return None
+        env = {
+            "JARVIS_QUERY": q,
+            "JARVIS_ROOTS": "\n".join(r.replace("\\", "/") for r in roots),
+            "JARVIS_LIMIT": str(max(1, min(500, limit))),
+            "JARVIS_NAMES": "1" if names_only else "0",
+        }
+        try:
+            out = await self._ps(SEARCH_SCRIPT, env, timeout=30)
+        except BackendError:
+            return None  # Windows Search service off or folder not indexed: the agent scans instead
+        return "windows_search", [line.strip() for line in out.splitlines() if line.strip()]
 
     async def volume(self, op: str, level: int | None) -> dict[str, Any]:
         out = await self._ps(VOLUME_SCRIPT, {"JARVIS_OP": op, "JARVIS_LEVEL": str(level or 0)})
