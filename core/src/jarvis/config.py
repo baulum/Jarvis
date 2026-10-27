@@ -310,6 +310,29 @@ class CallPolicyCfg(_Strict):
     max_duration_minutes: int = 30
 
 
+class AppUpdateCfg(_Strict):
+    """OTA updates of the Android app (``jarvis.mobile.ota``): build a signed APK when the app's code changes on
+    the base branch and hand it to the paired phones."""
+
+    enabled: bool = True
+    # False: no automatic builds (manual "build now" and existing releases keep working)
+    auto_build: bool = True
+    branch: str = "main"
+    fetch: bool = True  # `git fetch origin <branch>` before each check (catches pushes from elsewhere)
+    poll_interval_minutes: int = Field(default=10, ge=1)
+    debounce_s: int = Field(default=60, ge=0)  # several changes in a row → one build
+    keep_releases: int = Field(default=5, ge=3)  # older releases are removed (rollback needs a few)
+    build_timeout_minutes: int = Field(default=40, ge=5)
+    min_free_gb: float = Field(default=3.0, ge=0)
+    # Program name (looked up in PATH + coding.extra_path) or absolute path; must be "flutter" from the shell allowlist
+    flutter_command: str = "flutter"
+    android_sdk: str = ""  # empty: ANDROID_HOME / ANDROID_SDK_ROOT / ~/Library/Android/sdk
+    java_home: str = ""  # empty: Android Studio's JDK / JAVA_HOME / /usr/libexec/java_home
+    target_platform: Literal["android-arm64", "android-arm"] = "android-arm64"
+    keystore_password_secret: str = "android-release-keystore"  # Keychain account (the keystore file is not here)
+    install_link_ttl_hours: int = Field(default=24, ge=1, le=168)
+
+
 class MobileCfg(_Strict):
     enabled: bool = True
     access_token_ttl_s: int = 600
@@ -319,6 +342,7 @@ class MobileCfg(_Strict):
     livekit: LiveKitCfg = Field(default_factory=LiveKitCfg)
     firebase: FirebaseCfg = Field(default_factory=FirebaseCfg)
     calls: CallPolicyCfg = Field(default_factory=CallPolicyCfg)
+    app_update: AppUpdateCfg = Field(default_factory=AppUpdateCfg)
 
 
 class BackupCfg(_Strict):

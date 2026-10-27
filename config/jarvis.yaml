@@ -142,6 +142,10 @@ notifications:
       channels: [desktop, mobile]
     - event: backup.failed
       channels: [desktop, mobile]
+    - event: app_update.failed       # Build der Handy-App fehlgeschlagen (Ursache in der Meldung)
+      channels: [desktop, mobile]
+    - event: app_update.ready        # neue Handy-App gebaut; das Handy meldet sich selbst mit „Update bereit“
+      channels: [desktop]
     - event: system.critical
       channels: [desktop, telegram, phone, mobile]
       bypass_quiet_hours: true
@@ -177,6 +181,13 @@ mobile:
     max_calls_per_hour: 4
     min_minutes_between_calls: 3
     max_duration_minutes: 30
+  app_update:                    # OTA-Updates der Android-App (docs/MOBILE.md › App-Updates)
+    enabled: true
+    auto_build: true             # Änderungen an apps/jarvis_mobile auf main → signierte APK bauen und verteilen
+    branch: main
+    poll_interval_minutes: 10
+    keep_releases: 5             # mindestens 3 (Rollback)
+    target_platform: android-arm64
 
 backup:
   # Nightly PostgreSQL dump + vault + config, AES-256-GCM encrypted, with retention. Secrets are never included.
