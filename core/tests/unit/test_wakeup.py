@@ -1,11 +1,14 @@
 import asyncio
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from jarvis import platform as platform_mod
 from jarvis.config import WakeupCfg
+from jarvis.platform import MacAdapter
 from jarvis.voice import wakeup
 from jarvis.voice.wakeup import (
     WakeupStore,
@@ -143,6 +146,18 @@ def test_missing_mp3_and_directory(tmp_path: Path) -> None:
     assert check_sound("") == "Keine MP3-Datei festgelegt."
 
 
+@pytest.fixture
+def mac_player(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The wake-up sound is played with afplay on the Mac; elsewhere ``play_sound`` asks the platform adapter. The
+    Mac adapter is injected so the same afplay command is checked on every OS the tests run on."""
+    monkeypatch.setattr(platform_mod, "_current", MacAdapter(which=lambda name: f"/usr/bin/{name}"))
+
+
+# Programs are macOS app bundles started with ``open -a``; on Windows the wake-up routine does not exist
+# (WindowsAdapter: voice.wakeup_routine unavailable) and paths have no "/" to tell them from app names.
+macos_apps = pytest.mark.skipif(sys.platform == "win32", reason="wake-up programs are macOS .app bundles (open -a)")
+
+
 class FakeProc:
     def __init__(self, code: int | None, stderr: bytes = b"") -> None:
         self.code = code
@@ -168,6 +183,7 @@ async def test_missing_mp3_is_reported_without_starting_afplay(tmp_path: Path) -
     assert calls == []
 
 
+@pytest.mark.usefixtures("mac_player")
 async def test_play_sound_uses_afplay_with_volume(tmp_path: Path) -> None:
     calls: list[tuple[Any, ...]] = []
 
@@ -180,6 +196,7 @@ async def test_play_sound_uses_afplay_with_volume(tmp_path: Path) -> None:
     assert calls == [(wakeup.AFPLAY, "-v", "0.35", str(sound))]
 
 
+@pytest.mark.usefixtures("mac_player")
 async def test_afplay_rejecting_the_file_is_an_error(tmp_path: Path) -> None:
     async def spawn(*args: Any, **kw: Any) -> FakeProc:
         return FakeProc(1, b"AudioFileOpen failed ('dta?')")
@@ -188,6 +205,7 @@ async def test_afplay_rejecting_the_file_is_an_error(tmp_path: Path) -> None:
     assert error is not None and "konnte nicht abgespielt werden" in error and "AudioFileOpen" in error
 
 
+@pytest.mark.usefixtures("mac_player")
 async def test_long_sound_keeps_playing_after_max_wait(tmp_path: Path) -> None:
     async def spawn(*args: Any, **kw: Any) -> FakeProc:
         return FakeProc(None)
@@ -198,6 +216,7 @@ async def test_long_sound_keeps_playing_after_max_wait(tmp_path: Path) -> None:
 
 
 # ------------------------------------------------------------------ programs
+@macos_apps
 def test_app_commands(tmp_path: Path) -> None:
     app = tmp_path / "Demo.app"
     app.mkdir()
@@ -213,6 +232,7 @@ def test_app_commands(tmp_path: Path) -> None:
     assert app_command(str(tmp_path / "notiz.txt")) == (None, "kein Programm (.app)")
 
 
+@macos_apps
 async def test_missing_programs_are_skipped_and_the_rest_still_start(tmp_path: Path) -> None:
     ran: list[list[str]] = []
 

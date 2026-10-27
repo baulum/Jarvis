@@ -3,11 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from jarvis.config import TtsCfg
+from jarvis.platform import MacAdapter
 from jarvis.voice.speech import TTSService
 
 
 def _service(tmp_path: Path, provider: str = "local", local_up: bool = True, fish_up: bool = True) -> TTSService:
-    svc = TTSService(TtsCfg(provider=provider), tmp_path / "cache")
+    # the fallback chain ends with macOS ``say`` on the Mac (other systems: SAPI, espeak-ng – test_cross_platform_core)
+    svc = TTSService(TtsCfg(provider=provider), tmp_path / "cache", adapter=MacAdapter())
     calls: list[str] = []
     svc.calls = calls  # type: ignore[attr-defined]
 
