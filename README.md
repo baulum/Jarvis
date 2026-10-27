@@ -78,14 +78,17 @@ Repository nacheinander (der nächste Job rebased auf das frisch gemergte `main`
 Job Dateien geändert, die Core oder Desktop-App laden (`core/src`, Abhängigkeiten und Migrationen in `core/`, `config/`,
 `desktop/`; nicht Doku, Tests, Android-App, Device Agent), startet Jarvis sich nach der Auslieferung selbst neu
 (`core/src/jarvis/coding/self_restart.py`, abschaltbar mit `coding.self_restart: false`). Voraussetzung: Der Merge nach
-`main` ist erfolgt und das lokale Projekt wurde auf den neuen Stand gebracht; sonst wird nur der Grund vermerkt. Jobs an
+`main` ist erfolgt und das lokale Projekt wurde auf den neuen Stand gebracht; sonst wird nur der Grund vermerkt. Nicht
+committete Änderungen im lokalen Projekt verhindern das nur, wenn sie Dateien betreffen, die die Auslieferung ändert;
+andere bleiben beim Fast-Forward unangetastet erhalten. Jobs an
 anderen Projekten (z. B. Lead-Tool) lösen nie einen Neustart aus. Reihenfolge:
 
 1. Auslieferung abschließen, Job-Ergebnis schreiben und „fertig“ melden.
 2. Warten, bis kein anderer Coding-Job mehr läuft oder wartet (im Ergebnis steht dann `waiting` mit den Job-IDs) – laufende
    Jobs werden nie abgebrochen.
-3. Ein eigenständiger Helfer-Prozess (überlebt das Ende des Cores) übernimmt: Läuft die Desktop-App, wird sie zuerst regulär
-   beendet (sonst per SIGTERM), denn ihr Beenden stoppt je nach Einstellung auch die Dienste. Dann wird der Core neu
+3. Ein eigenständiger Helfer-Prozess (überlebt das Ende des Cores) übernimmt: Läuft die Desktop-App, wird sie zuerst per SIGTERM
+   beendet (kein AppleScript-Beenden: das löst ggf. einen Automation-Dialog aus und stoppt je nach Einstellung „Dienste
+   beim Beenden stoppen“ alle Dienste; SIGKILL nur, wenn sie nach 10 s noch läuft). Dann wird der Core neu
    gestartet – als launchd-Dienst `com.jarvis.core` per `launchctl kickstart -k`, sonst Stopp über die PID-Datei und
    `scripts/start.sh --no-voice --no-app` – und per `/api/health` geprüft. Zuletzt wird die Desktop-App wieder geöffnet,
    aber nur, wenn sie vorher lief.

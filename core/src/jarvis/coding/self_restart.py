@@ -4,13 +4,14 @@ Ablauf (Beschreibung für Sir: README, Abschnitt „Coding-Jobs an Jarvis selbst
 
 1. ``plan``: Nach der Auslieferung prüft der Runner, ob der Job das Repository betrifft, aus dem dieser Core läuft
    (``REPO_ROOT``), ob er Dateien geändert hat, die Core oder Desktop-App laden (``RESTART_PATHS``), und ob das
-   lokale Projekt auf den gemergten Stand gebracht wurde (sonst lüde ein Neustart den alten Code).
+   lokale Projekt auf den gemergten Stand gebracht wurde (sonst lüde ein Neustart den alten Code). Nicht committete
+   Änderungen an anderen Dateien im lokalen Projekt hindern das nicht (``CodingRunner._ship_local_sync``).
 2. Erst nach ``_finish`` (Job-Ergebnis geschrieben, Meldung verschickt) wartet der Runner, bis kein Coding-Job mehr
    läuft oder wartet, und startet dann diesen Helfer als eigenständigen Prozess (``launch``, eigene Session: er
    überlebt das Ende des Cores).
 3. Der Helfer (``python -m jarvis.coding.self_restart``, ``Restarter.restart``): Läuft die Desktop-App, wird sie
-   zuerst regulär beendet – ihr Beenden stoppt je nach Einstellung „Dienste beim Beenden stoppen“ auch den Core, der
-   frisch gestartete Core bliebe sonst nicht stehen. Dann wird der Core neu gestartet (launchd ``kickstart -k`` bzw.
+   zuerst per SIGTERM beendet (kein AppleScript: kein Automation-Dialog, und ihr reguläres Beenden würde über
+   „Dienste beim Beenden stoppen“ alle Dienste stoppen). Dann wird der Core neu gestartet (launchd ``kickstart -k`` bzw.
    Stop + ``scripts/start.sh --no-voice --no-app``), per ``/api/health`` geprüft und die Desktop-App wieder geöffnet –
    nur, wenn sie vorher lief. Das Ergebnis steht in der Statusdatei (``STATUS_FILE`` im Datenordner).
 4. Der neue Core trägt das Ergebnis beim Start in die auslösenden Jobs ein (``result.ship.self_restart``, Fehler
@@ -53,7 +54,6 @@ RESTART_PATHS = (
 STATUS_FILE = "self-restart.json"
 LOG_FILE = "self-restart.log"
 LAUNCHD_LABEL = "com.jarvis.core"
-DESKTOP_BUNDLE_ID = "com.jarvis.desktop"
 DESKTOP_EXE = "/Contents/MacOS/jarvis-desktop"
 CORE_HEALTH_TIMEOUT_S = 120.0
 # The helper waits this long before acting: the job's "fertig" message is still being delivered by the core.
@@ -261,22 +261,24 @@ class Restarter:
         found: dict[int, str] = {}
         for line in text.splitlines():
             pid, _, command = line.strip().partition(" ")
-            if DESKTOP_EXE in command and pid.isdigit():
-                found[int(pid)] = command.strip().split(DESKTOP_EXE, 1)[0]
+            bundle = command.strip().split(DESKTOP_EXE, 1)[0]
+            # the app binary itself, not a command that only names it (``grep …/jarvis-desktop``)
+            if DESKTOP_EXE in command and pid.isdigit() and bundle.startswith("/") and bundle.endswith(".app"):
+                found[int(pid)] = bundle
         return found
 
     def quit_desktop(self, pids: list[int]) -> str:
-        """Regular quit (Apple Event, like ⌘Q); SIGTERM only if the app is still there afterwards."""
-        code, text = self.run(["osascript", "-e", f'tell application id "{DESKTOP_BUNDLE_ID}" to quit'], 30)
-        if self._wait_gone(pids, 20):
-            return "regulär"
-        for pid in pids:
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, signal.SIGTERM)
-        if not self._wait_gone(pids, 10):
-            raise RestartError("die Desktop-App lässt sich nicht beenden und läuft weiter")
-        note = f"osascript Exit {code}: {text.strip()[:120]}" if code else "kein Ende nach regulärem Beenden"
-        return f"per SIGTERM ({note})"
+        """SIGTERM, SIGKILL only if the app is still there afterwards. No AppleScript ``quit``: an Apple Event from
+        this helper may raise a macOS Automation prompt and block, and the app's regular quit would also run
+        ``stop.sh`` (setting „Dienste beim Beenden stoppen“). SIGTERM ends the app without that – the services keep
+        running, the core is restarted next and the reopened app finds everything running."""
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for pid in pids:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(pid, sig)
+            if self._wait_gone(pids, 10):
+                return f"per {sig.name}"
+        raise RestartError("die Desktop-App lässt sich nicht beenden und läuft weiter")
 
     def open_desktop(self, bundle: str) -> None:
         code, text = self.run(["open", bundle], 30)

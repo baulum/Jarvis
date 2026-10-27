@@ -1130,21 +1130,52 @@ async def test_local_project_already_current_after_supabase_deploy(env: SimpleNa
     assert "Lokales Projekt war bereits auf dem Stand von origin/main" in ship["message"]
 
 
-async def test_local_project_dirty_is_skipped_and_untouched(env: SimpleNamespace) -> None:
+async def test_local_project_with_unrelated_changes_is_fast_forwarded_and_keeps_them(env: SimpleNamespace) -> None:
+    """Sir's work in progress on other files (here: README staged + unstaged, a new file) never blocks the update."""
     head = _commit(env, {"app.py": "print(1)\n"})
+    (env.repo / "README.md").write_text("lokale Änderung\n")
+    (env.repo / "notes.md").write_text("Entwurf\n")
+    (env.repo / "staged.md").write_text("vorgemerkt\n")
+    _git(env.repo, "add", "staged.md")
+    ship = await _flow(env)
+
+    assert ship["state"] == "shipped" and _origin_main(env) == head
+    assert ship["local_sync"] == {"state": "synced", "reason": None, "head": head, "kept_changes": 3}
+    assert _local_head(env) == head and (env.repo / "app.py").read_text() == "print(1)\n"
+    assert (env.repo / "README.md").read_text() == "lokale Änderung\n"
+    assert (env.repo / "notes.md").read_text() == "Entwurf\n"
+    assert _git(env.repo, "diff", "--cached", "--name-only") == "staged.md"
+    assert "Nicht committete lokale Änderungen (3 Dateien) bleiben erhalten." in ship["message"]
+
+
+async def test_local_project_with_changes_to_delivered_files_is_skipped_and_untouched(env: SimpleNamespace) -> None:
+    head = _commit(env, {"README.md": "aus dem Job\n", "app.py": "print(1)\n"})
     before = _local_head(env)
     (env.repo / "README.md").write_text("lokale Änderung\n")
     ship = await _flow(env)
 
     assert ship["state"] == "shipped" and _origin_main(env) == head
     assert ship["local_sync"]["state"] == "skipped"
-    assert ship["local_sync"]["reason"] == "Projekt hat nicht committete Änderungen"
+    assert ship["local_sync"]["reason"] == (
+        "Projekt hat nicht committete Änderungen an Dateien, die die Auslieferung ändert: README.md"
+    )
     assert ship["local_sync"]["head"] == before
     assert _local_head(env) == before and not (env.repo / "app.py").exists()
     assert (env.repo / "README.md").read_text() == "lokale Änderung\n"
-    assert "Lokales Projekt nicht aktualisiert: Projekt hat nicht committete Änderungen." in ship["message"]
+    assert "Lokales Projekt nicht aktualisiert: Projekt hat nicht committete Änderungen an Dateien" in ship["message"]
     # fetched anyway: origin/main is known locally, nothing else changed
     assert _git(env.repo, "rev-parse", "origin/main") == head
+
+
+async def test_local_project_with_untracked_file_in_the_way_is_skipped(env: SimpleNamespace) -> None:
+    head = _commit(env, {"app.py": "print(1)\n"})
+    before = _local_head(env)
+    (env.repo / "app.py").write_text("lokaler Entwurf\n")  # untracked, the delivery adds the same path
+    ship = await _flow(env)
+
+    assert ship["state"] == "shipped" and _origin_main(env) == head
+    assert ship["local_sync"]["state"] == "skipped" and ship["local_sync"]["reason"].endswith(": app.py")
+    assert _local_head(env) == before and (env.repo / "app.py").read_text() == "lokaler Entwurf\n"
 
 
 async def test_local_project_on_other_branch_is_skipped(env: SimpleNamespace) -> None:
@@ -1228,14 +1259,14 @@ async def test_local_sync_failure_does_not_fail_the_delivery(
 async def test_local_sync_skipped_problem_is_no_delivery_error(
     env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (env.repo / "README.md").write_text("lokale Änderung\n")
+    (env.repo / "app.py").write_text("lokaler Entwurf\n")  # the job delivers app.py too
     jid = await _run_job(env, monkeypatch, tests_pass=True)
     job = env.store[jid]
 
     assert job.status == "completed" and job.result["ship"]["state"] == "shipped"
     assert job.result["ship"]["local_sync"]["state"] == "skipped"
     assert job.result["delivery_error"] is None
-    assert (env.repo / "README.md").read_text() == "lokale Änderung\n"
+    assert (env.repo / "app.py").read_text() == "lokaler Entwurf\n"
 
 
 async def test_no_local_sync_without_merge(env: SimpleNamespace) -> None:

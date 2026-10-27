@@ -7,7 +7,9 @@ the restart helper itself is replaced by a recorder.
 """
 
 import asyncio
+import signal
 import subprocess
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -256,6 +258,39 @@ async def test_jarvis_job_restarts_after_delivery_and_result(env: SimpleNamespac
     assert "neu gestartet" in next(d for t, d in env.events if t == "coding.finished")["summary"]
 
 
+async def test_unrelated_open_changes_in_the_checkout_do_not_block_the_restart(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cause of the restarts that never came: Sir's uncommitted work on other files in the main checkout made the
+    local sync skip, and without a synced checkout no restart was planned."""
+    (env.repo / "README.md").write_text("lokale Änderung\n")
+    (env.repo / "core" / "src").mkdir(parents=True)
+    (env.repo / "core" / "src" / "wip.py").write_text("# Entwurf\n")
+    jid = _job(env, monkeypatch, {"core/src/jarvis/neu.py": "x = 1\n"})
+    await _run_to_end(env, jid)
+
+    ship = env.store[jid].result["ship"]
+    assert ship["local_sync"]["state"] == "synced" and ship["local_sync"]["kept_changes"] == 2
+    assert (env.repo / "core" / "src" / "jarvis" / "neu.py").is_file()  # the new core loads the delivered code
+    assert (env.repo / "README.md").read_text() == "lokale Änderung\n"
+    assert (env.repo / "core" / "src" / "wip.py").read_text() == "# Entwurf\n"
+    assert len(env.launches) == 1 and ship["self_restart"]["state"] == "started"
+
+
+async def test_open_changes_to_delivered_files_skip_the_restart(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (env.repo / "core" / "src" / "jarvis").mkdir(parents=True)
+    (env.repo / "core" / "src" / "jarvis" / "neu.py").write_text("# lokal\n")  # the job delivers this file too
+    jid = _job(env, monkeypatch, {"core/src/jarvis/neu.py": "x = 1\n"})
+    await _run_to_end(env, jid)
+
+    ship = env.store[jid].result["ship"]
+    assert ship["state"] == "shipped" and ship["local_sync"]["state"] == "skipped"
+    assert ship["self_restart"]["state"] == "skipped" and env.launches == []
+    assert (env.repo / "core" / "src" / "jarvis" / "neu.py").read_text() == "# lokal\n"
+
+
 async def test_job_on_another_project_never_restarts(
     env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -439,7 +474,7 @@ class RecordingRestarter(Restarter):
         self.calls.append(f"quit_desktop {pids}")
         if self.quit_error:
             raise self.quit_error
-        return "regulär"
+        return "per SIGTERM"
 
     def restart_core(self) -> str:
         self.calls.append("restart_core")
@@ -465,8 +500,8 @@ def test_running_desktop_app_is_quit_before_and_reopened_after_the_core() -> Non
     assert r.calls == ["desktop_pids", "quit_desktop [501]", "restart_core", "wait_healthy", f"open_desktop {APP}"]
     assert out["state"] == "done"
     assert out["core"] == {"state": "ok", "method": "launchd com.jarvis.core", "health": {"status": "ok", "version": "1"}}
-    assert out["desktop"] == {"state": "restarted", "bundle": APP, "quit": "regulär"}
-    assert "Desktop-App beendet (regulär) und wieder geöffnet" in out["message"]
+    assert out["desktop"] == {"state": "restarted", "bundle": APP, "quit": "per SIGTERM"}
+    assert "Desktop-App beendet (per SIGTERM) und wieder geöffnet" in out["message"]
 
 
 def test_desktop_app_not_running_is_left_alone() -> None:
@@ -526,6 +561,7 @@ def test_desktop_app_is_found_by_its_executable(tmp_path: Path) -> None:
         "  777 /Users/paul/Documents/Programmieren/Jarvis/desktop/src-tauri/target/release/bundle/macos/"
         "J.A.R.V.I.S..app/Contents/MacOS/jarvis-desktop --flag\n"
         "  888 grep jarvis\n"
+        f"  999 grep {APP}/Contents/MacOS/jarvis-desktop\n"  # only names the app: never signalled
     )
     r = _restarter(FakeRun({"ps -axo": (0, ps)}), tmp_path)
     found = r.desktop_pids()
@@ -533,6 +569,89 @@ def test_desktop_app_is_found_by_its_executable(tmp_path: Path) -> None:
     assert found[501] == APP
     assert found[777].endswith("bundle/macos/J.A.R.V.I.S..app") and set(found) == {501, 777}
     assert _restarter(FakeRun({"ps -axo": (0, ps)}), tmp_path, platform="linux").desktop_pids() == {}
+
+
+# ---------------------------------------------------------------- helper end to end (real decisions, fake commands)
+class Ticker:
+    """Fake clock for ``_wait_gone``; every tick reaps the test's own child processes (a dead, unreaped child still
+    counts as alive for ``kill(pid, 0)``)."""
+
+    def __init__(self, *procs: subprocess.Popen[Any]) -> None:
+        self.now, self.procs = 0.0, procs
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+        time.sleep(0.02)
+        for proc in self.procs:
+            proc.poll()
+
+
+def _helper(run: FakeRun, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *procs: subprocess.Popen[Any]) -> Restarter:
+    ticker = Ticker(*procs)
+    r = _restarter(run, tmp_path)
+    r.sleep, r.clock = ticker.sleep, ticker.clock
+    monkeypatch.setattr(r, "wait_healthy", lambda timeout=0: {"status": "ok", "version": "2"})
+    return r
+
+
+LAUNCHD = {"launchctl print": (0, "state = running")}
+
+
+def test_restart_without_desktop_app_only_restarts_the_core(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No desktop app running (or not even installed): the core is restarted, the app is neither quit nor opened."""
+    run = FakeRun({"ps -axo": (0, "  101 /usr/sbin/cfprefsd agent\n"), **LAUNCHD})
+    out = _helper(run, tmp_path, monkeypatch).restart()
+
+    assert out["state"] == "done" and out["core"]["state"] == "ok" and out["desktop"] == {"state": "not_running"}
+    assert [c[:2] for c in run.calls] == [["ps", "-axo"], ["launchctl", "print"], ["launchctl", "kickstart"]]
+    assert not any(c[0] in ("open", "osascript") for c in run.calls)
+    assert out["message"] == (
+        "Core neu gestartet und antwortet wieder (launchd com.jarvis.core); Desktop-App lief nicht, nicht angefasst."
+    )
+
+
+def test_restart_with_running_desktop_app_restarts_both(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app = subprocess.Popen(["sleep", "60"])  # stands in for the running desktop app
+    try:
+        ps = f"  {app.pid} {APP}/Contents/MacOS/jarvis-desktop\n"
+        run = FakeRun({"ps -axo": (0, ps), **LAUNCHD})
+        out = _helper(run, tmp_path, monkeypatch, app).restart()
+    finally:
+        app.kill()
+        app.wait()
+
+    assert app.returncode == -signal.SIGTERM  # ended by the helper, no AppleScript quit
+    assert out["state"] == "done" and out["core"]["state"] == "ok"
+    assert out["desktop"] == {"state": "restarted", "bundle": APP, "quit": "per SIGTERM"}
+    names = [c[1] if c[0] == "launchctl" else c[0] for c in run.calls]
+    assert names == ["ps", "print", "kickstart", "open", "ps"]  # core restarted before the app is opened again
+    assert ["open", APP] in run.calls and not any(c[0] == "osascript" for c in run.calls)
+
+
+def test_desktop_app_ignoring_sigterm_is_killed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app = subprocess.Popen(["bash", "-c", "trap '' TERM; echo ready; exec sleep 60"], stdout=subprocess.PIPE, text=True)
+    try:
+        assert app.stdout is not None and app.stdout.readline().strip() == "ready"
+        how = _helper(FakeRun({}), tmp_path, monkeypatch, app).quit_desktop([app.pid])
+    finally:
+        app.kill()
+        app.wait()
+        app.stdout.close()  # type: ignore[union-attr]
+
+    assert how == "per SIGKILL" and app.returncode == -signal.SIGKILL
+
+
+def test_failed_desktop_check_still_restarts_the_core(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = FakeRun({"ps -axo": (127, "No such file or directory: 'ps'"), **LAUNCHD})
+    out = _helper(run, tmp_path, monkeypatch).restart()
+
+    assert out["core"]["state"] == "ok"
+    assert out["desktop"]["state"] == "failed" and "ps fehlgeschlagen" in out["desktop"]["error"]
+    assert not any(c[0] == "open" for c in run.calls)  # an app Jarvis did not quit is never opened
+    assert out["state"] == "failed"  # reported to Sir, the core restart itself went through
 
 
 def test_core_under_launchd_is_kickstarted(tmp_path: Path) -> None:

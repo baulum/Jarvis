@@ -398,6 +398,16 @@ class CodingRunner:
             raise CodingError(f"git {' '.join(args[:2])}: {err.decode()[:300]}")
         return out.decode().strip()
 
+    async def _git_paths(self, cwd: Path, *args: str) -> set[str]:
+        """Paths listed by a git command (run with ``-z``: no quoting of unusual file names)."""
+        command, *rest = args
+        return {p for p in (await self._git(cwd, command, "-z", *rest)).split("\0") if p}
+
+    async def _local_changes(self, repo: Path) -> set[str]:
+        """Files with open (staged or unstaged) changes plus untracked files – what a checkout must not lose."""
+        changed = await self._git_paths(repo, "diff", "--name-only", "--no-renames", "HEAD")
+        return changed | await self._git_paths(repo, "ls-files", "--others", "--exclude-standard")
+
     async def ensure_repo(self, path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
         if not (path / ".git").exists():
@@ -1604,9 +1614,10 @@ class CodingRunner:
 
     async def _ship_local_sync(self, ship: dict[str, Any], repo: Path) -> None:
         """After the merge: bring Sir's local project (the main checkout, not the worktree) to the state on GitHub,
-        fast-forward only. Another branch, open changes or a diverged history are never overwritten, reset or
-        discarded – the reason is recorded instead. Only a note: never marks the delivery as failed, never raises
-        (except cancellation). The outcome is stored as ``ship["local_sync"]``."""
+        fast-forward only. Another branch, a diverged history or open changes to files the merged commits touch are
+        never overwritten, reset or discarded – the reason is recorded instead. Open changes to other files (Sir's
+        work in progress) do not block it and stay as they are. Only a note: never marks the delivery as failed,
+        never raises (except cancellation). The outcome is stored as ``ship["local_sync"]``."""
         base = ship["base"]
         sync: dict[str, Any] = {"state": "skipped", "reason": None, "head": None}
         ship["local_sync"] = sync
@@ -1622,8 +1633,6 @@ class CodingRunner:
                 if current != base:
                     where = "losgelöstem HEAD" if current == "HEAD" else f"Branch {current or '?'}"
                     sync["reason"] = f"Projekt steht auf {where}, nicht auf {base}"
-                elif await self._git(repo, "status", "--porcelain", "--untracked-files=no"):
-                    sync["reason"] = "Projekt hat nicht committete Änderungen"
                 elif not await self._git(
                     repo, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{base}", check=False
                 ):
@@ -1637,9 +1646,23 @@ class CodingRunner:
                     sync["state"] = "synced"
                     sync["reason"] = "bereits aktuell"
                 else:
-                    await self._git(repo, "merge", "--ff-only", f"origin/{base}")
-                    sync["state"] = "synced"
-                    sync["head"] = await self._git(repo, "rev-parse", "HEAD")
+                    local = await self._local_changes(repo)
+                    incoming = await self._git_paths(
+                        repo, "diff", "--name-only", "--no-renames", "HEAD", f"origin/{base}"
+                    )
+                    if clash := sorted(local & incoming):
+                        more = f" (+{len(clash) - 5} weitere)" if len(clash) > 5 else ""
+                        sync["reason"] = (
+                            "Projekt hat nicht committete Änderungen an Dateien, die die Auslieferung ändert: "
+                            + ", ".join(clash[:5])
+                            + more
+                        )
+                    else:
+                        await self._git(repo, "merge", "--ff-only", f"origin/{base}")
+                        sync["state"] = "synced"
+                        sync["head"] = await self._git(repo, "rev-parse", "HEAD")
+                        if local:
+                            sync["kept_changes"] = len(local)
         except Exception as e:
             sync["state"] = "failed"
             sync["reason"] = (str(e) or type(e).__name__)[:300]
@@ -1649,6 +1672,10 @@ class CodingRunner:
                 ship["message"] += f" Lokales Projekt war bereits auf dem Stand von origin/{base} ({short})."
             else:
                 ship["message"] += f" Lokales Projekt auf origin/{base} aktualisiert ({short})."
+            if sync.get("kept_changes"):
+                ship["message"] += (
+                    f" Nicht committete lokale Änderungen ({sync['kept_changes']} Dateien) bleiben erhalten."
+                )
         elif sync["state"] == "failed":
             ship["message"] += f" Lokales Projekt nicht aktualisiert (Fehler): {sync['reason']}."
         else:
