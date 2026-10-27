@@ -321,7 +321,7 @@ class VercelConnector(Connector):
     async def resolve_source(self, raw: str, *, trusted: bool = False) -> Source:
         """``owner/name`` bzw. GitHub-URL → Repo; absoluter Pfad (oder ``~``) → lokaler Ordner in erlaubten Wurzeln."""
         raw = raw.strip()
-        if not raw.startswith(("/", "~")):
+        if not (raw.startswith(("/", "~")) or Path(raw).is_absolute()):  # also Windows paths (C:\…, \\server\share)
             repo = parse_github_repo(raw) or (raw if _REPO_RE.fullmatch(raw) else None)
             if repo is None:
                 raise ToolUserError("project_path: absoluter Pfad eines lokalen Projekts oder GitHub-Repo owner/name.")
