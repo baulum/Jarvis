@@ -18,11 +18,12 @@ from jarvis.agent.hermes_setup import HermesSupervisor, sync_soul
 from jarvis.agent.llm import HermesClient, OllamaClient
 from jarvis.agent.model_router import ModelRouter
 from jarvis.agent.orchestrator import Orchestrator
+from jarvis.agent.personas import PersonaStore
 from jarvis.agent.skills import SkillCatalog
 from jarvis.agent.usage import UsageTracker
 from jarvis.backup.service import BackupService
 from jarvis.coding.runner import CodingRunner
-from jarvis.config import Permissions, Personality, Settings, load_permissions, load_personality
+from jarvis.config import Permissions, Personality, Settings, load_permissions, load_personalities
 from jarvis.connectors.attachments import AttachmentsConnector
 from jarvis.connectors.base import ConnectorManager
 from jarvis.connectors.browser import BrowserConnector, BrowserService
@@ -86,7 +87,8 @@ class AppState:
         self, settings: Settings, personality: Personality | None = None, permissions: Permissions | None = None
     ) -> None:
         self.settings = settings
-        self.personality = personality or load_personality()
+        # Jarvis + further personas (config/personalities/); the one Sir chose is ``self.personality``
+        self.personas = PersonaStore(settings.paths.data_dir / "persona.json", load_personalities(personality))
         self.permissions = permissions or load_permissions()
         self.started_at = time.time()
         self.degraded: str | None = None  # set when startup hit a problem the UI/health must show
@@ -141,6 +143,7 @@ class AppState:
         )
         self.stt = STTService(settings.voice.stt.server_url, settings.voice.language)
         self.tts = TTSService(settings.voice.tts, settings.paths.data_dir / "tts-cache")
+        self.tts.set_voice(self.personality.voice, self.personality.system_voice)
         self.orchestrator = Orchestrator(self)
         self.tasks = TaskEngine(self)
         self.scheduler = Scheduler(self)
@@ -362,6 +365,26 @@ class AppState:
         if self.hermes:
             await self.hermes.close()
         await self.bridge.close()
+
+    @property
+    def personality(self) -> Personality:
+        """The active persona – everything that speaks (prompt, greetings, error phrases, voice) reads it here."""
+        return self.personas.active
+
+    async def set_persona(self, pid: str) -> Personality:
+        """Switch the personality without a restart; raises ``KeyError`` for an unknown one.
+
+        The voice applies to replies that start from now on (a reply being spoken keeps its voice), the system prompt
+        from the next turn (``ClaudeCodeAgent.reload``: idle processes now, busy ones after their turn, history via
+        --resume). Desktop and phone follow the ``persona.changed`` event."""
+        p = self.personas.set(pid)
+        self.tts.set_voice(p.voice, p.system_voice)
+        if self.settings.hermes.enabled:
+            sync_soul(self)
+        if self.agent is not None:
+            await self.agent.reload()
+        await bus.publish("persona.changed", **self.personas.to_dict())
+        return p
 
     async def _on_devices_paired_change(self) -> None:
         """The first device agent was paired (or the last one revoked): the device_* tools appear/disappear."""

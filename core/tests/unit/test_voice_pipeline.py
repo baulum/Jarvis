@@ -89,16 +89,19 @@ class FakeTTS:
     def __init__(self, ws: FakeWs | None = None, delays: dict[str, float] | None = None) -> None:
         self.ws, self.delays = ws, delays or {}
         self.http: list[str] = []
+        self.voices: list[str | None] = []
         self.warmed = False
+        self.voice = "jarvis"
 
-    async def warm(self) -> None:
+    async def warm(self, voice: str | None = None) -> None:
         self.warmed = True
 
-    async def live_session(self, rate: int):
+    async def live_session(self, rate: int, voice: str | None = None):
         return self.ws
 
-    async def stream(self, text: str, rate: int):
+    async def stream(self, text: str, rate: int, voice: str | None = None):
         self.http.append(text)
+        self.voices.append(voice)
         await asyncio.sleep(self.delays.get(text, 0.001))
         yield f"H:{text}|".encode()
 
@@ -225,3 +228,24 @@ async def test_no_acknowledgement_after_speech_started() -> None:
     turn.tool_started()
     await turn.finish()
     assert b"".join(out) == b"H:Ich schaue nach.|"
+
+
+async def test_a_persona_switch_never_changes_the_voice_in_the_middle_of_a_reply() -> None:
+    tts = FakeTTS()
+    out: list[bytes] = []
+
+    async def sink(b: bytes) -> None:
+        out.append(b)
+
+    turn = SpeechTurn(tts, sink, transport="http")  # type: ignore[arg-type]
+    await turn.prepare()
+    turn.text("Erster Satz, der schon gesprochen wird. ")
+    tts.voice = "rene_redo"  # Sir switches to René Redo while Jarvis is still talking
+    turn.text("Zweiter Satz kommt noch. ")
+    await turn.finish()
+    assert tts.voices == ["jarvis", "jarvis"]
+    nxt = SpeechTurn(tts, sink, transport="http", ack_phrase="Moment, Alter!")  # type: ignore[arg-type]
+    await nxt.prepare()
+    nxt.tool_started()
+    await nxt.finish()
+    assert tts.voices[-1] == "rene_redo" and tts.http[-1] == "Moment, Alter!"

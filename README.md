@@ -179,6 +179,7 @@ E2E-Tests laufen nur lokal.
 | `config/jarvis.yaml` | Server, Pfade, Datenbank, Agent und Modelle, Stimme, Telefonie, Benachrichtigungen, Mobile, Backup, Coding, KIE.ai-Modelle, Browser, Scheduler |
 | `config/permissions.yaml` | Rollen, Risikostufen, Werkzeug-Overrides, Shell-Allowlist, Rate-Limits |
 | `config/personality.yaml` | Anrede, Charakterzüge, Humor, Begrüßungen |
+| `config/personalities/*.yaml` | weitere auswählbare Persönlichkeiten mit eigener lokaler Stimme (René Redo) – Auswahl in den Einstellungen |
 | `config/mcp_servers.yaml` | externe MCP-Server |
 
 - Jeder Wert in `config/jarvis.yaml` lässt sich per Umgebungsvariable `JARVIS__SECTION__KEY` überschreiben

@@ -48,6 +48,8 @@ MOBILE_ROUTES: list[tuple[frozenset[str], re.Pattern[str]]] = [
     (frozenset({"POST"}), re.compile(r"^/api/tasks/[0-9a-f-]{36}/(input|cancel|retry|pause|resume|message)$")),
     (frozenset({"GET"}), re.compile(r"^/api/approvals(/mode)?$")),  # deciding goes through /api/mobile (signed)
     (frozenset({"GET", "POST"}), re.compile(r"^/api/agent/model$")),  # model picker in the app
+    (frozenset({"GET", "POST"}), re.compile(r"^/api/persona$")),  # personality (Jarvis / René Redo …)
+    (frozenset({"POST"}), re.compile(r"^/api/persona/preview$")),  # Hörprobe
     (frozenset({"GET"}), re.compile(r"^/api/agent/usage$")),  # Claude quota display
     (frozenset({"POST"}), re.compile(r"^/api/agent/usage/refresh$")),
     (frozenset({"GET"}), re.compile(r"^/api/notifications$")),

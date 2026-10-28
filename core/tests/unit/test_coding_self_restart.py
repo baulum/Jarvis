@@ -7,8 +7,10 @@ the restart helper itself is replaced by a recorder.
 """
 
 import asyncio
+import os
 import signal
 import subprocess
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -193,6 +195,7 @@ def test_default_root_is_the_checkout_of_this_core() -> None:
         (["desktop/src/App.tsx"], True),
         (["core/pyproject.toml", "core/uv.lock"], True),
         (["core/migrations/versions/x.py"], True),
+        (["scripts/local-tts/voices/rene_redo.wav"], True),  # the voice server reloads its voices
         (["README.md", "docs/DISTRIBUTED.md"], False),
         (["core/tests/unit/test_x.py"], False),
         (["apps/jarvis_mobile/lib/main.dart", "device_agent/src/jarvis_device/cli.py"], False),
@@ -688,6 +691,48 @@ def test_core_from_the_start_script_is_stopped_and_started_again(tmp_path: Path)
     assert method == "scripts/start.sh --no-app"
     assert run.calls[-1] == ["/bin/bash", str(tmp_path / "scripts" / "start.sh"), "--no-app"]  # voice daemon included
     assert not (tmp_path / "run" / "core.pid").exists()  # the start script would otherwise think the core still runs
+
+
+def _tts_server(tmp_path: Path) -> subprocess.Popen[Any]:
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "scripts/local-tts/server.py"])
+    (tmp_path / "run").mkdir(exist_ok=True)
+    (tmp_path / "run" / "tts.pid").write_text(f"{proc.pid}\n")
+    voices = tmp_path / "scripts" / "local-tts" / "voices"
+    voices.mkdir(parents=True)
+    (voices / "jarvis.txt").write_text("Hallo.")
+    return proc
+
+
+def _age(path: Path, seconds: float) -> None:
+    for f in path.rglob("*"):
+        os.utime(f, (time.time() + seconds, time.time() + seconds))
+
+
+@pytest.mark.coding_runner
+def test_changed_voice_server_is_restarted_with_the_core(tmp_path: Path) -> None:
+    proc = _tts_server(tmp_path)
+    try:
+        _age(tmp_path / "scripts", 120)  # a delivery wrote new voices after the server started
+        r = _restarter(FakeRun({}), tmp_path)
+        r.sleep, r.clock = Ticker(proc).sleep, Ticker(proc).clock
+        assert r.stop_stale_tts() is True
+        assert proc.wait(5) is not None and not (tmp_path / "run" / "tts.pid").exists()
+    finally:
+        proc.kill()
+
+
+@pytest.mark.coding_runner
+def test_unchanged_voice_server_keeps_running(tmp_path: Path) -> None:
+    proc = _tts_server(tmp_path)
+    try:
+        _age(tmp_path / "scripts", -3600)
+        assert _restarter(FakeRun({}), tmp_path).stop_stale_tts() is False
+        assert proc.poll() is None and (tmp_path / "run" / "tts.pid").exists()
+        (tmp_path / "run" / "tts.pid").write_text(f"{os.getpid()}\n")  # pid of something else: never signalled
+        _age(tmp_path / "scripts", 120)
+        assert _restarter(FakeRun({}), tmp_path).stop_stale_tts() is False
+    finally:
+        proc.kill()
 
 
 @pytest.mark.coding_runner

@@ -1,12 +1,14 @@
 """Configuration loading and validation.
 
-Three YAML files in ``config/`` (main settings, personality, permissions) are parsed into
+Three YAML files in ``config/`` (main settings, personality, permissions) – plus further personalities in
+``config/personalities/`` – are parsed into
 strict pydantic models. Environment variables of the form ``JARVIS__SECTION__KEY`` override
 values in ``jarvis.yaml``. Secrets are never part of the config: only Keychain account names.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +17,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CONFIG_DIR = Path(os.environ.get("JARVIS_CONFIG_DIR", REPO_ROOT / "config"))
 
@@ -435,15 +438,35 @@ class Settings(_Strict):
 
 
 class Personality(_Strict):
+    # Selectable persona (Einstellungen → Persönlichkeit). config/personality.yaml is "jarvis"; further personas live
+    # in config/personalities/<id>.yaml. Everything except id/label/description/voice/sample/… is the system prompt.
+    id: str = Field(default="jarvis", pattern=r"^[a-z][a-z0-9_]{1,31}$")
+    label: str = ""  # shown in the settings ("" = name)
+    description: str = ""  # one line for the settings
     name: str = "J.A.R.V.I.S."
     owner_title: str = "Sir"
     default_language: str = "de"
     languages: list[str] = Field(default_factory=lambda: ["de", "en"])
+    identity: str = ""  # the "Du bist …" paragraph of the system prompt ("" = Jarvis' own, see persona.render_soul)
     traits: list[str] = Field(default_factory=list)
     style_rules: list[str] = Field(default_factory=list)
     greetings: dict[str, str] = Field(default_factory=dict)
+    # call start (morning/afternoon/evening/night); empty = "Guten Abend, Sir." – start with Hallo/Guten …, so a
+    # greeting the model repeats in its first answer is still recognised (persona.LeadingGreetingFilter)
+    call_greetings: dict[str, str] = Field(default_factory=dict)
     error_phrases: list[str] = Field(default_factory=list)
     humor_examples: list[str] = Field(default_factory=list)
+    voice: str = Field(default="jarvis", pattern=r"^[a-z][a-z0-9_]{1,31}$")  # voice of the local TTS server
+    system_voice: str = ""  # macOS voice of the last fallback stage ("" = voice.tts.macos_voice)
+    sample: str = ""  # Hörprobe in the settings
+    ack_phrase: str = "Einen Moment, Sir."  # said when a tool runs before the first word
+    confirm_example: str = "Sehr wohl, Sir. Ich kümmere mich darum."  # voice turns: how a started task is confirmed
+    wakeup_say: str | None = None  # "Hey Jarvis, wake up" line (None = voice.wakeup.say)
+    never_say: list[str] = Field(default_factory=list)  # words that are never spoken, even if the model writes them
+
+    @property
+    def display_name(self) -> str:
+        return self.label or self.name
 
 
 class RoleCfg(_Strict):
@@ -546,6 +569,28 @@ def load_settings(environ: dict[str, str] | None = None) -> Settings:
 
 def load_personality() -> Personality:
     return Personality.model_validate(_load_yaml("personality.yaml"))
+
+
+PERSONALITIES_DIR = "personalities"
+
+
+def load_personalities(default: Personality | None = None) -> list[Personality]:
+    """Jarvis (config/personality.yaml) first, then every config/personalities/*.yaml in name order.
+
+    A broken extra persona is skipped with a warning – it must never keep the core from starting."""
+    first = default or load_personality()
+    out = [first]
+    for path in sorted((CONFIG_DIR / PERSONALITIES_DIR).glob("*.yaml")):
+        try:
+            p = Personality.model_validate(_load_yaml(f"{PERSONALITIES_DIR}/{path.name}"))
+        except (ValueError, OSError, yaml.YAMLError) as e:
+            logger.warning("Persönlichkeit %s ignoriert: %s", path.name, e)
+            continue
+        if any(o.id == p.id for o in out):
+            logger.warning("Persönlichkeit %s ignoriert: id %r doppelt", path.name, p.id)
+            continue
+        out.append(p)
+    return out
 
 
 def load_permissions() -> Permissions:

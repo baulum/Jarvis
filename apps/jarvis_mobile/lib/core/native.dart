@@ -91,6 +91,11 @@ class NativeBridge {
 
   /// Installs the downloaded update now (ends the app; it restarts in the new version).
   Future<void> updateInstall() => _ch.invokeMethod('updateInstall');
+
+  /// Plays a short WAV (16-bit PCM, e.g. a Hörprobe from the core) on the media stream; completes when it ended or
+  /// was stopped. Returns false when the data could not be played.
+  Future<bool> playWav(Uint8List wav) async => await _ch.invokeMethod<bool>('playWav', {'wav': wav}) ?? false;
+  Future<void> stopWav() => _ch.invokeMethod('stopWav');
 }
 
 class NativeEvent {

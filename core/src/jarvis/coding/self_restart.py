@@ -53,7 +53,9 @@ RESTART_PATHS = (
     "core/alembic.ini",
     "config/",
     "desktop/",
+    "scripts/local-tts/",  # the local voice server and its voices (``Restarter.stop_stale_tts``)
 )
+TTS_DIR = "scripts/local-tts"
 STATUS_FILE = "self-restart.json"
 LOG_FILE = "self-restart.log"
 LAUNCHD_LABEL = "com.jarvis.core"
@@ -311,12 +313,39 @@ class Restarter:
         if not script.is_file():
             raise RestartError(f"Startskript {script} fehlt")
         self.stop_core()
+        tts = self.stop_stale_tts()
         # the voice daemon is part of the restart (the script starts it unless one already runs); only the desktop app
         # is left to ``open_desktop`` – and only if it was running before
         code, text = self.run(["/bin/bash", str(script), "--no-app"], 180)
         if code != 0:
             raise RestartError(f"{script.name} fehlgeschlagen (Exit {code}): {text.strip()[-300:]}")
-        return f"{script.relative_to(self.root)} --no-app"
+        return f"{script.relative_to(self.root)} --no-app" + (" (lokaler Sprachserver neu geladen)" if tts else "")
+
+    def stop_stale_tts(self) -> bool:
+        """The local voice server (``scripts/local-tts``, started by the start script) reads its code and its voices
+        only at start. When the delivery changed them – a new persona voice – it is stopped too, and the start script
+        starts it again. Unchanged, it keeps running: reloading the model costs the Jarvis voice ~20 s."""
+        pidfile = self.run_dir / "tts.pid"
+        try:
+            pid = int(pidfile.read_text().strip())
+            proc = psutil.Process(pid)
+            if not any("local-tts" in part for part in proc.cmdline()):
+                return False  # a stale pid file: never signal a foreign process
+            started = proc.create_time()
+        except (OSError, ValueError, psutil.Error):
+            return False
+        files = [f for f in (self.root / TTS_DIR).rglob("*") if f.is_file()]
+        if max((f.stat().st_mtime for f in files), default=0.0) <= started:
+            return False
+        with contextlib.suppress(psutil.Error):
+            proc.terminate()
+        if not self._wait_gone([pid], 20):
+            with contextlib.suppress(psutil.Error):
+                proc.kill()
+            self._wait_gone([pid], 5)
+        with contextlib.suppress(OSError):
+            pidfile.unlink()
+        return True
 
     def stop_core(self) -> None:
         """Ends the old core (its python process and the ``uv run`` wrapper of the pid file). Only processes whose

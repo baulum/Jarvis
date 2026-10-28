@@ -21,6 +21,7 @@ import org.json.JSONObject
 import systems.pje.jarvis_mobile.JarvisApp
 import systems.pje.jarvis_mobile.assist.Assist
 import systems.pje.jarvis_mobile.assist.WakeWord
+import systems.pje.jarvis_mobile.assist.WavPreview
 import systems.pje.jarvis_mobile.call.CallManager
 import systems.pje.jarvis_mobile.location.LocationShare
 import systems.pje.jarvis_mobile.net.Gateway
@@ -122,6 +123,9 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
                 AppUpdater.check(context, manual = call.argument<Boolean>("manual") == true).toString()
             }
             "updateInstall" -> { AppUpdater.installNow(context); result.success(true) }
+            // Hörprobe of a personality (Einstellungen → Persönlichkeit): a WAV from the core
+            "playWav" -> async { WavPreview.play(call.argument<ByteArray>("wav") ?: ByteArray(0)) }
+            "stopWav" -> { WavPreview.stop(); result.success(true) }
             else -> result.notImplemented()
         }
     }

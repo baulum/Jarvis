@@ -26,6 +26,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
+from jarvis.agent.persona import ACK_PHRASE  # the default; a persona brings its own (SpeechTurn ack_phrase)
 from jarvis.events import spawn
 from jarvis.voice.speech import speakable
 
@@ -35,7 +36,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 Transport = Literal["hybrid", "http", "websocket"]
-ACK_PHRASE = "Einen Moment, Sir."
 
 _ABBREV = re.compile(
     r"(?:\b(?:bzw|ca|nr|dr|hr|fr|evtl|ggf|inkl|usw|vgl|bspw|mio|mrd|tel|str|"
@@ -93,7 +93,7 @@ class TextChunker:
 
 _COMMIT = re.compile(
     r"\b(?:ich\s+kümmere\s+mich|kümmere\s+mich\s+darum|(?:ich\s+)?(?:starte|beginne|lege|erstelle|schicke|sende|"
-    r"verschicke|buche|trage|richte|baue)\s+(?:\w+\s+){0,4}?(?:jetzt|sofort|gleich|an|ein|los|auf)\b|"
+    r"verschicke|buche|trage|richte|baue|hau|haue|jag|jage)\s+(?:\w+\s+){0,4}?(?:jetzt|sofort|gleich|an|ein|los|auf)\b|"
     r"(?:wird|wurde|ist|sind|habe|hab)\s+(?:\w+\s+){0,4}?(?:erledigt|gestartet|angelegt|erstellt|gesendet|"
     r"verschickt|eingetragen|gebucht|eingerichtet)\b|läuft\s+(?:jetzt\s+)?im\s+hintergrund)",
     re.I,
@@ -163,8 +163,15 @@ class SpeechTurn:
         transport: Transport = "hybrid",
         on_piece: Callable[[str], Awaitable[None]] | None = None,
         max_prefetch: int = 3,
+        voice: str | None = None,
+        ack_phrase: str = ACK_PHRASE,
+        never_say: re.Pattern[str] | None = None,
     ) -> None:
         self.tts = tts
+        # the voice is fixed for the whole reply: a persona switch meanwhile applies from the next reply on
+        self.voice: str | None = voice or getattr(tts, "voice", None)
+        self.ack_phrase = ack_phrase
+        self.never_say = never_say  # the persona's forbidden words are dropped before synthesis
         self.on_audio = on_audio
         self.on_piece = on_piece
         self.rate = sample_rate
@@ -194,7 +201,7 @@ class SpeechTurn:
     async def prepare(self) -> None:
         """Warm the HTTP connection and open the live socket while Sir is still speaking."""
         self._t0 = time.perf_counter()
-        warm = asyncio.ensure_future(self.tts.warm())
+        warm = asyncio.ensure_future(self.tts.warm(self.voice))
         if self.transport != "http":
             self._ws_future = asyncio.ensure_future(self._open_ws())
         self._sender = asyncio.ensure_future(self._send_loop())
@@ -203,7 +210,7 @@ class SpeechTurn:
 
     async def _open_ws(self) -> FishStreamSession | None:
         try:
-            sess = await self.tts.live_session(self.rate)
+            sess = await self.tts.live_session(self.rate, self.voice)
             if sess is None:
                 self.ws_failed = True
                 return None
@@ -227,7 +234,7 @@ class SpeechTurn:
         """Tools can take many seconds before the first word: acknowledge once – without claiming anything."""
         if not self._acked and self.metrics["pieces"] == 0 and not self.chunker.buf.strip() and not self.guard.held:
             self._acked = True
-            self._enqueue(ACK_PHRASE)
+            self._enqueue(self.ack_phrase)
             self.metrics["acknowledged"] = True
 
     def tool_finished(self, ok: bool) -> None:
@@ -243,6 +250,8 @@ class SpeechTurn:
         if self._cancelled:
             return
         text = speakable(piece)
+        if self.never_say is not None:
+            text = re.sub(r"\s{2,}", " ", self.never_say.sub("", text)).strip(" ,")
         if not text:
             return
         self.metrics["pieces"] += 1
@@ -270,7 +279,7 @@ class SpeechTurn:
         async def run() -> None:
             try:
                 async with self._sem:
-                    async for chunk in self.tts.stream(text, self.rate):
+                    async for chunk in self.tts.stream(text, self.rate, self.voice):
                         if self._cancelled:
                             break
                         seg.queue.put_nowait(chunk)

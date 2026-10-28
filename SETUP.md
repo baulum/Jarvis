@@ -54,6 +54,12 @@ Qwen3-TTS 0.6B (MLX) den Referenz-Clip `voices/jarvis_ref_short.wav` + `.txt` (6
 Gemessen auf M1 Pro: ~0,3–1 s bis zum ersten Ton, Echtzeitfaktor ~0,6–0,75. Kurz halten – ein 19-s-Clip macht es langsamer
 als Echtzeit. Läuft der Server nicht, spricht Fish Audio (falls der Connector aktiv ist), sonst macOS. Kurze, wiederkehrende
 Sätze (≤ `cache_max_chars`) landen in `tts-cache/` und werden nur einmal erzeugt – auch mit Fish Audio.
+Weitere Stimmen (z. B. René Redo) lädt derselbe Server aus `scripts/local-tts/voices/<name>.wav` + `.txt`
+(`--voices-dir`, setzt `start.sh`): gleiches Modell, kein zusätzlicher Speicher, gleiche Latenz. Läuft noch ein
+Sprachserver von vor der neuen Stimme, zeigt die Persönlichkeits-Auswahl „Eigene Stimme noch nicht geladen“ und die
+Persona spricht bis zu dessen Neustart (`scripts/stop.sh` + `start.sh`; der automatische Neustart nach Jarvis-Jobs
+erledigt das selbst) mit ihrer macOS-Stimme – nie über Fish Audio. Mit LaunchAgents: `scripts/launchd/install.sh` erneut
+ausführen, damit `com.jarvis.tts` die Option `--voices-dir` bekommt.
 
 ## 5. Sprachmodell (Claude 5.5)
 - Standard: **Sonnet 5.5**; einfache Anfragen automatisch **Haiku 5.5**; **Opus 5.5** nur auf Wunsch.
@@ -72,7 +78,16 @@ Sätze (≤ `cache_max_chars`) landen in `tts-cache/` und werden nur einmal erze
   per `--plugin-dir` geladen – deine übrigen Claude-Einstellungen, Hooks und MCP-Server bleiben außen vor.
 
 ## 7. Persönlichkeit & Verhalten anpassen
-- `config/personality.yaml` – Anrede, Charakterzüge, Humor, Begrüßungen (wird beim Core-Start als Hermes-SOUL.md übernommen)
+- **Persönlichkeit wählen:** Einstellungen → Persönlichkeit (Desktop und Handy): „J.A.R.V.I.S.“ oder „René Redo“, mit
+  Hörprobe. Der Wechsel gilt ohne Neustart ab der nächsten Antwort (Systemprompt und Stimme; eine gerade gesprochene
+  Antwort endet in ihrer Stimme), wird in `persona.json` im Datenordner gespeichert und auf allen Geräten angezeigt.
+  Werkzeuge, Erinnerungen, Berechtigungen und Arbeitsregeln sind in beiden Modi dieselben.
+- `config/personality.yaml` – Jarvis: Anrede, Charakterzüge, Humor, Begrüßungen (wird beim Core-Start als Hermes-SOUL.md übernommen)
+- `config/personalities/<id>.yaml` – weitere Persönlichkeiten (René Redo: `rene_redo.yaml`). Eine neue Persönlichkeit
+  ist eine neue Datei (`id`, `label`, `identity`, `traits`, `style_rules`, `voice`, `sample` …, siehe
+  `Personality` in `core/src/jarvis/config.py`); eine eigene Stimme entwirft `scripts/local-tts/design_voice.py` aus einer
+  Beschreibung (Qwen3-TTS VoiceDesign, einmalig, ~3 GB) – Stimmen echter Personen nur mit deren Zustimmung und
+  rechtmäßigen Aufnahmen.
 - `config/permissions.yaml` – Rollen, Risikostufen, Shell-Allowlist, Rate-Limits
 - `config/jarvis.yaml` – Modelle, Stimme, Benachrichtigungsregeln, Ruhezeiten, Pfade
 - `config/mcp_servers.yaml` – externe MCP-Server

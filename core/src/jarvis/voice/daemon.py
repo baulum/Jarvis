@@ -99,6 +99,7 @@ class VoiceDaemon:
     def __init__(self, settings: Settings) -> None:
         self.s = settings
         self.cfg = settings.voice
+        self.wakeup_say = settings.voice.wakeup.say  # the active persona's line comes with the core's settings
         self.base = f"http://127.0.0.1:{settings.server.port}"
         self.token = (settings.paths.data_dir / "voice.token").read_text().strip()
         self.http = httpx.AsyncClient(
@@ -578,6 +579,7 @@ class VoiceDaemon:
             r = await self.http.get("/api/voice/wakeup", timeout=5)
             r.raise_for_status()
             d = r.json()
+            self.wakeup_say = str(d.get("say", self.cfg.wakeup.say) or "")
             return WakeupSettings(
                 enabled=bool(d.get("enabled", True)),
                 sound=str(d.get("sound") or ""),
@@ -600,7 +602,7 @@ class VoiceDaemon:
         elif self.audio is not None:
             await self.audio.play(power_up())
             await self.audio.drained(5)
-        await self.say_text(self.cfg.wakeup.say)
+        await self.say_text(self.wakeup_say)
         try:
             result = await asyncio.wait_for(apps, 90)
         except Exception:

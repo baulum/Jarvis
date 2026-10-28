@@ -37,6 +37,7 @@ import httpx
 import numpy as np
 from fastapi import WebSocket, WebSocketDisconnect
 
+from jarvis.agent.persona import error_phrase, never_say
 from jarvis.db import session_scope
 from jarvis.db.models import Call
 from jarvis.events import bus
@@ -498,7 +499,7 @@ class TelephonyService:
             raise
         except Exception:
             logger.exception("Phone turn failed")
-            await self._say(ws, st, "Das hat leider nicht funktioniert, Sir.")
+            await self._say(ws, st, error_phrase(getattr(self.state, "personality", None)))
             return
         st.session_id = result.session_id
         st.transcript.append({"role": "jarvis", "text": result.text, "ts": datetime.now(UTC).isoformat()})
@@ -507,6 +508,8 @@ class TelephonyService:
 
     async def _say(self, ws: WebSocket, st: CallState, text: str) -> None:
         text = speakable(text)
+        if (banned := never_say(getattr(self.state, "personality", None))) is not None:
+            text = banned.sub("", text).strip()
         if not text:
             return
         st.speaking = True

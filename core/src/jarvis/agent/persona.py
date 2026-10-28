@@ -91,14 +91,25 @@ SPOKEN_NAME_RULE = (
 )
 
 
+def identity(p: Personality) -> str:
+    """The "Du bist …" paragraph: the persona's own, or Jarvis' (unchanged since the first version)."""
+    if p.identity.strip():
+        return p.identity.strip()
+    return (
+        f'Du bist {p.name}, der persönliche KI-Assistent deines Besitzers, den du mit "{p.owner_title}" ansprichst '
+        "– nach dem Vorbild des Assistenten aus Iron Man. Du läufst lokal auf seinem Mac."
+    )
+
+
 def render_soul(p: Personality) -> str:
+    """The complete persona part of the system prompt. Tools, memory, permissions and the operating rules are the
+    same for every persona – only who is speaking changes."""
     traits = "\n".join(f"- {t}" for t in p.traits)
     rules = "\n".join(f"- {r}" for r in [*p.style_rules, SPOKEN_NAME_RULE])
     humor = "\n".join(f'- "{h}"' for h in p.humor_examples)
     return f"""# {p.name}
 
-Du bist {p.name}, der persönliche KI-Assistent deines Besitzers, den du mit "{p.owner_title}" ansprichst \
-– nach dem Vorbild des Assistenten aus Iron Man. Du läufst lokal auf seinem Mac.
+{identity(p)}
 
 ## Persönlichkeit
 {traits}
@@ -158,6 +169,34 @@ def whatsapp_note(active: bool) -> str:
     return "\n\n" + WHATSAPP_NOTE if active else ""
 
 
+ERROR_PHRASE = "Das hat leider nicht funktioniert, Sir."
+ACK_PHRASE = "Einen Moment, Sir."
+
+
+def error_phrase(p: Personality | None) -> str:
+    """What the active persona says when a spoken turn failed."""
+    return str((getattr(p, "error_phrases", None) or [ERROR_PHRASE])[0])
+
+
+def ack_phrase(p: Personality | None) -> str:
+    """What the active persona says while a tool runs before the first word."""
+    return str(getattr(p, "ack_phrase", None) or ACK_PHRASE)
+
+
+def never_say(p: Personality | None) -> re.Pattern[str] | None:
+    """The persona's forbidden words (René Redo: the abbreviation "GIG") as one pattern – exact spelling, whole word,
+    so "Gig" or "gigantisch" stay. None when there are none (Jarvis)."""
+    words = [w for w in getattr(p, "never_say", None) or [] if w.strip()]
+    if not words:
+        return None
+    return re.compile(r"(?<![\w#])#?(?:" + "|".join(re.escape(w) for w in words) + r")\b[.!]?")
+
+
+def _day_part(now: datetime) -> str:
+    h = now.hour
+    return "morning" if 5 <= h < 11 else "afternoon" if 11 <= h < 17 else "evening" if 17 <= h < 23 else "night"
+
+
 def time_of_day_greeting(p: Personality, now: datetime | None = None) -> str:
     now = now or datetime.now(TZ)
     h = now.hour
@@ -194,7 +233,11 @@ def _capitalise(text: str) -> str:
 
 def short_greeting(p: Personality, now: datetime | None = None) -> str:
     """One short greeting for the start of a call (no status report like the long chat greetings)."""
-    h = (now or datetime.now(TZ)).hour
+    now = now or datetime.now(TZ)
+    own = (getattr(p, "call_greetings", None) or {}).get(_day_part(now))
+    if own:
+        return str(own)
+    h = now.hour
     word = (
         "Guten Morgen" if 5 <= h < 11 else "Guten Tag" if 11 <= h < 17 else "Guten Abend" if 17 <= h < 23 else "Hallo"
     )
@@ -206,7 +249,9 @@ def call_opening(p: Personality, message: str | None = None, now: datetime | Non
     repeated ("Guten Abend, Sir. Sir, …")."""
     hello = short_greeting(p, now)
     body = _capitalise(strip_address(strip_greeting((message or "").strip(), p.owner_title), p.owner_title).strip())
-    return f"{hello} {body}".strip() if body else f"{hello} Ich höre."
+    if body:
+        return f"{hello} {body}".strip()
+    return hello if getattr(p, "call_greetings", None) else f"{hello} Ich höre."  # a persona's own greeting asks
 
 
 class LeadingGreetingFilter:
@@ -256,6 +301,7 @@ def turn_instructions(
     memory_context: str = "",
     tainted: bool = False,
     call_context: str = "",
+    confirm_example: str = "Sehr wohl, Sir. Ich kümmere mich darum.",
 ) -> str:
     now = now or datetime.now(TZ)
     parts = [f"Aktuelle Zeit: {now.strftime('%A, %d.%m.%Y %H:%M')} (Europe/Berlin). Kanal: {channel}."]
@@ -265,7 +311,7 @@ def turn_instructions(
             "(kurzer erster Satz), insgesamt maximal zwei bis drei kurze Sätze, keine Listen, keine "
             "Markdown-Formatierung, Zahlen ausschreiben wo sinnvoll. Längere Aufgaben (Websites, Recherchen, "
             "Geschäftsabläufe) startest du ZUERST mit dem passenden Werkzeug im Hintergrund und bestätigst erst "
-            "danach in einem Satz (z. B. „Sehr wohl, Sir. Ich kümmere mich darum.“). Kündige nie etwas als "
+            f"danach in einem Satz (z. B. „{confirm_example}“). Kündige nie etwas als "
             "gestartet oder erledigt an, bevor das Werkzeug es angenommen hat. Sir wird benachrichtigt, "
             "sobald die Aufgabe fertig ist. Du sprichst bereits mit Sir: Die Begrüßung ist schon gesprochen, "
             "wiederhole sie und die Anrufnachricht nie, rufe Sir nicht erneut an (kein mobile_call_owner) und "

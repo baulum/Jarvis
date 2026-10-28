@@ -534,6 +534,24 @@ export interface WakeupSettings {
   supported: boolean;
 }
 
+/** One selectable personality (Einstellungen → Persönlichkeit), see core/src/jarvis/agent/personas.py. */
+export interface PersonaInfo {
+  id: string;
+  label: string;
+  description: string;
+  /** name of its voice on the local voice server */
+  voice: string;
+  /** the Hörprobe sentence */
+  sample: string;
+  /** false: the local voice server has not loaded this voice (yet) – it speaks with the system voice meanwhile */
+  voice_ready: boolean;
+}
+
+export interface PersonaStatus {
+  active: string;
+  personas: PersonaInfo[];
+}
+
 export interface WakeupResult {
   enabled: boolean;
   sound: string;

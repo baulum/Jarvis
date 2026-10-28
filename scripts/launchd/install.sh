@@ -36,7 +36,7 @@ P
 
 plist com.jarvis.whisper "$ROOT" /opt/homebrew/bin/whisper-server -m "$DATA/models/ggml-large-v3-turbo-q5_0.bin" --host 127.0.0.1 --port 8178 -l de -t 4
 if [ -x "$DATA/tts-local/.venv/bin/python" ] && [ -f "$DATA/voices/jarvis_ref_short.wav" ]; then
-  plist com.jarvis.tts "$ROOT" "$DATA/tts-local/.venv/bin/python" -I "$ROOT/scripts/local-tts/server.py" --port 8179 --ref "$DATA/voices/jarvis_ref_short"
+  plist com.jarvis.tts "$ROOT" "$DATA/tts-local/.venv/bin/python" -I "$ROOT/scripts/local-tts/server.py" --port 8179 --ref "$DATA/voices/jarvis_ref_short" --voices-dir "$ROOT/scripts/local-tts/voices"
 fi
 plist com.jarvis.core "$ROOT/core" "$UV" run --frozen jarvisctl serve
 if [ "${1:-}" = "--with-voice" ]; then

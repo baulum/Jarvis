@@ -477,19 +477,25 @@ class FishAudioTTS(TTSProvider):
         return b"".join([chunk async for chunk in self.stream(text, sample_rate)])
 
 
+DEFAULT_VOICE = "jarvis"
+
+
 class LocalTTS(TTSProvider):
-    """The Jarvis voice synthesised on this Mac by scripts/local-tts/server.py – no API costs."""
+    """A voice synthesised on this Mac by scripts/local-tts/server.py – no API costs. One instance per voice; the
+    server serves the Jarvis voice and every further voice it was started with (``"voices"`` in /health)."""
 
     name = "local"
 
-    def __init__(self, server_url: str) -> None:
+    def __init__(self, server_url: str, voice: str = DEFAULT_VOICE) -> None:
         self.server_url = server_url.rstrip("/")
+        self.voice_name = voice
         self._http = httpx.AsyncClient(base_url=self.server_url, timeout=httpx.Timeout(60, connect=2))
         self._checked = (0.0, False)
-        self.voice = "local"  # model + reference clip as reported by the server (phrase-cache key)
+        self.voice = "local" if voice == DEFAULT_VOICE else f"local:{voice}"  # phrase-cache key (server's voice id)
 
     async def available(self) -> bool:
-        """Health is cached for a few seconds – this is asked once per spoken piece."""
+        """Health is cached for a few seconds – this is asked once per spoken piece. A server that does not know
+        this voice (started before it existed) counts as unavailable: it would answer in the Jarvis voice."""
         at, ok = self._checked
         if time.monotonic() - at < 5:
             return ok
@@ -497,14 +503,19 @@ class LocalTTS(TTSProvider):
             r = await self._http.get("/health", timeout=2)
             ok = r.status_code == 200
             if ok:
-                self.voice = f"local:{r.json().get('voice', '')}"
-        except (httpx.HTTPError, ValueError):
+                body = r.json()
+                voices = body.get("voices") or {DEFAULT_VOICE: body.get("voice", "")}
+                ok = self.voice_name in voices
+                if ok:
+                    self.voice = f"local:{voices[self.voice_name]}"
+        except (httpx.HTTPError, ValueError, AttributeError):
             ok = False
         self._checked = (time.monotonic(), ok)
         return ok
 
     async def stream(self, text: str, sample_rate: int) -> AsyncIterator[bytes]:
-        async with self._http.stream("POST", "/tts", json={"text": text}) as r:
+        body = {"text": text} if self.voice_name == DEFAULT_VOICE else {"text": text, "voice": self.voice_name}
+        async with self._http.stream("POST", "/tts", json=body) as r:
             if r.status_code >= 400:
                 detail = (await r.aread()).decode(errors="replace")[:200]
                 raise RuntimeError(f"Lokale TTS {r.status_code}: {detail}")
@@ -586,6 +597,11 @@ class TTSService:
     ``provider: local`` wins over the Fish Audio connector; while the local server is down, Fish Audio
     (if the connector is active) and then the system voice take over – macOS ``say`` on the Mac (unchanged),
     SAPI on Windows, espeak-ng on Linux, silence (text-only replies) on a host without any voice.
+
+    That chain is the Jarvis voice. Every other persona voice (``voice``, set on a persona switch) is local only:
+    its own clip on the local server, else the system voice (on the Mac the persona's ``system_voice``) – never
+    Fish Audio, which only knows the Jarvis voice. Callers that speak a whole reply pass the voice they started
+    with, so a switch never changes the voice in the middle of a reply.
     """
 
     def __init__(self, cfg: TtsCfg, cache_dir: Path | None = None, adapter: PlatformAdapter | None = None) -> None:
@@ -607,6 +623,33 @@ class TTSService:
         # Set by the Fish Audio connector: when it is active, its settings win over config/jarvis.yaml.
         self.fish_connector_active = False
         self.fish_last_error: str | None = None
+        self.voice = DEFAULT_VOICE  # the active persona's voice
+        self._locals: dict[str, LocalTTS] = {DEFAULT_VOICE: self.local}
+        self._systems: dict[str, TTSProvider] = {}
+        self._system_voices: dict[str, str] = {}
+
+    def set_voice(self, voice: str, system_voice: str = "") -> None:
+        """Persona switch: replies started from now on use this voice (no restart, running replies keep theirs)."""
+        self.voice = voice or DEFAULT_VOICE
+        if system_voice:
+            self._system_voices[self.voice] = system_voice
+
+    def local_for(self, voice: str | None = None) -> LocalTTS:
+        v = voice or self.voice
+        if v not in self._locals:
+            self._locals[v] = LocalTTS(self.cfg.local.server_url, v)
+        return self._locals[v]
+
+    def system_for(self, voice: str | None = None) -> TTSProvider:
+        """Last fallback stage of a voice: the Jarvis one is ``self.system``; another persona may name its own
+        macOS voice (``system_voice``), so it does not suddenly sound like Jarvis' fallback."""
+        v = voice or self.voice
+        sv = self._system_voices.get(v, "")
+        if v == DEFAULT_VOICE or not sv or self.adapter.id != "mac":
+            return self.system
+        if v not in self._systems:
+            self._systems[v] = MacSayTTS(sv, self.cfg.rate)
+        return self._systems[v]
 
     def configure_fish(self, active: bool, reference_id: str | None = None, model: str | None = None) -> None:
         self.fish_connector_active = active
@@ -621,7 +664,11 @@ class TTSService:
             return "local"
         return "fish_audio" if self.fish_connector_active or self.cfg.provider == "fish_audio" else self.system.name
 
-    async def provider(self) -> TTSProvider:
+    async def provider(self, voice: str | None = None) -> TTSProvider:
+        v = voice or self.voice
+        if v != DEFAULT_VOICE:
+            local = self.local_for(v)
+            return local if await local.available() else self.system_for(v)
         if self.wanted == "local" and await self.local.available():
             return self.local
         if (self.wanted == "fish_audio" or self.fish_connector_active) and await self.fish.available():
@@ -631,22 +678,27 @@ class TTSService:
     def _voice_id(self, p: TTSProvider) -> str:
         if p is self.fish:
             return f"fish:{self.fish.reference_id}:{self.fish.model}"
-        return self.local.voice if p is self.local else p.name
+        return p.voice if isinstance(p, LocalTTS) else p.name
 
     async def status(self) -> dict[str, object]:
         p = await self.provider()
+        wanted = self.wanted if self.voice == DEFAULT_VOICE else "local"
         return {
-            "configured": self.wanted,
+            "configured": wanted,
             "active": p.name,
+            "voice": self.voice,
             "local_ready": await self.local.available(),
+            "voice_ready": await self.local_for().available(),
             "fish_audio_ready": await self.fish.available(),
-            "fallback": p.name != self.wanted or (self.wanted == "fish_audio" and self.fish_last_error is not None),
+            "fallback": p.name != wanted or (wanted == "fish_audio" and self.fish_last_error is not None),
             "fish_audio_error": self.fish_last_error,
         }
 
-    async def stream(self, text: str, sample_rate: int) -> AsyncIterator[bytes]:
-        p = await self.provider()
-        key = self.cache.key(self._voice_id(p), text, sample_rate) if p is not self.system else None
+    async def stream(self, text: str, sample_rate: int, voice: str | None = None) -> AsyncIterator[bytes]:
+        voice = voice or self.voice  # read once: a switch while this piece is synthesised does not mix voices
+        p = await self.provider(voice)
+        system = self.system_for(voice)
+        key = self.cache.key(self._voice_id(p), text, sample_rate) if p is not system else None
         if key and (hit := self.cache.get(key)) is not None:
             yield hit
             return
@@ -658,38 +710,36 @@ class TTSService:
                 if key:
                     parts.append(chunk)
                 yield chunk
-            if not produced and p is not self.system and text.strip():
+            if not produced and p is not system and text.strip():
                 # the provider answered without a single sample (e.g. the local server returned an empty body):
                 # the text would show up in the chat, but nothing would be heard
-                logger.warning(
-                    "TTS provider %s returned no audio; using the system voice (%s)", p.name, self.system.name
-                )
-                yield await self.system.synthesize(text, sample_rate)
+                logger.warning("TTS provider %s returned no audio; using the system voice (%s)", p.name, system.name)
+                yield await system.synthesize(text, sample_rate)
                 return
             if key:
                 self.cache.put(key, b"".join(parts))
             if p is self.fish:
                 self.fish_last_error = None
         except Exception as e:
-            if p is self.system:
+            if p is system:
                 raise
             if p is self.fish:
                 self.fish_last_error = _fish_error(str(e))
-            logger.warning("TTS provider %s failed; falling back to the system voice (%s)", p.name, self.system.name,
+            logger.warning("TTS provider %s failed; falling back to the system voice (%s)", p.name, system.name,
                            exc_info=True)  # fmt: skip
-            yield await self.system.synthesize(text, sample_rate)
+            yield await system.synthesize(text, sample_rate)
 
-    async def synthesize(self, text: str, sample_rate: int) -> bytes:
-        return b"".join([c async for c in self.stream(text, sample_rate)])
+    async def synthesize(self, text: str, sample_rate: int, voice: str | None = None) -> bytes:
+        return b"".join([c async for c in self.stream(text, sample_rate, voice)])
 
-    async def warm(self) -> None:
-        if (await self.provider()) is self.fish:
+    async def warm(self, voice: str | None = None) -> None:
+        if (await self.provider(voice)) is self.fish:
             await self.fish.warm()
 
-    async def live_session(self, sample_rate: int) -> FishStreamSession | None:
+    async def live_session(self, sample_rate: int, voice: str | None = None) -> FishStreamSession | None:
         """A Fish Audio WebSocket session for streamed replies, or None (provider is not Fish / disabled)."""
         fcfg = self.cfg.fish_audio
-        if not fcfg.streaming or (await self.provider()) is not self.fish or self.fish_last_error:
+        if not fcfg.streaming or (await self.provider(voice)) is not self.fish or self.fish_last_error:
             return None
         key = self.fish.api_key()
         if not key:

@@ -10,6 +10,7 @@ import '../../core/theme.dart';
 import '../../state/providers.dart';
 import '../widgets/hud.dart';
 import '../widgets/model_picker.dart';
+import '../widgets/persona_settings.dart';
 import '../widgets/update_settings.dart';
 import '../widgets/wake_settings.dart';
 
@@ -195,6 +196,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> with WidgetsBin
                 LightAction('Testanruf', onTap: () => _test('call')),
                 LightAction('Modell & Kontingent', onTap: () => showModelSheet(context)),
               ]),
+              const SizedBox(height: J.s6),
+              const PersonaSettings(),
               const SizedBox(height: J.s6),
               const Caps('Wann Jarvis Sie erreicht'),
               const SizedBox(height: J.s1),

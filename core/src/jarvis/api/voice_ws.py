@@ -27,6 +27,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from jarvis.agent.llm import AgentEvent
+from jarvis.agent.persona import ack_phrase, error_phrase, never_say
 from jarvis.api.deps import require
 from jarvis.app_state import AppState
 from jarvis.events import bus, spawn
@@ -75,6 +76,8 @@ class VoiceSocket:
                 sample_rate=self.rate,
                 transport=self.transport,  # type: ignore[arg-type]
                 on_piece=piece,
+                ack_phrase=ack_phrase(self.state.personality),
+                never_say=never_say(self.state.personality),
             )
             self.speech[tag] = st
         return st
@@ -116,7 +119,7 @@ class VoiceSocket:
         except Exception as e:
             logger.exception("Voice turn failed")
             error = str(e)[:300]
-            speech.say("Das hat leider nicht funktioniert, Sir.")
+            speech.say(error_phrase(self.state.personality))
         metrics = await speech.finish()
         metrics.update(result_timings)
         metrics["turn_ms"] = round((time.perf_counter() - t0) * 1000, 1)

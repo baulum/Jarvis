@@ -1,5 +1,6 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { PersonaCard } from "../components/PersonaCard";
 import { WakeupCard } from "../components/WakeupCard";
 import { Button, CodeBlock, Dialog, EmptyState, ErrorState, Field, KeyValue, Section, Skeleton, Tag, Toggle } from "../components/ui";
 import { useAction, useQuery } from "../hooks/useQuery";
@@ -14,7 +15,7 @@ function render(v: unknown): string {
 }
 
 export function SettingsView() {
-  const settings = useQuery(() => api.settings(), "settings");
+  const settings = useQuery(() => api.settings(), "settings", { topics: ["system"] }); // persona.changed bumps "system"
   const devices = useQuery(() => api.devices(), "devices");
   const act = useAction();
   const [autostart, setAuto] = useState<boolean | null>(null);
@@ -43,12 +44,13 @@ export function SettingsView() {
             </div>
           </Section>
         )}
+        <PersonaCard />
         <WakeupCard />
         {settings.loading && <Skeleton rows={6} />}
         {settings.error && <ErrorState message={settings.error} onRetry={settings.refetch} />}
         {s && (
           <div className="grid gap-6 md:grid-cols-2">
-            <Section title="Persönlichkeit" meta="config/personality.yaml">
+            <Section title="Aktive Persönlichkeit" meta={personality.id === "jarvis" ? "config/personality.yaml" : `config/personalities/${render(personality.id)}.yaml`}>
               <div className="p-4"><KeyValue rows={[
                 ["Name", render(personality.name)], ["Anrede", render(personality.owner_title)],
                 ["Sprachen", render(personality.languages)], ["Begrüßung", render((personality.greetings as Record<string, unknown> | undefined)?.morning)],

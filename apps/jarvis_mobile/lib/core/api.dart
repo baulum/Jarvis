@@ -165,6 +165,24 @@ class Api {
     }
   }
 
+  /// Hörprobe of a personality in its own voice (POST /api/persona/preview → WAV). Synthesis takes a few seconds.
+  Future<Uint8List> personaPreview(String id) async {
+    if (_client == null) await init();
+    final token = await native.accessToken();
+    final res = await _client!
+        .post(await _uri('/api/persona/preview'),
+            headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'}, body: jsonEncode({'id': id}))
+        .timeout(const Duration(seconds: 60));
+    if (res.statusCode >= 400 || res.bodyBytes.isEmpty) {
+      String msg = 'Hörprobe nicht verfügbar';
+      try {
+        msg = (jsonDecode(utf8.decode(res.bodyBytes)) as Map)['detail']?.toString() ?? msg;
+      } catch (_) {}
+      throw ApiError(res.statusCode, msg);
+    }
+    return res.bodyBytes;
+  }
+
   Future<String> transcribe(List<int> wav) async {
     if (_client == null) await init();
     final token = await native.accessToken();

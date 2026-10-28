@@ -119,6 +119,7 @@ class _Proc:
     claude_session_id: str | None = None
     model: str = ""
     effort: str | None = None
+    persona: str = ""  # personality its system prompt was built for (a switch restarts it, see ``_attempt``)
     resumed: str | None = None  # session id passed via --resume (None: fresh conversation)
     last_used: float = field(default_factory=time.monotonic)
     busy: bool = False
@@ -262,9 +263,14 @@ class ClaudeCodeAgent:
             limit=16 * 1024 * 1024,
             start_new_session=True,
         )
-        p = _Proc(proc=proc, model=self._model_id(self._spawn_model()), effort=effort, resumed=resume)
+        p = _Proc(
+            proc=proc, model=self._model_id(self._spawn_model()), effort=effort, persona=self._persona(), resumed=resume
+        )
         spawn(self._drain_stderr(p), name="claude-stderr")
         return p
+
+    def _persona(self) -> str:
+        return str(getattr(getattr(self.state, "personality", None), "id", "") or "")
 
     def _effort(self) -> str | None:
         router = getattr(self.state, "model_router", None)
@@ -401,8 +407,9 @@ class ClaudeCodeAgent:
     ) -> AsyncGenerator[AgentEvent]:
         """One try of a turn on this conversation's process. An unexpected end yields ``crashed`` (internal)."""
         p = await self._proc_for(session_id, resume_id)
-        if p.effort != self._effort():
-            # effort is a launch flag: restart this conversation's process (history comes back via --resume)
+        if p.effort != self._effort() or p.persona != self._persona():
+            # effort and the system prompt (personality) are launch flags: restart this conversation's process
+            # (history comes back via --resume) – this is how a process that was busy during a switch catches up
             resume_id = p.claude_session_id or resume_id
             self._procs.pop(session_id, None)
             await self._kill(p, "restart")

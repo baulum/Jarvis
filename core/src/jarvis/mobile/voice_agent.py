@@ -29,7 +29,7 @@ import numpy as np
 import numpy.typing as npt
 
 from jarvis.agent.llm import AgentEvent
-from jarvis.agent.persona import LeadingGreetingFilter
+from jarvis.agent.persona import LeadingGreetingFilter, ack_phrase, error_phrase, never_say
 from jarvis.events import Event, bus, spawn
 from jarvis.mobile.call_context import call_context_block, is_vague_confirmation, load_call_context, open_question
 from jarvis.security.auth import Principal
@@ -480,7 +480,7 @@ class CallVoiceAgent:
             if greet:
                 say(greet.flush())
             if result.error and not reply_parts:
-                speech.say("Das hat leider nicht funktioniert, Sir.")
+                speech.say(error_phrase(getattr(self.state, "personality", None)))
             metrics = await speech.finish()
             await self._drain()
             final = result.text or "".join(reply_parts)
@@ -502,7 +502,12 @@ class CallVoiceAgent:
     def _make_speech(self) -> SpeechTurn:
         cfg = self.state.settings.voice.tts.fish_audio
         return SpeechTurn(
-            self.state.tts, self._on_audio, sample_rate=OUT_RATE, transport="hybrid" if cfg.streaming else "http"
+            self.state.tts,
+            self._on_audio,
+            sample_rate=OUT_RATE,
+            transport="hybrid" if cfg.streaming else "http",
+            ack_phrase=ack_phrase(getattr(self.state, "personality", None)),
+            never_say=never_say(getattr(self.state, "personality", None)),
         )
 
     def _new_speech(self) -> SpeechTurn:

@@ -483,3 +483,17 @@ async def test_real_process_end_still_reaches_sir(make_agent: Any, monkeypatch: 
     shown = [ev.text for ev in emitted if ev.type == "delta"]
     assert any("nicht funktioniert" in t and "unerwartet beendet" in t for t in shown)
     assert len(fake.spawns) == 2  # tried once more before giving up
+
+
+async def test_persona_switch_restarts_the_conversation_with_its_history(make_agent: Any) -> None:
+    """René Redo was chosen while this conversation's process ran with the Jarvis prompt: the next turn restarts it
+    (the system prompt is a launch flag) and continues the same conversation via --resume."""
+    agent, fake = make_agent("ok")
+    agent.state.personality = SimpleNamespace(id="jarvis")
+    sid = uuid.uuid4()
+    assert _types(await _turn(agent, sid))[-1] == "completed"
+    assert _types(await _turn(agent, sid))[-1] == "completed"
+    assert len(fake.spawns) == 1  # same persona: the process is reused
+    agent.state.personality = SimpleNamespace(id="rene_redo")
+    assert _types(await _turn(agent, sid))[-1] == "completed"
+    assert [s["resume"] for s in fake.spawns] == [None, "sess-0"]

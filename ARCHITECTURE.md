@@ -38,11 +38,12 @@ Verteilt (Windows, Linux, weitere Rechner): drei logisch getrennte Komponenten �
 | **Jarvis Device Agent** | `device_agent/` | Leichtgewichtiger Agent je Rechner (Windows Win32, Linux X11/Wayland, macOS über die Bridge): Programme, Fenster, Maus, Tastatur, Screenshots, Dateien, Terminal, Claude Code, Browser, Benachrichtigungen, Audio |
 | **Installer** | `installer/`, `scripts/windows/`, `scripts/linux/` | Windows/Linux: Abhängigkeiten prüfen und melden (z. B. Obsidian), Modelle laden und prüfen (Piper, Whisper, Wake-Word), Ersteinrichtung von Client, Device Agent, Core |
 | **Agent (Claude Code)** | `core/src/jarvis/agent/claude_agent.py` | Agent-Loop über die offizielle Claude Code CLI mit Sirs Subscription; einziges Werkzeug-Set = Jarvis-MCP-Server |
+| **Persönlichkeiten** | `core/src/jarvis/agent/personas.py`, `config/personalities/` | Auswahl Jarvis / René Redo (`/api/persona`, Event `persona.changed`): Systemprompt, Begrüßungen, Stimme; Wechsel ohne Neustart, Werkzeuge/Gedächtnis/Rechte unverändert |
 | **Modellrouter** | `core/src/jarvis/agent/model_router.py` | Sonnet 5.5 Standard, einfache Anfragen → Haiku 5.5, Opus 5.5 nur auf Befehl/manuell |
 | **Hermes Agent** (Altoption, ungenutzt) | `~/.hermes` | früherer Modus `agent.provider: hermes` mit lokalem Ollama-Modell; wird nicht gestartet |
 | **JarvisBridge** | `bridge/` (Swift) | Native macOS-Steuerung, eigene Token-/Kill-Switch-/Policy-Prüfung (Defense in Depth) |
 | **Voice-Daemon** | `core/src/jarvis/voice/daemon.py` | Wake Word, Endpointing mit spekulativem STT, Streaming-Turns über `/api/voice/speak`, Barge-in, Gesprächsmodus, Push-to-Talk, Latenzmessung |
-| **Sprachausgabe** | `core/src/jarvis/voice/pipeline.py`, `fish_stream.py` | Text-Chunker, Commitment-Guard, Hybrid-TTS (warmes HTTP + Fish-Live-WebSocket), Fallback macOS |
+| **Sprachausgabe** | `core/src/jarvis/voice/pipeline.py`, `fish_stream.py` | Text-Chunker, Commitment-Guard, Hybrid-TTS (warmes HTTP + Fish-Live-WebSocket), Fallback macOS; Stimme je Antwort fest (Persona-Wechsel ab der nächsten Antwort) |
 | **Audiohelfer** | `core/native/JarvisAudio` (Swift) | Mikrofon + lückenlose Streaming-Wiedergabe (AVAudioEngine), optional Echounterdrückung |
 | **Live-Graph** | `core/src/jarvis/graph.py`, `GET /api/graph` | Wissensgraph aus echten Daten (Gedächtnis, Agenten, Werkzeuge, Skills, Aufgaben, Jobs, Gespräche) |
 | **Mobile-Gateway** | `core/src/jarvis/mobile/gateway.py` | Zweiter TLS-Listener `:8767` im Core-Prozess, nur Mobile-Pfade (Allowlist), Zertifikats-Pinning per QR |

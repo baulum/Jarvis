@@ -31,6 +31,7 @@ import type {
   MemorySearchHit,
   NotificationRow,
   PermissionsResponse,
+  PersonaStatus,
   Playbook,
   Schedule,
   ScheduleCreate,
@@ -304,6 +305,13 @@ export function createApi(opts: ApiOptions) {
       put<WakeupSettings>("/voice/wakeup", body),
     /** Runs the routine now (programs + MP3) – the "Testen" button. */
     runWakeup: () => post<WakeupResult>("/voice/wakeup", { play_sound: true }),
+
+    // personality (Jarvis / René Redo …): prompt + voice, switched without a restart
+    persona: () => get<PersonaStatus>("/persona"),
+    setPersona: (personaId: string) => post<PersonaStatus>("/persona", { id: personaId }),
+    /** Hörprobe of a persona in its voice (WAV) – switches nothing. Synthesis can take a few seconds. */
+    personaPreview: async (personaId: string): Promise<Blob> =>
+      (await raw("POST", "/persona/preview", { id: personaId }, undefined, 60_000)).blob(),
 
     // coding
     codingJobs: () => get<CodingJob[]>("/coding/jobs"),

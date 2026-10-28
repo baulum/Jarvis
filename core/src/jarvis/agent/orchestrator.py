@@ -26,7 +26,7 @@ from jarvis.agent.attachments import AttachmentInfo, build_agent_input, summary_
 from jarvis.agent.claude_agent import ClaudeUnavailable
 from jarvis.agent.llm import AgentEvent, HermesError
 from jarvis.agent.model_router import MODELS, parse_command
-from jarvis.agent.persona import turn_instructions
+from jarvis.agent.persona import error_phrase, turn_instructions
 from jarvis.agent.timeline import (
     DbTimelineStore,
     SeqAllocator,
@@ -280,8 +280,13 @@ class Orchestrator:
                 sess.tainted = True
             memory_context = await recall
             timings["recall_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+            persona = self.state.personality
             instructions = turn_instructions(
-                channel, memory_context=memory_context, tainted=sess.tainted, call_context=call_context
+                channel,
+                memory_context=memory_context,
+                tainted=sess.tainted,
+                call_context=call_context,
+                confirm_example=getattr(persona, "confirm_example", None) or "Sehr wohl, Sir. Ich kümmere mich darum.",
             )
             t_agent = time.perf_counter()
 
@@ -598,7 +603,7 @@ class Orchestrator:
         return TurnResult(sess.id, reply, [], error="agent_unavailable", provider="system")
 
     def _error_reply(self, detail: str) -> str:
-        base = (self.state.personality.error_phrases or ["Das hat leider nicht funktioniert, Sir."])[0]
+        base = error_phrase(self.state.personality)
         return f"{base} ({detail[:240]})" if detail else base
 
     @contextlib.asynccontextmanager

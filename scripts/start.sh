@@ -29,7 +29,8 @@ brew services list | grep -q "postgresql@17.*started" || brew services start pos
 start_bg whisper whisper-server -m "$DATA/models/ggml-large-v3-turbo-q5_0.bin" --host 127.0.0.1 --port 8178 -l de -t 4 -ac 768 -nf  # -ac/-nf: halbe STT-Latenz (gemessen 1,05 → 0,55 s); lange Äußerungen teilt der Core
 TTS_PY="$DATA/tts-local/.venv/bin/python"   # lokale Jarvis-Stimme (scripts/setup.sh legt sie an)
 if [ -x "$TTS_PY" ] && [ -f "$DATA/voices/jarvis_ref_short.wav" ]; then
-  start_bg tts "$TTS_PY" -I "$ROOT/scripts/local-tts/server.py" --port 8179 --ref "$DATA/voices/jarvis_ref_short"
+  # --voices-dir: weitere Persönlichkeits-Stimmen (René Redo …), alle auf demselben Modell
+  start_bg tts "$TTS_PY" -I "$ROOT/scripts/local-tts/server.py" --port 8179 --ref "$DATA/voices/jarvis_ref_short" --voices-dir "$ROOT/scripts/local-tts/voices"
 fi
 BRIDGE_APP=/Applications/JarvisBridge.app   # installed location (macOS privacy grants are tied to it)
 [ -d "$BRIDGE_APP" ] || BRIDGE_APP="$ROOT/bridge/build/JarvisBridge.app"

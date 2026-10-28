@@ -35,6 +35,7 @@ from jarvis.security.audit import audit, verify_chain
 from jarvis.security.auth import Principal, create_device, list_devices, revoke_device
 from jarvis.security.guards import rate_limiter
 from jarvis.voice import wakeup
+from jarvis.voice.audio import pcm_to_wav
 from jarvis.voice.commands import is_stop_command
 from jarvis.voice.speech import speakable
 
@@ -1125,6 +1126,7 @@ async def settings(st: AppState = StateDep, p: Principal = Reader) -> dict[str, 
     s = st.settings
     return {
         "personality": st.personality.model_dump(),
+        "personas": st.personas.to_dict(),
         "voice": s.voice.model_dump(),
         "llm": s.llm.model_dump(),
         "notifications": s.notifications.model_dump(),
@@ -1134,6 +1136,59 @@ async def settings(st: AppState = StateDep, p: Principal = Reader) -> dict[str, 
         "coding": s.coding.model_dump(),
         "server": {"host": s.server.host, "port": s.server.port, "public_base_url": s.server.public_base_url},
     }
+
+
+# ------------------------------------------------------------------ personality
+class PersonaBody(BaseModel):
+    id: str = Field(min_length=2, max_length=32)
+
+
+class PersonaPreviewBody(BaseModel):
+    id: str | None = Field(default=None, max_length=32)  # None = the active persona
+    text: str | None = Field(default=None, max_length=400)  # None = the persona's own Hörprobe
+
+
+async def _persona_status(st: AppState) -> dict[str, Any]:
+    """The personas for the settings, each with ``voice_ready``: its voice is loaded by the local voice server
+    (otherwise it speaks with the system voice until that server is restarted)."""
+    out = st.personas.to_dict()
+    for item in out["personas"]:
+        item["voice_ready"] = await st.tts.local_for(item["voice"]).available()
+    return out
+
+
+@router.get("/persona")
+async def persona(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    return await _persona_status(st)
+
+
+@router.post("/persona")
+async def persona_set(body: PersonaBody, st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
+    """Switch the personality (prompt + voice) without a restart; desktop and phone follow ``persona.changed``."""
+    before = st.personas.active_id
+    try:
+        await st.set_persona(body.id)
+    except KeyError as e:
+        raise HTTPException(404, f"Persönlichkeit {body.id!r} gibt es nicht") from e
+    await audit(p.label, "persona.set", target=body.id, details={"from": before})
+    return await _persona_status(st)
+
+
+@router.post("/persona/preview")
+async def persona_preview(body: PersonaPreviewBody, st: AppState = StateDep, p: Principal = Reader) -> Response:
+    """Hörprobe: the persona's sample sentence in its voice, as WAV (24 kHz mono) – the same local voice the
+    replies use, without switching anything."""
+    persona = st.personas.get(body.id) if body.id else st.personality
+    if persona is None:
+        raise HTTPException(404, f"Persönlichkeit {body.id!r} gibt es nicht")
+    if not rate_limiter.check(f"persona-preview:{p.label}", 20, 60):
+        raise HTTPException(429, "zu viele Hörproben – bitte kurz warten")
+    text = speakable(body.text or persona.sample or time_of_day_greeting(persona))
+    rate = 24000
+    pcm = await st.tts.synthesize(text, rate, persona.voice)
+    if not pcm:
+        raise HTTPException(503, "Auf diesem Rechner ist keine Stimme verfügbar")
+    return Response(pcm_to_wav(pcm, rate), media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
 
 # ------------------------------------------------------------------ voice
@@ -1202,8 +1257,10 @@ def _require_mac() -> None:
 
 @router.get("/voice/wakeup")
 async def voice_wakeup_settings(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
-    """Wake-up routine settings plus ``sound_error`` (MP3 missing/invalid) and ``supported`` (macOS)."""
-    return st.wakeup.to_dict()
+    """Wake-up routine settings plus ``sound_error`` (MP3 missing/invalid), ``supported`` (macOS) and ``say``, the
+    line the voice daemon speaks after the sound (the active persona's own, else ``voice.wakeup.say``)."""
+    own = st.personality.wakeup_say
+    return {**st.wakeup.to_dict(), "say": own if own is not None else st.settings.voice.wakeup.say}
 
 
 @router.put("/voice/wakeup")
