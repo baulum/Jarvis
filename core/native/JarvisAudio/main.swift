@@ -12,9 +12,11 @@
 //   stdin:  frames  [type: UInt8][length: UInt32 LE][payload]
 //           'P' payload = 16-bit LE mono PCM at 24 kHz → queued for playback immediately
 //           'F' flush: stop playback now and drop everything queued (barge-in)
+//           'S' hold: pause playback, keep everything queued (a barge-in that may be Jarvis' own voice)
+//           'C' continue after a hold, exactly where it stopped
 //           'E' payload = 1 byte tag → "drained" event once everything queued before it was heard
 //           'Q' quit
-//   stderr: one JSON event per line, prefixed "EV ": ready, level (in/out), drained, flushed, error
+//   stderr: one JSON event per line, prefixed "EV ": ready (aec, hold), level (in/out), drained, flushed, error
 // Build: scripts/build-audio-helper.sh (swiftc -O). Usage: jarvis-audio [--no-aec]
 
 import AVFoundation
@@ -104,6 +106,7 @@ func installConvertingTap(on node: AVAudioInputNode, kind: UInt8, meter: Bool) -
 }
 var inLevel: Float = 0
 var generation = 0
+var held = false  // 'S' paused the player; new buffers queue up silently until 'C'
 var playing: [(gen: Int, rms: Float)] = []  // FIFO of scheduled buffers (for the output level)
 
 func installTap() {
@@ -128,7 +131,8 @@ func startEngine() -> Bool {
     engine.prepare()
     do {
         try engine.start()
-        player.play()
+        lock.lock(); let paused = held; lock.unlock()
+        if !paused { player.play() }
         return true
     } catch {
         emit(["event": "error", "detail": "engine start failed: \(error.localizedDescription)"])
@@ -160,7 +164,7 @@ NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChang
     startRawEngine()
 }
 let inFmt = input.outputFormat(forBus: 0)
-emit(["event": "ready", "aec": aecActive, "in_rate": inFmt.sampleRate, "in_channels": inFmt.channelCount])
+emit(["event": "ready", "aec": aecActive, "hold": true, "in_rate": inFmt.sampleRate, "in_channels": inFmt.channelCount])
 
 func schedule(pcm: Data) {
     let n = pcm.count / 2
@@ -185,7 +189,8 @@ func schedule(pcm: Data) {
         if let i = playing.firstIndex(where: { $0.gen == gen }) { playing.remove(at: i) }
         lock.unlock()
     }
-    if !player.isPlaying { player.play() }
+    lock.lock(); let paused = held; lock.unlock()
+    if !player.isPlaying && !paused { player.play() }
 }
 
 func marker(tag: UInt8) {
@@ -200,10 +205,20 @@ func marker(tag: UInt8) {
 }
 
 func flush() {
-    lock.lock(); generation += 1; playing.removeAll(); lock.unlock()
+    lock.lock(); generation += 1; playing.removeAll(); held = false; lock.unlock()
     player.stop()  // drops every scheduled buffer at once
     player.play()
     emit(["event": "flushed"])
+}
+
+func hold() {
+    lock.lock(); held = true; lock.unlock()
+    player.pause()  // scheduled buffers stay queued
+}
+
+func resume() {
+    lock.lock(); held = false; lock.unlock()
+    player.play()
 }
 
 // Output/input level for the interface (~12 Hz).
@@ -239,6 +254,8 @@ let reader = Thread {
         switch type {
         case UInt8(ascii: "P"): schedule(pcm: payload)
         case UInt8(ascii: "F"): flush()
+        case UInt8(ascii: "S"): hold()
+        case UInt8(ascii: "C"): resume()
         case UInt8(ascii: "E"): marker(tag: payload.first ?? 0)
         case UInt8(ascii: "Q"): exit(0)
         default: break

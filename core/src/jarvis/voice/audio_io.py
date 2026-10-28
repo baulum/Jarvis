@@ -6,7 +6,8 @@ echo cancellation + noise suppression; PCM is streamed in and played the moment 
 helper is missing or fails – no echo cancellation, so barge-in then needs the wake word.
 
 Both deliver 16 kHz int16 microphone frames to ``on_mic`` (called in the event loop) and accept 24 kHz
-int16 PCM for playback. ``flush()`` silences immediately (barge-in), ``drained(tag)`` resolves once
+int16 PCM for playback. ``flush()`` silences immediately (barge-in), ``hold()``/``resume()`` pause and
+continue without losing anything (a barge-in that may be Jarvis' own voice), ``drained(tag)`` resolves once
 everything queued before it has actually been heard.
 """
 
@@ -55,6 +56,15 @@ class AudioIO(abc.ABC):
     async def flush(self) -> None:
         """Stop playback now and drop everything queued."""
 
+    async def hold(self) -> bool:
+        """Silence playback now but keep what is queued, so ``resume`` continues mid-sentence (a barge-in that may
+        turn out to be Jarvis' own voice). Returns False if the backend cannot pause – then it flushed instead."""
+        await self.flush()
+        return False
+
+    async def resume(self) -> None:  # noqa: B027 - only meaningful after a successful ``hold``
+        pass
+
     @abc.abstractmethod
     async def drained(self, wait_s: float = 120) -> bool:
         """Wait until all queued audio was played; False if flushed or timed out."""
@@ -79,6 +89,7 @@ class NativeAudio(AudioIO):
         self._tag = 0
         self._queued = 0  # bytes queued since the last drain/flush
         self._playing = False
+        self.can_hold = False  # helper understands 'S'/'C' (an older build ignores them → flush instead)
         self.error: str | None = None
 
     async def start(self, on_mic: MicCallback) -> None:
@@ -128,6 +139,7 @@ class NativeAudio(AudioIO):
             kind = ev.get("event")
             if kind == "ready":
                 self.aec = bool(ev.get("aec"))
+                self.can_hold = bool(ev.get("hold"))
                 logger.info(
                     "Native audio ready (echo cancellation: %s, %s Hz × %s)",
                     self.aec,
@@ -170,6 +182,19 @@ class NativeAudio(AudioIO):
         self._playing = False
         with contextlib.suppress(RuntimeError, ConnectionError):
             await self._send(b"F")
+
+    async def hold(self) -> bool:
+        if not self.can_hold:
+            return await super().hold()
+        try:
+            await self._send(b"S")
+        except (RuntimeError, ConnectionError):
+            return await super().hold()
+        return True
+
+    async def resume(self) -> None:
+        with contextlib.suppress(RuntimeError, ConnectionError):
+            await self._send(b"C")
 
     async def drained(self, wait_s: float = 120) -> bool:
         self._tag = (self._tag + 1) % 256

@@ -66,6 +66,13 @@ class SimAudio:
         self._until = 0.0
         self._gen += 1
 
+    async def hold(self) -> bool:  # no pausing in the simulation: silenced like an older audio helper
+        await self.flush()
+        return False
+
+    async def resume(self) -> None:
+        pass
+
     async def drained(self, wait_s: float = 120) -> bool:
         gen = self._gen
         while time.monotonic() < self._until:

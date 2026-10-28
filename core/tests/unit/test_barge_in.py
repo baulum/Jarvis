@@ -483,12 +483,26 @@ class _RawMicAudio(_FakeAudio):
 
     aec = False
 
-    def __init__(self) -> None:
+    def __init__(self, can_hold: bool = True) -> None:
         super().__init__()
         self.played: list[bytes] = []
+        self.can_hold = can_hold
+        self.held = False
+        self.resumed = 0
 
     async def play(self, pcm: bytes) -> None:
         self.played.append(pcm)
+
+    async def hold(self) -> bool:
+        if not self.can_hold:  # older audio helper: silenced by dropping what was queued
+            await self.flush()
+            return False
+        self.held = True
+        return True
+
+    async def resume(self) -> None:
+        self.held = False
+        self.resumed += 1
 
     async def drained(self, wait_s: float = 120) -> bool:
         return True
@@ -498,27 +512,51 @@ class _RawMicAudio(_FakeAudio):
         return True
 
 
-async def _barged_by_own_voice(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> tuple[Any, Any]:
-    """Jarvis says "Einen Moment, Sir." while a tool runs; the raw microphone picks it up as a voice barge-in."""
+async def _barged_by_own_voice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, can_hold: bool = True
+) -> tuple[Any, Any]:
+    """Jarvis says "Einen Moment, Sir." while a tool runs; something clearly louder than the echo learned so far
+    (here: a louder phrase of his own) is picked up by the raw microphone as a voice barge-in."""
     from jarvis.voice import daemon as d
 
     vd = _daemon(monkeypatch, tmp_path)
-    vd.audio = _RawMicAudio()
+    vd.audio = _RawMicAudio(can_hold)
     vd.detector = SimpleNamespace(reset=lambda: None, feed=lambda pcm: False)
     vd.tag = 5
     r = d.Reply(tag=5, agent_turn=True, first_audio=time.perf_counter())
     r.pieces = ["Einen Moment, Sir."]
     vd.reply = r
-    await vd.mic_q.put(np.concatenate([quiet(200), tone(600)]))
+    await vd.mic_q.put(np.concatenate([quiet(200), tone(600, amp=1500), tone(600, amp=6000)]))
     assert await vd._await_reply(r, True) == "barge_in"
     vd.reply = None
     return vd, r
 
 
+async def test_daemon_own_voice_does_not_interrupt_him(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    """The cause of "Jarvis interrupts himself": the warm-up of the raw-microphone detector was spent on the silent
+    lead-in of the TTS audio, so his voice that followed counted as Sir talking over him."""
+    from jarvis.voice import daemon as d
+
+    vd = _daemon(monkeypatch, tmp_path)
+    vd.audio = _RawMicAudio()
+    vd.detector = SimpleNamespace(reset=lambda: None, feed=lambda pcm: False)
+    r = d.Reply(tag=3, agent_turn=True, first_audio=time.perf_counter())
+    vd.reply = r
+    task = asyncio.create_task(vd._await_reply(r, True))
+    # silent lead-in, then his own voice from the speakers, with a louder syllable and a short pause in between
+    voice = np.concatenate([quiet(300), tone(800, amp=2500), tone(200, amp=3500), quiet(150), tone(1500, amp=2500)])
+    for frame in chunks(voice, 640):
+        await vd.mic_q.put(frame)
+    await asyncio.sleep(0.3)
+    r.ended.set()
+    assert await asyncio.wait_for(task, 3) == "done"
+    assert vd.audio.flushed == 0 and not vd.audio.held and vd._barged is None and vd.sent == []
+
+
 async def test_daemon_own_voice_barge_in_does_not_cancel_the_answer(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
     vd, r = await _barged_by_own_voice(monkeypatch, tmp_path)
-    assert vd.audio.flushed == 1  # silenced at once …
-    assert vd.sent == [] and vd._barged is r  # … but the agent run is not cancelled (yet)
+    assert vd.audio.held and vd.audio.flushed == 0  # paused at once, nothing queued is dropped …
+    assert vd.sent == [] and vd._barged is r  # … and the agent run is not cancelled (yet)
 
     await vd._on_speak(bytes([5]) + b"\x01\x02")  # the answer goes on in the core meanwhile
     await vd._on_speak(json.dumps({"type": "speech_end", "tag": 5, "metrics": {}}))
@@ -526,8 +564,17 @@ async def test_daemon_own_voice_barge_in_does_not_cancel_the_answer(monkeypatch:
     assert await vd.handle_turn(np.ones(16000, dtype=np.int16), "Einen Moment.", marks) is True
 
     assert [m for m in vd.sent if m.get("type") in ("cancel", "turn")] == []  # nothing cancelled, nothing answered
+    assert vd.audio.resumed == 1 and not vd.audio.held  # continues mid-sentence, where it was paused
     assert vd.audio.played == [b"\x01\x02"]  # the rest of the answer is spoken after all
-    assert vd._barged is None
+    assert vd.audio.flushed == 0 and vd._barged is None
+
+
+async def test_daemon_own_voice_barge_in_without_hold_support_flushes(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    vd, r = await _barged_by_own_voice(monkeypatch, tmp_path, can_hold=False)  # older audio helper
+    assert vd.audio.flushed == 1 and vd._barged is r and not r.paused
+    await vd._on_speak(json.dumps({"type": "speech_end", "tag": 5, "metrics": {}}))
+    assert await vd.handle_turn(np.ones(16000, dtype=np.int16), "Einen Moment.", {"speech_start": 0.0}) is True
+    assert vd.audio.resumed == 0 and vd.sent == []
 
 
 async def test_daemon_cut_off_tail_of_its_own_phrase_is_no_request(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
@@ -553,6 +600,31 @@ async def test_daemon_barge_in_by_sir_cancels_the_answer_before_his_request(monk
     assert await vd.handle_turn(np.ones(16000, dtype=np.int16), "Nein, schick sie lieber morgen früh", marks)
     assert [(m["type"], m["tag"]) for m in vd.sent] == [("cancel", 5), ("turn", 6)]
     assert vd._barged is None
+    assert vd.audio.flushed == 1 and vd.audio.resumed == 0  # the paused rest of the old answer is dropped
+
+
+async def test_daemon_ignores_the_wake_word_in_its_own_words(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    from jarvis.voice import daemon as d
+
+    vd = _daemon(monkeypatch, tmp_path)
+    vd.audio = _RawMicAudio()
+    vd.detector = SimpleNamespace(reset=lambda: None, feed=lambda pcm: True)  # the model hears "Jarvis"
+    r = d.Reply(tag=4, agent_turn=True, first_audio=time.perf_counter())
+    r.pieces = ["Hier spricht Jarvis, Sir."]
+    vd.reply = r
+    task = asyncio.create_task(vd._await_reply(r, True))
+    await vd.mic_q.put(quiet(200))
+    await asyncio.sleep(0.2)
+    r.ended.set()
+    assert await asyncio.wait_for(task, 3) == "done"
+    assert vd.audio.flushed == 0 and vd.sent == []
+
+    r2 = d.Reply(tag=5, agent_turn=True, first_audio=time.perf_counter())  # Sir's "Hey Jarvis" still interrupts
+    r2.pieces = ["Die Wettervorhersage für morgen."]
+    vd.reply = r2
+    await vd.mic_q.put(quiet(200))
+    assert await vd._await_reply(r2, True) == "barge_in"
+    assert vd.sent == [{"type": "cancel", "tag": 5}]
 
 
 async def test_daemon_stop_button_cancels_an_answer_held_by_a_barge_in(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:

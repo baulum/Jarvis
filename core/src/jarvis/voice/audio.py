@@ -286,6 +286,12 @@ class BargeInDetector:
 
     The residual echo sets an adaptive floor; speech must exceed ``max(min_rms, floor * ratio)`` for
     ``need_ms`` within a short window. The recent audio is kept so the interrupting words are not lost.
+
+    The floor only learns from frames that do not count as speech, so the echo level has to be known before
+    detection starts (warm-up). With echo cancellation that is ~200 ms after playback starts (``arm``). On the raw
+    microphone (``peak_hold``) the warm-up waits for Jarvis' voice to actually reach the microphone and learns from
+    ``learn_ms`` of it: a warm-up spent on the silent lead-in of the TTS audio (or the output latency) left the floor
+    at room noise, so his own voice counted as Sir talking and he interrupted himself after ``need_ms``.
     """
 
     def __init__(
@@ -296,6 +302,7 @@ class BargeInDetector:
         min_rms: float = 450,
         ratio: float = 3.0,
         peak_hold: bool = False,
+        learn_ms: int = 500,
     ) -> None:
         # peak_hold: raw microphone without echo cancellation – the floor follows the peaks of Jarvis' own
         # voice coming out of the speakers, so only something clearly louder (Sir) counts as an interruption.
@@ -306,6 +313,7 @@ class BargeInDetector:
         self.window = int(self.need * 1.6)
         self.min_rms = min_rms
         self.ratio = ratio
+        self.learn = max(1, learn_ms // frame_ms)
         self.reset()
 
     def reset(self) -> None:
@@ -313,7 +321,13 @@ class BargeInDetector:
         self.hits: list[bool] = []
         self.recent: list[npt.NDArray[np.int16]] = []
         self._pending = np.zeros(0, dtype=np.int16)
-        self.warmup = 10  # ~200 ms for the echo canceller to settle after playback starts
+        self.arm()
+
+    def arm(self) -> None:
+        """(Re)start the warm-up – call when playback starts: the echo level is learned from then on."""
+        self.hits = []
+        # raw microphone: frames of Jarvis' audible voice; echo cancellation: ~200 ms for the canceller to settle
+        self.warmup = self.learn if self.peak_hold else 10
 
     def feed(self, pcm: npt.NDArray[np.int16]) -> bool:
         data = np.concatenate([self._pending, pcm])
@@ -325,6 +339,8 @@ class BargeInDetector:
             self.recent = [*self.recent[-(self.window + 10) :], frame]
             level = rms(frame)
             if self.warmup > 0:
+                if self.peak_hold and level <= self.min_rms:
+                    continue  # his voice is not at the microphone yet (TTS lead-in, output latency, a pause)
                 self.warmup -= 1
                 self.floor = max(self.floor, 0.5 * self.floor + 0.5 * level)
                 continue

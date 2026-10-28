@@ -17,10 +17,11 @@ Pipeline (everything overlaps instead of running one after the other):
 * Barge-in: with echo cancellation Sir can simply start talking (``BargeInDetector``) – playback
   stops at once, the core cancels TTS and the agent run, stale chunks (old tag) are dropped and
   the interrupting words become the start of the next utterance. Without echo cancellation
-  "Hey Jarvis" interrupts. The detector needs sustained speech well above the residual echo (not a click),
-  and a transcript that is just Jarvis' own voice coming back is ignored (``is_echo``). A voice barge-in
-  without echo cancellation may be his own voice (e.g. "Einen Moment, Sir."): playback stops, but the agent
-  run is only cancelled once the transcript shows that Sir spoke – otherwise the answer simply continues.
+  "Hey Jarvis" interrupts. The detector needs sustained speech well above the residual echo (not a click) and
+  learns that echo from Jarvis' audible voice first, and a transcript that is just Jarvis' own voice coming back
+  is ignored (``is_echo``). A voice barge-in without echo cancellation may be his own voice (e.g. "Einen Moment,
+  Sir."): playback pauses, but the agent run is only cancelled once the transcript shows that Sir spoke –
+  otherwise the answer continues where it stopped. His own name in his words never counts as the wake word.
 * Stop command ("Stopp", "Jarvis, stopp", "Hör auf" …): silences Jarvis, is never sent to the agent and keeps
   the conversation open. The same via the Stopp button in the app (``voice.command`` ``interrupt``).
 * After a reply a follow-up window allows answering without the wake word; "danke, das war's" ends.
@@ -71,6 +72,7 @@ class Reply:
     error: str | None = None
     agent_turn: bool = False  # an agent run belongs to it (not a fixed text like a notification)
     held: list[bytes] = field(default_factory=list)  # audio that arrived while a barge-in was being checked
+    paused: bool = False  # a barge-in paused the speaker (``AudioIO.hold``) instead of dropping what was queued
 
 
 def power_up(rate: int = PLAY_RATE) -> bytes:
@@ -302,6 +304,8 @@ class VoiceDaemon:
         """Sir really spoke over Jarvis: now the answer silenced by the barge-in is cancelled (speech + agent run)."""
         b, self._barged = self._barged, None
         if b is not None:
+            if b.paused and self.audio is not None:
+                await self.audio.flush()  # what was paused will never be heard
             with contextlib.suppress(Exception):
                 await self._send({"type": "cancel", "tag": b.tag})
 
@@ -314,8 +318,12 @@ class VoiceDaemon:
         logger.info("Barge-in was not Sir – the answer continues")
         self.reply = b
         try:
-            if b.held:
+            if b.paused or b.held:
                 await self.set_state("speaking")
+            if b.paused:
+                b.paused = False
+                await self.audio.resume()  # continues mid-sentence, nothing was lost
+            if b.held:
                 await self.audio.play(b"".join(b.held))  # one write: later chunks queue up behind it
                 b.held.clear()
             outcome = await self._await_reply(b, listen_for_barge_in=True)
@@ -370,6 +378,7 @@ class VoiceDaemon:
         while not self.aec_q.empty():  # frames of the question itself must not count as an interruption
             self.aec_q.get_nowait()
         drained: asyncio.Task[bool] | None = None
+        armed = False
         while True:
             if self.audio is None:  # muted meanwhile: the microphone and speaker are closed (``_command``)
                 if drained is not None:
@@ -389,6 +398,9 @@ class VoiceDaemon:
                 pcm = await asyncio.wait_for(self.mic_q.get(), timeout=0.1)
             except TimeoutError:
                 pcm = None
+            if audio.playing and not armed:
+                armed = True
+                barge.arm()  # the echo is learned once Jarvis is audible, not while he is still thinking
             voiced = False
             while not self.aec_q.empty():  # echo-cancelled signal: Sir's voice without Jarvis' own
                 frame = self.aec_q.get_nowait()
@@ -403,6 +415,9 @@ class VoiceDaemon:
                 self._level = min(1.0, rms(pcm) / 6000)
                 if listen_for_barge_in:
                     woke = self.detector.feed(pcm)
+                if woke and not aec and audio.playing and _OWN_NAME.search(" ".join(r.pieces)):
+                    logger.info("Wake word while Jarvis says his own name – ignored")
+                    woke = False
             if not listen_for_barge_in:
                 continue
             if woke or voiced:
@@ -410,9 +425,9 @@ class VoiceDaemon:
                 # keep what Sir said (voice barge-in) as the start of the next utterance
                 self._primed = barge.captured() if voiced else np.zeros(0, dtype=np.int16)
                 if voiced and not aec and r.agent_turn:
-                    # the raw microphone also hears Jarvis himself: silence him now, but cancel the answer only
-                    # once the transcript shows that Sir spoke (``handle_turn``)
-                    await audio.flush()
+                    # the raw microphone also hears Jarvis himself: pause him now, but cancel the answer only once
+                    # the transcript shows that Sir spoke (``handle_turn``) – otherwise he goes on where he stopped
+                    r.paused = await audio.hold()
                     self._barged = r
                 else:
                     await self.interrupt()
@@ -715,6 +730,9 @@ class VoiceDaemon:
 _WAKE_PREFIX = re.compile(
     r"^\s*(?:(?:hey|hi|he|ey|hallo|okay|ok)[\s,.!]*)?(?:jarvis|javis|travis|jarwis|dschawis|chavis)\b[\s,.!?]*", re.I
 )
+
+
+_OWN_NAME = re.compile(r"\b(?:jarvis|javis|jarwis)\b", re.I)  # Jarvis saying it can trigger his own wake word
 
 
 def strip_wake_word(text: str) -> str:

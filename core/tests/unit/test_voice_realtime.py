@@ -81,6 +81,26 @@ def test_barge_in_ignores_residual_echo_but_fires_on_speech() -> None:
     assert not any(det.feed(blip[i : i + 640]) for i in range(0, len(blip), 640))
 
 
+def test_raw_mic_barge_in_learns_jarvis_voice_before_it_fires() -> None:
+    """Without echo cancellation the microphone hears Jarvis himself. The warm-up must not be used up by the silent
+    lead-in of the TTS audio, otherwise his voice that follows counts as Sir and he interrupts himself."""
+    det = BargeInDetector(RATE, need_ms=320, min_rms=450, ratio=1.8, peak_hold=True)
+    own = np.concatenate([quiet(400), tone(700, amp=2500), quiet(120), tone(300, amp=3200), tone(1500, amp=2500)])
+    assert not any(det.feed(own[i : i + 640]) for i in range(0, len(own), 640))
+    sir = tone(600, amp=7000, f=180)  # Sir, clearly louder than the echo of Jarvis' voice
+    assert any(det.feed(sir[i : i + 640]) for i in range(0, len(sir), 640))
+
+
+def test_barge_in_arm_restarts_the_warm_up_when_playback_starts() -> None:
+    det = BargeInDetector(RATE, need_ms=320, min_rms=450)
+    pre = quiet(400)  # echo-cancelled microphone while Jarvis is still thinking
+    assert not any(det.feed(pre[i : i + 640]) for i in range(0, len(pre), 640))
+    det.arm()  # playback starts: the canceller settles on a loud residual first
+    burst = tone(200, amp=1200, f=300)
+    assert not any(det.feed(burst[i : i + 640]) for i in range(0, len(burst), 640))
+    assert det.floor > 450 / 3.0
+
+
 def test_split_long_cuts_at_quiet_points() -> None:
     audio = np.concatenate([tone(10_000), quiet(300, 5), tone(9_000), quiet(200, 5), tone(6_000)])
     parts = split_long(audio, RATE, 14.0)
