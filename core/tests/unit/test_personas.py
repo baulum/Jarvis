@@ -116,9 +116,9 @@ def test_a_broken_extra_persona_never_stops_the_core(tmp_path: Path, monkeypatch
 
     (tmp_path / "personality.yaml").write_text((CONFIG_DIR / "personality.yaml").read_text(encoding="utf-8"))
     (tmp_path / "personalities").mkdir()
-    (tmp_path / "personalities" / "a.yaml").write_text("id: zed\nname: Zed\ntraits: [x: y]\n")  # invalid
-    (tmp_path / "personalities" / "b.yaml").write_text("id: jarvis\nname: Doppelt\n")  # duplicate id
-    (tmp_path / "personalities" / "c.yaml").write_text("id: calm\nname: Calm\nvoice: calm\n")
+    (tmp_path / "personalities" / "a.yaml").write_text("id: zed\nname: Zed\ntraits: [x: y]\n", encoding="utf-8")  # invalid
+    (tmp_path / "personalities" / "b.yaml").write_text("id: jarvis\nname: Doppelt\n", encoding="utf-8")  # duplicate id
+    (tmp_path / "personalities" / "c.yaml").write_text("id: calm\nname: Calm\nvoice: calm\n", encoding="utf-8")
     monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
     assert [p.id for p in config.load_personalities()] == ["jarvis", "calm"]
 
@@ -133,9 +133,9 @@ def test_choice_survives_a_restart_and_unknown_ids_fall_back(tmp_path: Path) -> 
     with pytest.raises(KeyError):
         store.set("tony_stark")
     assert store.active.id == "rene_redo"
-    path.write_text(json.dumps({"id": "removed_persona"}))
+    path.write_text(json.dumps({"id": "removed_persona"}), encoding="utf-8")
     assert PersonaStore(path, load_personalities()).active.id == "jarvis"
-    path.write_text("{kaputt")
+    path.write_text("{kaputt", encoding="utf-8")
     assert PersonaStore(path, load_personalities()).active.id == "jarvis"
     summary = store.to_dict()
     assert summary["active"] == "rene_redo"
