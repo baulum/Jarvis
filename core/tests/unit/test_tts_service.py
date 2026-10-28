@@ -81,6 +81,44 @@ async def test_cache_is_per_voice(tmp_path: Path) -> None:
     assert svc.calls == ["fish:Guten Morgen, Sir."] * 2  # type: ignore[attr-defined]
 
 
+async def test_provider_without_audio_falls_back_to_the_system_voice(tmp_path: Path) -> None:
+    # 2026-10-28: the reply showed up as text, but Sir heard nothing – a provider that answers with an empty body
+    # must not leave the reply silent; macOS ``say`` speaks it instead (Fish Audio stays out of it)
+    svc = _service(tmp_path, local_up=True, fish_up=False)
+
+    async def silent(text: str, rate: int):
+        svc.calls.append(f"local:{text}")  # type: ignore[attr-defined]
+        if False:
+            yield b""
+
+    async def say(text: str, rate: int) -> bytes:
+        svc.calls.append(f"say:{text}")  # type: ignore[attr-defined]
+        return b"say-pcm"
+
+    svc.local.stream = silent  # type: ignore[method-assign]
+    svc.macos.synthesize = say  # type: ignore[method-assign]
+    assert await _say(svc, "Guten Tag, Sir.") == b"say-pcm"
+    assert svc.calls == ["local:Guten Tag, Sir.", "say:Guten Tag, Sir."]  # type: ignore[attr-defined]
+    # the empty result is not cached: the next time the local voice is asked again
+    await _say(svc, "Guten Tag, Sir.")
+    assert svc.calls[-2:] == ["local:Guten Tag, Sir.", "say:Guten Tag, Sir."]  # type: ignore[attr-defined]
+
+
+async def test_local_failure_falls_back_to_macos_say(tmp_path: Path) -> None:
+    svc = _service(tmp_path, local_up=True, fish_up=False)
+
+    async def broken(text: str, rate: int):
+        raise RuntimeError("Lokale TTS 500")
+        yield b""
+
+    async def say(text: str, rate: int) -> bytes:
+        return b"say-pcm"
+
+    svc.local.stream = broken  # type: ignore[method-assign]
+    svc.macos.synthesize = say  # type: ignore[method-assign]
+    assert await _say(svc, "Guten Tag, Sir.") == b"say-pcm"
+
+
 async def test_interrupted_stream_is_not_cached(tmp_path: Path) -> None:
     svc = _service(tmp_path)
     gen = svc.stream("Einen Moment, Sir.", 24000)

@@ -19,15 +19,18 @@ import io.livekit.android.LiveKitOverrides
 import io.livekit.android.RoomOptions
 import io.livekit.android.AudioOptions
 import io.livekit.android.audio.NoAudioHandler
+import io.livekit.android.events.DisconnectReason
 import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
 import io.livekit.android.room.Room
 import io.livekit.android.room.track.LocalAudioTrackOptions
 import io.livekit.android.room.track.RemoteAudioTrack
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -157,6 +160,10 @@ class CallService : Service() {
                         }
                     }
                 }
+            } catch (e: CancellationException) {
+                // the normal end: runCall cancels callJob after the disconnect (addCall keeps suspending). Its message
+                // ("StandaloneCoroutine was cancelled", "A0 was cancelled" after R8) used to be shown as the call's error
+                Log.i(TAG, "Call session closed")
             } catch (e: Exception) {
                 Log.e(TAG, "Telecom call failed", e)
                 CallManager.update { it.copy(status = "ended", error = e.message ?: "Telecom-Fehler") }
@@ -237,6 +244,7 @@ class CallService : Service() {
             else gw.request("POST", "/api/mobile/calls", options)
             JSONObject(text)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e // the call is ending – not a setup error
             Log.w(TAG, "Call setup failed: ${e.message}")
             CallManager.update { it.copy(error = e.message ?: "Verbindung fehlgeschlagen") }
             commands.trySend(Cmd.Disconnect(DisconnectCause.ERROR, null))
@@ -267,6 +275,8 @@ class CallService : Service() {
             r.localParticipant.getTrackPublication(io.livekit.android.room.track.Track.Source.MICROPHONE)
                 ?.track?.let { (it as? io.livekit.android.room.track.LocalAudioTrack)?.addSink(levelSink { v -> localLevel = v }) }
         } catch (e: Exception) {
+            // ending the call cancels this coroutine; that is no connect error (the disconnect reason is shown instead)
+            if (e is CancellationException && e !is TimeoutCancellationException) throw e
             Log.w(TAG, "LiveKit connect failed", e)
             CallManager.update { it.copy(error = "Audioverbindung fehlgeschlagen: ${e.message}") }
             commands.trySend(Cmd.Disconnect(DisconnectCause.ERROR, "hangup"))
@@ -288,6 +298,11 @@ class CallService : Service() {
                     commands.trySend(Cmd.Disconnect(DisconnectCause.REMOTE, null))
                 }
                 is RoomEvent.Disconnected -> if (CallManager.state.value.status != "ended") {
+                    // e.g. the server closed the phone's connection because its WebRTC negotiation never completed
+                    disconnectError(ev.reason, ev.error)?.let { msg ->
+                        Log.w(TAG, "Room disconnected: $msg", ev.error)
+                        CallManager.update { it.copy(error = msg) }
+                    }
                     commands.trySend(Cmd.Disconnect(DisconnectCause.REMOTE, null))
                 }
                 else -> Unit
@@ -390,4 +405,14 @@ class CallService : Service() {
         scope.cancel()
         super.onDestroy()
     }
+}
+
+/**
+ * What the call screen shows when the audio connection was closed without anyone hanging up; null for a normal end
+ * (Sir or Jarvis hung up, the core closed the room). Seen 2026-10-28: the server dropped the phone after ~15 s because
+ * it never answered the offer for Jarvis' voice – the screen then said only "A0 was cancelled".
+ */
+internal fun disconnectError(reason: DisconnectReason, error: Exception?): String? = when (reason) {
+    DisconnectReason.CLIENT_INITIATED, DisconnectReason.ROOM_DELETED, DisconnectReason.ROOM_CLOSED -> null
+    else -> "Audioverbindung abgebrochen ($reason)" + (error?.message?.takeIf { it.isNotBlank() }?.let { ": $it" } ?: "")
 }

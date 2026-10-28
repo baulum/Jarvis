@@ -97,6 +97,7 @@ export function healthTone(status: HealthStatus | null | undefined): Tone {
       return "ok";
     case "degraded":
     case "warning":
+    case "muted":
       return "warn";
     case "error":
     case "down":
@@ -113,6 +114,7 @@ const HEALTH_LABELS: Record<string, string> = {
   error: "Fehler",
   down: "Ausgefallen",
   offline: "Offline",
+  muted: "Stummgeschaltet",
   not_configured: "Nicht eingerichtet",
   disabled: "Deaktiviert",
   unknown: "Unbekannt",

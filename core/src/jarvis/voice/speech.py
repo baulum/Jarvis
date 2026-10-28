@@ -651,11 +651,21 @@ class TTSService:
             yield hit
             return
         parts: list[bytes] = []
+        produced = False
         try:
             async for chunk in p.stream(text, sample_rate):
+                produced = produced or bool(chunk)
                 if key:
                     parts.append(chunk)
                 yield chunk
+            if not produced and p is not self.system and text.strip():
+                # the provider answered without a single sample (e.g. the local server returned an empty body):
+                # the text would show up in the chat, but nothing would be heard
+                logger.warning(
+                    "TTS provider %s returned no audio; using the system voice (%s)", p.name, self.system.name
+                )
+                yield await self.system.synthesize(text, sample_rate)
+                return
             if key:
                 self.cache.put(key, b"".join(parts))
             if p is self.fish:

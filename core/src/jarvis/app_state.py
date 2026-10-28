@@ -382,6 +382,17 @@ class AppState:
             await audit(str(ev.data.get("actor", "?")), "killswitch.release")
 
     # ------------------------------------------------------------------ status
+    def voice_daemon_health(self) -> str:
+        """``muted``: connected, but microphone and speaker are closed (mute in the app) – Jarvis neither hears nor
+        speaks on the Mac. Reporting that as "ok" hid exactly this state (2026-10-28); "error": the daemon reported a
+        problem such as an unavailable microphone."""
+        v = self.voice_state
+        if not v.get("connected"):
+            return "offline"
+        if v.get("muted"):
+            return "muted"
+        return "error" if v.get("state") == "error" else "ok"
+
     async def system_status(self, brief: bool = False) -> dict[str, Any]:
         comps: dict[str, str] = {}
         comps["embeddings"] = "ok" if self.embedder.loaded else "loading"
@@ -410,7 +421,7 @@ class AppState:
         except Exception:
             comps["database"] = "down"
         comps["stt"] = "ok" if await self.stt.healthy() else "down"
-        comps["voice_daemon"] = "ok" if self.voice_state.get("connected") else "offline"
+        comps["voice_daemon"] = self.voice_daemon_health()
         for cid, h in self.connectors.health.items():
             comps[f"connector:{cid}"] = h.status
         if self.device_hub.has_paired:

@@ -77,6 +77,7 @@ def tool_label(name: str) -> str:
 
 class CallVoiceAgent:
     barge_in = True  # app setting, sent when the call is placed / answered; off → only the Stopp button interrupts
+    phone_audio_wait_s = 5.0  # the greeting waits this long for the phone's microphone (its audio is up by then)
 
     def __init__(
         self,
@@ -516,7 +517,17 @@ class CallVoiceAgent:
             return
         self._greeting_spoken = True
         with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(self._owner_track.wait(), 5)
+            await asyncio.wait_for(self._owner_track.wait(), self.phone_audio_wait_s)
+        if not self._owner_track.is_set():
+            # 2026-10-28: the phone joined, but never published its microphone nor answered the offer for this voice –
+            # the greeting showed up as text only. Without this note the call just ended as "owner_hangup".
+            self.metrics["phone_audio"] = False
+            logger.warning(
+                "Call %s: the phone joined, but its microphone did not arrive within %.0f s – its WebRTC audio is not "
+                "connected, so it probably cannot hear Jarvis either (see livekit.log: negotiation failed)",
+                self.call_id,
+                self.phone_audio_wait_s,
+            )
         pcm = b""
         if self._greeting_pcm is not None:
             with contextlib.suppress(Exception):
