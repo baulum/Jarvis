@@ -31,7 +31,7 @@ dependencies = [
     "google-auth>=2.35",
     "segno>=1.6",
     "pillow>=13",  # image scaling where macOS sips is missing (Windows, Linux)
-    "pypdf>=5",
+    "pypdf>=6.21.2",
     "openpyxl>=3.1",
 ]
 
