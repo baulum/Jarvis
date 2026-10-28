@@ -225,7 +225,8 @@ class CodingCfg(_Strict):
     # Jobs running at the same time, each in its own worktree; further jobs wait as "queued". Delivery (merge into
     # the base branch, deploy, clean-up) happens one job at a time per repository.
     max_parallel_jobs: int = Field(default=3, ge=1)
-    job_timeout_minutes: int = 60
+    # Wall-clock limit per job (time spent paused does not count); exceeding it fails the job with CodingError.
+    job_timeout_minutes: int = Field(default=180, ge=1)
     allowed_tools: list[str] = Field(default_factory=list)
     sandbox: bool = True
     # Exact absolute directories granted in addition to the job worktree (default: none = worktree only).

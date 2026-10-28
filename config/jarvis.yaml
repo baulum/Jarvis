@@ -217,7 +217,8 @@ coding:
   # Coding-Jobs gleichzeitig, jeder im eigenen Worktree; weitere warten als "queued". Ausliefern (Merge nach main,
   # Deploy, Aufräumen) geschieht pro Repository nacheinander; Jobs für dieselbe Kundenseite laufen nacheinander.
   max_parallel_jobs: 3
-  job_timeout_minutes: 60
+  # Zeitlimit je Coding-Job in Minuten (Pausen zählen nicht); danach bricht der Job mit "Zeitlimit … überschritten" ab.
+  job_timeout_minutes: 180
   allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm:*)", "Bash(npx:*)", "Bash(pnpm:*)",
                   "Bash(node:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git add:*)",
                   "Bash(git commit:*)", "Bash(ls:*)", "Bash(mkdir:*)", "Bash(python3:*)", "Bash(uv:*)",
