@@ -13,6 +13,7 @@ from typing import Any
 import psutil
 from sqlalchemy import func, select
 
+from jarvis.activity import ActivityPipeline
 from jarvis.agent.claude_agent import ClaudeCodeAgent, ClaudeOneShot
 from jarvis.agent.hermes_setup import HermesSupervisor, sync_soul
 from jarvis.agent.llm import HermesClient, OllamaClient
@@ -157,6 +158,7 @@ class AppState:
         self.mcp_hub = MCPClientHub(self)
         self.voice_state: dict[str, Any] = {"connected": False}
         self.graph = GraphBuilder(self)
+        self.activity = ActivityPipeline(bus)
         # Mobile companion: TLS gateway, pairing, push (FCM), alert engine, VoIP calls (LiveKit)
         self.pairing = PairingService(settings.mobile.pairing_ttl_s)
         self.gateway = GatewayServer(settings)

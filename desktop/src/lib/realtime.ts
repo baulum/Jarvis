@@ -42,10 +42,20 @@ export function parseFrame(raw: string): Incoming {
   }
   if (m.type === "log") return { kind: "log", entry: m.data as LogEntry };
   if (typeof m.type === "string" && typeof m.id === "string") {
-    return {
-      kind: "event",
-      event: { id: m.id, type: m.type, ts: typeof m.ts === "string" ? m.ts : new Date().toISOString(), data: (m.data ?? {}) as Record<string, unknown> },
+    // the envelope (seq, source, session/task attribution, graph nodes) travels next to the data
+    const env = msg as { seq?: unknown; source?: unknown; session_id?: unknown; task_id?: unknown; nodes?: unknown };
+    const event: BusEvent = {
+      id: m.id,
+      type: m.type,
+      ts: typeof m.ts === "string" ? m.ts : new Date().toISOString(),
+      data: (m.data ?? {}) as Record<string, unknown>,
     };
+    if (typeof env.seq === "number") event.seq = env.seq;
+    if (typeof env.source === "string") event.source = env.source;
+    if (typeof env.session_id === "string") event.session_id = env.session_id;
+    if (typeof env.task_id === "string") event.task_id = env.task_id;
+    if (Array.isArray(env.nodes)) event.nodes = env.nodes.filter((n): n is string => typeof n === "string");
+    return { kind: "event", event };
   }
   return { kind: "unknown" };
 }

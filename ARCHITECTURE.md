@@ -46,6 +46,7 @@ Verteilt (Windows, Linux, weitere Rechner): drei logisch getrennte Komponenten �
 | **Sprachausgabe** | `core/src/jarvis/voice/pipeline.py`, `fish_stream.py` | Text-Chunker, Commitment-Guard, Hybrid-TTS (warmes HTTP + Fish-Live-WebSocket), Fallback macOS; Stimme je Antwort fest (Persona-Wechsel ab der nächsten Antwort) |
 | **Audiohelfer** | `core/native/JarvisAudio` (Swift) | Mikrofon + lückenlose Streaming-Wiedergabe (AVAudioEngine), optional Echounterdrückung |
 | **Live-Graph** | `core/src/jarvis/graph.py`, `GET /api/graph` | Wissensgraph aus echten Daten (Gedächtnis, Agenten, Werkzeuge, Skills, Aufgaben, Jobs, Gespräche) |
+| **Aktivitäts-Pipeline** | `core/src/jarvis/activity.py`, `GET /api/activity` | Faltet Bus-Events in gefilterte `activity.step`-Events für das 3D-Gehirn (nur IDs, Namen, Status, Laufzeiten); Resync-Puffer |
 | **Mobile-Gateway** | `core/src/jarvis/mobile/gateway.py` | Zweiter TLS-Listener `:8767` im Core-Prozess, nur Mobile-Pfade (Allowlist), Zertifikats-Pinning per QR |
 | **Kopplung/Tokens** | `mobile/pairing.py`, `mobile/tokens.py` | Keystore-gebundene Geräte, 10-min-Zugriffstoken, rotierende Refresh-Tokens, signierte Requests |
 | **Benachrichtigungs- & Anruf-Engine** | `mobile/alerts.py` | Kategorie-Regeln, Ruhezeit, Dedupe, Limits, Snooze, Terminerinnerungen; entscheidet nichts/still/Push/Anruf |
@@ -107,8 +108,24 @@ Gedächtnis aktualisieren → Benachrichtigung (Desktop/Telegram).
 **Events.** Jedes Bus-Event trägt `seq, ts, type, source, session_id, task_id, nodes` (Graph-Knoten-IDs wie
 `memory:<uuid>`, `tool:<name>`, `connector:<id>`, `agent:jarvis|coding|scheduler|voice|telephony`, `task:<uuid>`,
 `coding:<uuid>`, `session:<uuid>`). Sitzung/Aufgabe/Werkzeug fließen per `contextvars` (`events.activity`) in
-verschachtelte Aufrufe. Die Desktop-App faltet die Events in eine Live-Schicht (`desktop/src/holo/graph/live.ts`) –
-sichtbar wird nur, was tatsächlich passiert ist.
+verschachtelte Aufrufe. Die Aktivitäts-Pipeline (`jarvis/activity.py`) übersetzt sie in `activity.step`-Events
+(Phasen `request`, `llm`, `response`, `tool`, `memory.retrieve`, `memory.store`, `agent`, `approval`, `system`) mit
+deutschen Statusmeldungen („Analysiere Anfrage“, „Starte Browser“, „Durchsuche Erinnerungen“ …). Jeder Schritt wird
+feldweise aus einer Allowlist gebaut: keine Nutzertexte, Antworten, Tool-Argumente, Suchanfragen oder Erinnerungstitel;
+Fehlermeldungen werden geschwärzt (Zugangsdaten, Tokens, E-Mail, Telefon, IBAN); Modell-„Thinking“ wird ignoriert.
+Nur Sirs Geräte (`owner`, `mobile_owner`) erhalten sie. Schritte tragen `seq` und `boot`; nach einem Verbindungsabbruch
+oder einer Sequenzlücke holt die App `GET /api/activity?since=&boot=` (laufende Prozesse, verpasste Schritte,
+Werkzeugstatistik) und gleicht sich ab. Die Desktop-App faltet die Schritte in eine Live-Schicht
+(`desktop/src/holo/graph/live.ts`) – sichtbar wird nur, was tatsächlich passiert ist.
+
+**3D-Gehirn** (`desktop/src/holo`). Vier Ansichten derselben Szene, zwischen denen alle Knoten animiert umziehen:
+*Gehirn* (prozedurale Anatomie aus einem Distanzfeld – zwei Hemisphären, Schläfenlappen, Kleinhirn, Hirnstamm,
+Gyri/Sulci im Shader; Neuronen und Synapsen als Substrat; echte Knoten in funktionalen Regionen: Gespräche in der
+Sehrinde, Werkzeuge im motorischen Kortex, Gedächtnis nach Schicht in Hippocampus/Schläfenlappen/Stirnhirn/Kleinhirn),
+*Netzwerk* (Kräftelayout im Web Worker), *Live-Aktivität* (Spalten Eingang → Agenten → Aufträge → Werkzeuge → Gedächtnis,
+Prozessliste mit Laufzeiten) und *Erinnerungen* (Explorer mit Suche, Thema, Projekt, Zeitraum). Impulse, Wellen und
+Regionsleuchten entstehen ausschließlich aus Aktivitätsschritten (`graph/fx.ts`). Adaptive Qualität in drei Stufen
+(`graph/quality.ts`: Neuronenzahl, Kortex-Auflösung, Bloom, Pixeldichte; Handys starten auf der niedrigsten).
 
 **Sprachturn.** Mikrofon → Wake Word → Endpointer (spekulatives Whisper ab 280 ms Pause, Vorabruf des Gedächtnis-
 Embeddings, TTS-Vorwärmung) → `/api/voice/speak` `turn` → Orchestrator (Recall parallel zu Speicherung/Modellwahl) →

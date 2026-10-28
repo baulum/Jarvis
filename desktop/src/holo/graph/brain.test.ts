@@ -1,10 +1,8 @@
-// Graph model, live activity from real events, interface state, camera math and layout.
+// Graph model, camera math and layout (live activity: live.test.ts, anatomy: anatomy.test.ts).
 import { describe, expect, it } from "vitest";
-import type { BusEvent } from "../../lib/types";
 import * as THREE from "three";
-import { boundingSphere, fitDistance, focusPose, freeFraction, pickNearest, viewShift } from "./camera";
+import { boundingSphere, fitBoxDistance, fitDistance, focusPose, freeFraction, pickNearest, viewShift } from "./camera";
 import { createLayout } from "./layout";
-import { applyLiveEvent, deriveJarvisState, emptyLive, expireLive } from "./live";
 import { buildModel, mergeDTO, searchLocal, seedPosition } from "./model";
 import type { GraphDTO } from "./types";
 
@@ -27,14 +25,6 @@ const dto = (extraNodes: GraphDTO["nodes"] = [], extraEdges: GraphDTO["edges"] =
     { source: "memory:b", target: "memory:missing", relation: "betrifft", weight: 1 },
     ...extraEdges,
   ],
-});
-
-const ev = (type: string, data: Record<string, unknown>, extra: Partial<BusEvent> = {}): BusEvent => ({
-  id: Math.random().toString(36),
-  type,
-  ts: new Date().toISOString(),
-  data,
-  ...extra,
 });
 
 describe("graph model", () => {
@@ -74,58 +64,6 @@ describe("graph model", () => {
   });
 });
 
-describe("live layer", () => {
-  it("lights recalled memories and connects them to the tool that looked them up", () => {
-    const s = applyLiveEvent(
-      emptyLive(),
-      ev("memory.recalled", { via: "memory_search", purpose: "search", hits: [{ title: "Westside Taxi UG" }] }, { nodes: ["memory:a", "session:s1"], session_id: "s1" }),
-      1000,
-    );
-    expect(s.nodes["memory:a"]?.status).toBe("recalled");
-    expect(s.nodes["session:s1"]).toBeUndefined();
-    expect(s.streams["recall:s1"]?.path).toEqual(["agent:jarvis", "tool:memory_search", "memory:a"]);
-    expect(s.lines.at(-1)?.text).toContain("Westside Taxi UG");
-    expect(expireLive(s, 1000 + 10_000).nodes["memory:a"]).toBeUndefined();
-  });
-
-  it("follows a tool call from start to success and to failure", () => {
-    let s = applyLiveEvent(emptyLive(), ev("tool.started", { tool: "lexware_invoice_create", connector: "lexware" }, { session_id: "s1" }), 0);
-    expect(s.nodes["tool:lexware_invoice_create"]?.status).toBe("active");
-    expect(s.streams["tool:s1"]).toMatchObject({ status: "running", path: ["agent:jarvis", "connector:lexware", "tool:lexware_invoice_create"] });
-    expect(deriveJarvisState({ connection: "open", pendingApprovals: 0, agentRunning: true, live: s, now: 10 })).toBe("tools");
-    const ok = applyLiveEvent(s, ev("tool.finished", { tool: "lexware_invoice_create", connector: "lexware", status: "ok" }, { session_id: "s1" }), 50);
-    expect(ok.nodes["tool:lexware_invoice_create"]?.status).toBe("ok");
-    s = applyLiveEvent(s, ev("tool.finished", { tool: "lexware_invoice_create", status: "error", message: "401" }, { session_id: "s1" }), 50);
-    expect(s.nodes["tool:lexware_invoice_create"]).toMatchObject({ status: "error", detail: "401" });
-    expect(deriveJarvisState({ connection: "open", pendingApprovals: 0, agentRunning: false, live: s, now: 100 })).toBe("error");
-  });
-
-  it("tracks coding jobs, tasks and approvals; ignores unrelated events", () => {
-    let s = applyLiveEvent(emptyLive(), ev("coding.updated", { job_id: "j1", status: "running", title: "Website" }), 0);
-    expect(s.streams["coding:j1"]?.status).toBe("running");
-    expect(deriveJarvisState({ connection: "open", pendingApprovals: 0, agentRunning: false, live: s, now: 1 })).toBe("coding");
-    s = applyLiveEvent(s, ev("task.updated", { status: "waiting_approval", title: "Neukunde" }, { task_id: "t1" }), 2);
-    expect(s.nodes["task:t1"]?.status).toBe("approval");
-    s = applyLiveEvent(s, ev("approval.requested", { tool: "lexware_invoice_create", summary: "Rechnung 299 €" }), 3);
-    expect(s.nodes["tool:lexware_invoice_create"]?.status).toBe("approval");
-    expect(deriveJarvisState({ connection: "open", pendingApprovals: 1, agentRunning: false, live: s, now: 4 })).toBe("approval");
-    expect(applyLiveEvent(s, ev("log", {}), 5)).toBe(s);
-  });
-
-  it("derives voice states with priority", () => {
-    const live = emptyLive();
-    const base = { connection: "open", pendingApprovals: 0, agentRunning: false, live, now: 0 };
-    expect(deriveJarvisState({ ...base, voice: "speaking" })).toBe("speaking");
-    expect(deriveJarvisState({ ...base, voice: "recording" })).toBe("listening");
-    expect(deriveJarvisState({ ...base, voice: "thinking" })).toBe("thinking");
-    expect(deriveJarvisState({ ...base, agentRunning: true, live: { ...live, lastRecall: 100 }, now: 500 })).toBe("retrieving");
-    expect(deriveJarvisState({ ...base, agentRunning: true, now: 500 })).toBe("thinking"); // no recall yet
-    expect(deriveJarvisState({ ...base, voice: "speaking", pendingApprovals: 2 })).toBe("approval");
-    expect(deriveJarvisState({ ...base, connection: "closed" })).toBe("error");
-    expect(deriveJarvisState(base)).toBe("idle");
-  });
-});
-
 describe("camera math", () => {
   const pos = new Float32Array([0, 0, 0, 10, 0, 0, 0, 10, 0, 1000, 0, 0]);
   it("frames clusters robustly against outliers", () => {
@@ -134,6 +72,12 @@ describe("camera math", () => {
     const full = boundingSphere(pos, [0, 1, 2, 3]);
     expect(robust.radius).toBeLessThan(full.radius);
     expect(fitDistance(100, 42, 1)).toBeCloseTo(100 / Math.sin((21 * Math.PI) / 180), 3);
+  });
+
+  it("fits wide boxes by their width", () => {
+    const wide = fitBoxDistance(500, 100, 42, 16 / 9, 1);
+    expect(wide).toBeCloseTo(500 / (Math.tan((21 * Math.PI) / 180) * (16 / 9)), 3);
+    expect(fitBoxDistance(100, 500, 42, 16 / 9, 1)).toBeCloseTo(500 / Math.tan((21 * Math.PI) / 180), 3);
   });
 
   it("keeps the viewing direction and shifts the target left of the detail panel", () => {

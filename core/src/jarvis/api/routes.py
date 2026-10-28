@@ -886,6 +886,16 @@ async def graph(limit: int = 1500, st: AppState = StateDep, p: Principal = Reade
     return data
 
 
+@router.get("/activity")
+async def activity_snapshot(
+    since: int = 0, boot: str | None = None, st: AppState = StateDep, p: Principal = Reader
+) -> dict[str, Any]:
+    """Resync for the live brain: running work, the activity steps missed since ``since``, tool statistics."""
+    if p.role not in ("owner", "mobile_owner"):
+        raise HTTPException(403, "Nur für Sir")
+    return st.activity.snapshot(max(0, since), boot)
+
+
 @router.get("/graph/cluster/{kind}")
 async def graph_cluster(
     kind: str, offset: int = 0, limit: int = 300, st: AppState = StateDep, p: Principal = Reader

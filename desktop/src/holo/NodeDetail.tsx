@@ -5,8 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 import { formatDateTime, formatRelative } from "../lib/format";
 import type { MemoryItemDetail } from "../lib/types";
 import { api, useApp } from "../store/app";
+import { formatDuration, type Process } from "./graph/live";
 import { CATEGORY_LABEL, KIND_LABEL } from "./graph/types";
 import { useBrain } from "./store";
+import { useNow } from "./useNow";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -30,7 +32,7 @@ function sourceText(src: Record<string, unknown> | undefined): string {
   return (map[type] ?? (type || "Obsidian")) + channel;
 }
 
-function MemoryBody({ id }: { id: string }) {
+function MemoryBody({ id, usage }: { id: string; usage?: { count: number; last: string | null } }) {
   const [item, setItem] = useState<MemoryItemDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -122,6 +124,11 @@ function MemoryBody({ id }: { id: string }) {
         <Row label="Erstellt">{formatDateTime(item.created_at)}</Row>
         <Row label="Aktualisiert">{formatRelative(item.updated_at)}</Row>
         <Row label="Quelle">{sourceText(item.source)}</Row>
+        {usage && usage.count > 0 && (
+          <Row label="Genutzt">
+            {usage.count}× abgerufen{usage.last ? <span className="text-ink-faint"> · zuletzt {formatRelative(usage.last)}</span> : null}
+          </Row>
+        )}
         {typeof item.confidence === "number" && item.confidence < 1 && <Row label="Konfidenz">{Math.round(item.confidence * 100)} %</Row>}
         {item.aliases && item.aliases.length > 0 && <Row label="Auch genannt">{item.aliases.join(", ")}</Row>}
         {item.sensitivity === "sensitive" && <Row label="Schutz">sensibel – nur am Desktop sichtbar</Row>}
@@ -194,6 +201,75 @@ function RelatedList({ items, onPick }: { items: { node: string; title: string; 
   );
 }
 
+/** Running and recent processes that involve a node (tool calls, agent jobs, a conversation's turn). */
+function processesFor(processes: Record<string, Process>, id: string, kind: string): Process[] {
+  return Object.values(processes)
+    .filter((p) => {
+      if (kind === "tool") return p.tool === id.slice(5) && p.phase !== "approval";
+      if (kind === "connector") return p.path.includes(id);
+      if (kind === "agent") {
+        const agent = id.slice(6);
+        return agent === "jarvis" ? p.key.startsWith("turn:") : p.agent === agent || (agent === "voice" && p.key === "voice");
+      }
+      if (kind === "conversation") return p.key === `turn:${id.slice(8)}`;
+      return p.key === id;
+    })
+    .sort((a, b) => b.since - a.since)
+    .slice(0, 8);
+}
+
+function Execution({ id, kind }: { id: string; kind: string }) {
+  const processes = useBrain((s) => s.live.processes);
+  const tools = useBrain((s) => s.live.tools);
+  const agents = useBrain((s) => s.live.agents);
+  const list = useMemo(() => processesFor(processes, id, kind), [processes, id, kind]);
+  const running = list.some((p) => p.until === undefined);
+  const now = useNow(running ? 200 : 1000);
+  const stat = kind === "tool" ? tools[id.slice(5)] : undefined;
+  const agentStat = kind === "agent" ? agents[id.slice(6) === "jarvis" ? "" : id.slice(6)] : undefined;
+  if (!list.length && !stat?.calls && !agentStat?.runs) return null;
+  return (
+    <div className="mt-4">
+      <p className="mb-1.5 text-2xs tracking-[0.12em] text-ink-faint uppercase">Ausführung</p>
+      {stat && stat.calls > 0 && (
+        <div className="border-b border-seam pb-2">
+          <Row label="Aufrufe">
+            {stat.calls} seit Start{stat.errors ? <span className="text-alarm"> · {stat.errors} fehlgeschlagen</span> : null}
+          </Row>
+          <Row label="Laufzeit">
+            Ø {formatDuration(stat.avg_ms)}
+            {stat.last_ms !== null ? <span className="text-ink-faint"> · zuletzt {formatDuration(stat.last_ms)}</span> : null}
+          </Row>
+          {stat.last_at && <Row label="Zuletzt">{formatRelative(new Date(stat.last_at).toISOString())}{stat.last_status === "error" ? <span className="text-alarm"> · Fehler</span> : null}</Row>}
+        </div>
+      )}
+      {agentStat && agentStat.runs > 0 && (
+        <Row label="Läufe">
+          {agentStat.runs} seit Start{agentStat.errors ? <span className="text-alarm"> · {agentStat.errors} fehlgeschlagen</span> : null}
+        </Row>
+      )}
+      {list.length > 0 && (
+        <ul className="mt-1 flex flex-col gap-1">
+          {list.map((p) => {
+            const live = p.until === undefined;
+            const ms = live ? now - p.since : (p.durationMs ?? p.updated - p.since);
+            return (
+              <li key={p.key} className="flex items-baseline gap-2 text-xs">
+                <span className={`size-1.5 shrink-0 translate-y-[-1px] rounded-full ${live ? "live-dot bg-arc" : p.status === "error" ? "bg-alarm" : p.status === "ok" ? "bg-[#7fdcb4]" : "bg-ink-faint"}`} aria-hidden />
+                <span className="min-w-0 flex-1 truncate text-ink-dim" title={p.error}>
+                  {p.label}
+                  {p.error ? <span className="text-alarm"> · {p.error}</span> : null}
+                </span>
+                <span className="type-data shrink-0 text-[0.62rem] text-ink-faint">{formatDuration(ms)}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function SystemBody({ id }: { id: string }) {
   const model = useBrain((s) => s.model);
   const live = useBrain((s) => s.live);
@@ -208,7 +284,7 @@ function SystemBody({ id }: { id: string }) {
   if (!node) return null;
   const m = node.meta;
   const act = live.nodes[id];
-  const lines = live.lines.filter((l) => l.node === id).slice(-6).reverse();
+  const lines = live.lines.filter((l) => l.node === id || l.nodes?.includes(id)).slice(-6).reverse();
   const view = node.kind === "task" ? "tasks" : node.kind === "coding" ? "agents" : node.kind === "schedule" ? "scheduler" : node.kind === "connector" ? "connectors" : node.kind === "skill" ? "skills" : node.kind === "tool" ? "permissions" : null;
   return (
     <>
@@ -227,12 +303,19 @@ function SystemBody({ id }: { id: string }) {
         {typeof m.last_activity_at === "string" && <Row label="Zuletzt">{formatRelative(m.last_activity_at)}</Row>}
         {act && <Row label="Gerade">{act.status === "active" ? "aktiv" : act.status === "error" ? `Fehler${act.detail ? `: ${act.detail}` : ""}` : act.status === "approval" ? "wartet auf Freigabe" : act.status}</Row>}
       </div>
+      <Execution id={id} kind={node.kind} />
       {lines.length > 0 && (
         <div className="mt-4">
           <p className="mb-1.5 text-2xs tracking-[0.12em] text-ink-faint uppercase">Zuletzt beobachtet</p>
           <ul className="flex flex-col gap-1 text-xs text-ink-dim">
             {lines.map((l) => (
-              <li key={l.ts}>{l.text}</li>
+              <li key={l.id} className="flex gap-2">
+                <span className="min-w-0 flex-1">
+                  {l.text}
+                  {l.detail ? <span className="text-ink-faint"> · {l.detail}</span> : null}
+                </span>
+                <time className="type-data shrink-0 text-[0.6rem] text-ink-faint">{new Date(l.at).toLocaleTimeString("de-DE")}</time>
+              </li>
             ))}
           </ul>
         </div>
@@ -293,7 +376,18 @@ export function NodeDetail() {
             </button>
           </header>
           <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5">
-            {node.id.startsWith("memory:") ? <MemoryBody key={node.id} id={node.id.slice(7)} /> : <SystemBody id={node.id} />}
+            {node.id.startsWith("memory:") ? (
+              <MemoryBody
+                key={node.id}
+                id={node.id.slice(7)}
+                usage={{
+                  count: typeof node.meta.access_count === "number" ? node.meta.access_count : 0,
+                  last: typeof node.meta.last_accessed_at === "string" ? node.meta.last_accessed_at : null,
+                }}
+              />
+            ) : (
+              <SystemBody id={node.id} />
+            )}
           </div>
         </motion.aside>
       )}

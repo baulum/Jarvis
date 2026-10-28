@@ -1,5 +1,5 @@
-// The main surface: the brain fills the window; status, conversation, details and controls float above it
-// and appear only when they have something to say.
+// The main surface: the brain fills the window; status, the live event stream, conversation, details and
+// controls float above it and appear only when they have something to say. Four views share one scene.
 import { AnimatePresence, motion } from "framer-motion";
 import { Focus, LayoutGrid, Mic, MicOff, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
@@ -7,18 +7,24 @@ import { ApprovalCard } from "../components/ApprovalCard";
 import { KillSwitch, KillSwitchBanner } from "../components/KillSwitch";
 import { Toasts } from "../components/Shell";
 import { api, useApp } from "../store/app";
+import { ActivityStream } from "./ActivityStream";
+import { CLASS_LABEL, classOf, type NodeClass } from "./graph/anatomy";
 import { BrainCanvas } from "./graph/BrainCanvas";
 import { ICON_OF } from "./graph/icons";
 import { mergeDTO } from "./graph/model";
 import { CATEGORY_LABEL, type Category } from "./graph/types";
 import { ChatDock } from "./ChatDock";
 import { CommandBar } from "./CommandBar";
-import { LabelLayer } from "./LabelLayer";
+import { LabelLayer, SpaceLabels } from "./LabelLayer";
+import { MemoryExplorer } from "./MemoryExplorer";
 import { ModelDock } from "./ModelDock";
 import { NodeDetail } from "./NodeDetail";
+import { ProcessPanel } from "./ProcessPanel";
+import { RegionLegend } from "./RegionLegend";
 import { StatusMark } from "./StatusMark";
 import { SystemPanel } from "./SystemPanel";
 import { useBrain } from "./store";
+import { ViewSwitcher } from "./ViewSwitcher";
 
 /** Loads /api/graph and refetches (debounced) when memory, tasks, coding jobs or sessions change. */
 function useGraphSync() {
@@ -65,6 +71,8 @@ function FilterRail() {
   const model = useBrain((s) => s.model);
   const hidden = useBrain((s) => s.hidden);
   const toggle = useBrain((s) => s.toggleCategory);
+  const hiddenClasses = useBrain((s) => s.hiddenClasses);
+  const toggleClass = useBrain((s) => s.toggleClass);
   const showOnly = useBrain((s) => s.showOnly);
   const focusNodes = useBrain((s) => s.focusNodes);
   const dto = useBrain((s) => s.dto);
@@ -74,6 +82,11 @@ function FilterRail() {
     const c = new Map<Category, number>();
     for (const n of model?.nodes ?? []) c.set(n.category, (c.get(n.category) ?? 0) + 1);
     return [...c.entries()].sort((a, b) => b[1] - a[1]);
+  }, [model]);
+  const classes = useMemo(() => {
+    const c = new Map<NodeClass, number>();
+    for (const n of model?.nodes ?? []) c.set(classOf(n), (c.get(classOf(n)) ?? 0) + 1);
+    return (Object.keys(CLASS_LABEL) as NodeClass[]).map((k) => [k, c.get(k) ?? 0] as const);
   }, [model]);
   const truncated = Object.entries(model?.truncated ?? {});
 
@@ -88,7 +101,19 @@ function FilterRail() {
     <div className="pointer-events-auto flex flex-col items-start gap-1" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
       <AnimatePresence>
         {open && (
-          <motion.ul initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }} className="holo-panel mb-1 flex flex-col py-1.5" aria-label="Wissensarten">
+          <motion.ul initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }} className="holo-panel mb-1 flex max-h-[60vh] flex-col overflow-y-auto py-1.5" aria-label="Wissensarten">
+            {classes.map(([cls, n]) => {
+              const off = hiddenClasses.has(cls);
+              return (
+                <li key={cls}>
+                  <button type="button" onClick={() => toggleClass(cls)} aria-pressed={!off} className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs ${off ? "text-ink-faint line-through" : "text-ink hover:text-ink"}`}>
+                    <span className="flex-1">{CLASS_LABEL[cls]}</span>
+                    <span className="type-data text-ink-faint">{n}</span>
+                  </button>
+                </li>
+              );
+            })}
+            <li className="mx-3 my-1 border-t border-seam" aria-hidden />
             {counts.map(([cat, n]) => {
               const Icon = ICON_OF[cat];
               const off = hidden.has(cat);
@@ -189,8 +214,64 @@ function Controls() {
   );
 }
 
+/** Left column below the status mark: what the current view needs – the live stream, processes or the explorer. */
+function LeftColumn() {
+  const view = useBrain((s) => s.view);
+  const occluded = useBrain((s) => s.occludedBottom);
+  const setOccludedLeft = useBrain((s) => s.setOccludedLeft);
+  const ref = useRef<HTMLDivElement>(null);
+  // the live view and the explorer have a tall panel: the scene is framed in the space right of it
+  useEffect(() => {
+    const el = ref.current;
+    const wide = view === "activity" || view === "explorer";
+    if (!el || !wide || typeof ResizeObserver === "undefined" || window.innerWidth < 900) {
+      setOccludedLeft(0);
+      return;
+    }
+    const ro = new ResizeObserver(() => setOccludedLeft(el.getBoundingClientRect().right));
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      setOccludedLeft(0);
+    };
+  }, [view, setOccludedLeft]);
+  // stays clear of the chat dock and the legend/filter at the bottom left
+  const maxHeight = `calc(100vh - ${7.5 * 16 + occluded + (view === "brain" ? 210 : 70)}px)`;
+  return (
+    <div ref={ref} className="pointer-events-none absolute top-[6.75rem] left-5 flex max-md:top-[8.4rem] w-[min(23rem,calc(100vw-2.5rem))] flex-col gap-2" style={{ maxHeight }}>
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={view === "explorer" ? "explorer" : view === "activity" ? "activity" : "stream"}
+          initial={{ opacity: 0, x: -10 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -10 }}
+          transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+          className="flex min-h-0 flex-col gap-2"
+          style={{ maxHeight }}
+        >
+          {view === "explorer" ? (
+            <MemoryExplorer />
+          ) : view === "activity" ? (
+            <>
+              <div className="flex min-h-0 flex-[3] flex-col">
+                <ProcessPanel />
+              </div>
+              <div className="hidden min-h-0 flex-[2] flex-col md:flex">
+                <ActivityStream mode="full" />
+              </div>
+            </>
+          ) : (
+            <ActivityStream mode="compact" />
+          )}
+        </motion.div>
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export function HoloApp() {
   useGraphSync();
+  const view = useBrain((s) => s.view);
   const selected = useBrain((s) => s.selected);
   const loadError = useBrain((s) => s.loadError);
   const model = useBrain((s) => s.model);
@@ -215,10 +296,14 @@ export function HoloApp() {
         <BrainCanvas panelOpen={Boolean(selected)} />
       </div>
       <LabelLayer />
+      <SpaceLabels />
       <div className="drag absolute inset-x-0 top-0 h-10" data-tauri-drag-region />
       <div className="pointer-events-none absolute inset-0 flex flex-col">
-        <header className="flex items-start gap-4 px-5 pt-9">
+        <header className="relative flex items-start gap-4 px-5 pt-9">
           <StatusMark />
+          <div className="absolute top-9 left-1/2 -translate-x-1/2 max-md:top-[5.4rem]">
+            <ViewSwitcher />
+          </div>
           <div className="ml-auto flex flex-col items-end gap-3">
             <div className="pointer-events-auto flex items-center gap-2">
               <ModelDock />
@@ -236,7 +321,14 @@ export function HoloApp() {
           <p className="pointer-events-auto mx-auto mb-4 text-xs text-alarm">Gedächtnis nicht erreichbar: {loadError}</p>
         )}
         <footer ref={footer} className="relative flex items-end px-5 pb-5">
-          <div className="absolute bottom-6 left-5">
+          <div className="absolute bottom-6 left-5 flex flex-col items-start gap-3">
+            <AnimatePresence>
+              {view === "brain" && (
+                <motion.div key="legend" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="hidden md:block">
+                  <RegionLegend />
+                </motion.div>
+              )}
+            </AnimatePresence>
             <FilterRail />
           </div>
           <div className="flex-1">
@@ -244,6 +336,7 @@ export function HoloApp() {
           </div>
         </footer>
       </div>
+      <LeftColumn />
       <NodeDetail />
       <CommandBar />
       <SystemPanel />

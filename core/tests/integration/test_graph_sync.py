@@ -64,6 +64,7 @@ async def test_graph_contains_all_node_types_with_real_relations(state) -> None:
     }
     m_c, m_p = f"memory:{cust['id']}", f"memory:{proj['id']}"
     assert ids[m_c]["kind"] == "customer" and ids[m_p]["kind"] == "project"
+    assert ids[m_c]["meta"]["access_count"] == 0 and "last_accessed_at" in ids[m_c]["meta"]  # usage for the brain
     assert ids["entity:ali demir"]["kind"] == "person"
     assert (m_c, "entity:ali demir", "Geschäftsführer") in edges
     assert (m_p, m_c, "betrifft") in edges  # entity reference resolved to the customer note

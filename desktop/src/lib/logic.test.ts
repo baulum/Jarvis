@@ -45,6 +45,15 @@ describe("api + realtime utils", () => {
   it("parses frames safely", () => {
     expect(() => parseFrame("not json")).not.toThrow();
   });
+  it("keeps the event envelope (graph nodes, attribution, seq)", () => {
+    const f = parseFrame(
+      JSON.stringify({ id: "e1", seq: 7, type: "activity.step", ts: "t", source: "system", session_id: "s1", task_id: null, nodes: ["memory:a", 3], data: { phase: "tool" } }),
+    );
+    expect(f).toEqual({
+      kind: "event",
+      event: { id: "e1", seq: 7, type: "activity.step", ts: "t", source: "system", session_id: "s1", nodes: ["memory:a"], data: { phase: "tool" } },
+    });
+  });
 });
 
 describe("logs", () => {

@@ -189,6 +189,8 @@ class GraphBuilder:
                 sensitivity=it.sensitivity,
                 updated_at=it.updated_at.isoformat(),
                 created_at=it.created_at.isoformat(),
+                access_count=it.access_count or 0,
+                last_accessed_at=it.last_accessed_at.isoformat() if it.last_accessed_at else None,
                 preview=it.content[:160],
             )
         for link in links:
@@ -323,6 +325,8 @@ class GraphBuilder:
                     path=i.path,
                     layer=LAYERS.get(i.kind, "semantic"),
                     updated_at=i.updated_at.isoformat(),
+                    created_at=i.created_at.isoformat(),
+                    access_count=i.access_count or 0,
                     preview=i.content[:160],
                 )
                 for i in rows

@@ -118,3 +118,12 @@ export function pickNearest(
   }
   return best;
 }
+
+/**
+ * Distance at which an axis-aligned box (half extents ``hw`` × ``hh`` facing the camera) fits the view – for wide
+ * layouts such as the live flow, where a bounding sphere would leave most of the screen empty.
+ */
+export function fitBoxDistance(hw: number, hh: number, fovDeg: number, aspect: number, fill = 0.9): number {
+  const t = Math.tan((fovDeg * Math.PI) / 360);
+  return Math.max(hh / t, hw / (t * Math.max(aspect, 0.1))) / fill;
+}

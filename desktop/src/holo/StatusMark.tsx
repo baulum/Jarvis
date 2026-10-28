@@ -1,19 +1,10 @@
 // Top-left: who is talking to whom. The reactor glyph, one word for the state, and the last real action.
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useState } from "react";
 import { Reactor, reactorMode } from "../components/Reactor";
 import { useApp } from "../store/app";
 import { deriveJarvisState, STATE_LABEL, type JarvisState } from "./graph/live";
 import { useBrain } from "./store";
-
-function useNow(intervalMs = 500): number {
-  const [now, setNow] = useState(() => performance.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(performance.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
-}
+import { useNow } from "./useNow";
 
 function useJarvisState(now: number): JarvisState {
   const voice = useApp((s) => s.voice.state ?? null);
@@ -43,8 +34,10 @@ export function StatusMark() {
   const connection = useApp((s) => s.connection);
   const lines = useBrain((s) => s.live.lines);
   const select = useBrain((s) => s.select);
+  // the live stream below shows every step; only the explorer view (no stream) repeats the latest one here
+  const view = useBrain((s) => s.view);
   const last = lines[lines.length - 1];
-  const fresh = last && now - last.ts < 12_000;
+  const fresh = view === "explorer" && last && now - last.ts < 12_000;
   return (
     <div className="pointer-events-auto flex items-start gap-3" data-tauri-drag-region>
       <Reactor mode={reactorMode(voice.state, Boolean(voice.connected), Boolean(voice.muted))} level={voice.level ?? 0} size={34} label="J.A.R.V.I.S." />
@@ -72,7 +65,7 @@ export function StatusMark() {
         <AnimatePresence>
           {fresh && last && (
             <motion.button
-              key={last.ts}
+              key={last.id}
               type="button"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}

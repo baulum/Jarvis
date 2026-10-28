@@ -1,4 +1,5 @@
 // Typed REST client for the J.A.R.V.I.S. core. Every endpoint the desktop uses lives here.
+import type { ActivitySnapshot } from "../holo/graph/live";
 import type { GraphDTO } from "../holo/graph/types";
 import type {
   ApprovalMode,
@@ -257,6 +258,9 @@ export function createApi(opts: ApiOptions) {
     graph: (limit = 1500) => get<GraphDTO>("/graph", { limit }),
     graphCluster: (kind: string, offset: number) =>
       get<Pick<GraphDTO, "nodes" | "edges">>(`/graph/cluster/${id(kind)}`, { offset }),
+    /** Live brain resync: running work, filtered activity steps since ``since``, tool statistics. */
+    activity: (since: number, boot: string | null) =>
+      get<ActivitySnapshot>("/activity", { since, boot: boot ?? undefined }),
     memoryEdit: (mid: string, body: { title?: string; content?: string; kind?: string }) =>
       put<{ status: string }>(`/memory/items/${id(mid)}`, body),
     memoryDelete: (mid: string) => del<{ status: string }>(`/memory/items/${id(mid)}`),

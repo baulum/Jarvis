@@ -1,17 +1,25 @@
-// The 3D knowledge graph: one instanced draw for nodes, one for edges, a faint dust field for depth, the
-// J.A.R.V.I.S. core at the centre. Positions come from the layout worker and are eased every frame.
+// The 3D brain: an anatomical cortex with neurons (brain view) and the real knowledge graph – memories, tools,
+// agents – drawn with one instanced draw for nodes and one line draw for relations. Nodes ease to their place
+// in the current view (brain, network, live activity, memory explorer); impulses travel along real activity.
 // All hot-path work reads the brain store imperatively – React does not re-render per frame.
 import { CameraControls, PerformanceMonitor } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { useApp } from "../../store/app";
-import { useBrain } from "../store";
-import { boundingSphere, fitDistance, focusPose, freeFraction, pickNearest, viewShift, type Vec3 } from "./camera";
+import { nodeVisible, useBrain, type ViewMode } from "../store";
+import { brainPlacement, flowPlacement } from "./anatomy";
+import { Anatomy, FxDriver } from "./BrainTissue";
+import { Bloom } from "./Bloom";
+import { boundingSphere, fitBoxDistance, fitDistance, focusPose, freeFraction, pickNearest, viewShift, type Vec3 } from "./camera";
+import { fx } from "./fx";
 import { buildIconAtlas, iconIndex } from "./icons";
-import { deriveJarvisState, type JarvisState } from "./live";
+import { Impulses } from "./Impulses";
+import { deriveJarvisState, type JarvisState, type LiveState } from "./live";
 import type { LayoutRequest, LayoutResponse } from "./layout";
 import { layoutGroup, nodeSize, rand01, type GraphModel } from "./model";
+import { deviceInfo, detectTier, QUALITY, stepTier, type Tier } from "./quality";
+import { brainHandle } from "./scene";
 import {
   coreFragment,
   coreVertex,
@@ -47,15 +55,6 @@ const STATE_SPIN: Record<JarvisState, number> = {
   approval: 0.0,
   error: 0.0,
 };
-
-export interface BrainHandle {
-  /** current eased positions (xyz per node) – used by labels and picking */
-  positions: Float32Array;
-  camera: THREE.PerspectiveCamera | null;
-  size: { width: number; height: number };
-}
-
-export const brainHandle: BrainHandle = { positions: new Float32Array(0), camera: null, size: { width: 1, height: 1 } };
 
 function currentState(): JarvisState {
   const app = useApp.getState();
@@ -98,16 +97,52 @@ function useLayout(model: GraphModel | null) {
   return target;
 }
 
+// ------------------------------------------------------------------ view targets
+/** Node ids that take part in live activity right now (live view brings them to the front). */
+function activeIds(live: LiveState): Set<string> {
+  const out = new Set<string>();
+  for (const [id, a] of Object.entries(live.nodes)) if (a.status !== "pulse") out.add(id);
+  for (const p of Object.values(live.processes)) if (p.until === undefined) for (const id of p.path) out.add(id);
+  return out;
+}
+
+/** Where the nodes are heading: anatomical places, the force layout, or the live flow. */
+function useViewTargets(model: GraphModel, network: React.RefObject<Float32Array>) {
+  const brain = useMemo(() => brainPlacement(model), [model]);
+  const flow = useRef({ rev: -1, at: 0, pos: flowPlacement(model, new Set()) });
+  useEffect(() => {
+    flow.current = { rev: -1, at: 0, pos: flowPlacement(model, new Set()) };
+  }, [model]);
+  return (view: ViewMode, live: LiveState, t: number): Float32Array => {
+    if (view === "brain") return brain;
+    if (view === "activity") {
+      const f = flow.current;
+      if (f.rev !== live.rev && t - f.at > 0.35) flow.current = { rev: live.rev, at: t, pos: flowPlacement(model, activeIds(live)) };
+      return flow.current.pos;
+    }
+    const net = network.current;
+    return net && net.length === model.nodes.length * 3 ? net : model.positions;
+  };
+}
+
 // ------------------------------------------------------------------ nodes
 function Nodes({ model, atlas, target }: { model: GraphModel; atlas: THREE.Texture | null; target: React.RefObject<Float32Array> }) {
   const count = model.nodes.length;
+  const targetFor = useViewTargets(model, target);
   const geom = useMemo(() => {
     const g = new THREE.InstancedBufferGeometry();
     const quad = new THREE.PlaneGeometry(1, 1);
     g.index = quad.index;
     g.setAttribute("position", quad.getAttribute("position"));
     g.setAttribute("uv", quad.getAttribute("uv"));
-    const offset = new Float32Array(model.positions);
+    // start where the nodes are drawn right now (a graph refresh must not make them jump)
+    const offset = new Float32Array(count * 3);
+    const prev = brainHandle.model;
+    for (const n of model.nodes) {
+      const j = prev?.byId.get(n.id);
+      if (prev && j !== undefined && brainHandle.positions.length >= (j + 1) * 3) offset.set(brainHandle.positions.subarray(j * 3, j * 3 + 3), n.index * 3);
+      else offset.set(model.positions.subarray(n.index * 3, n.index * 3 + 3), n.index * 3);
+    }
     g.setAttribute("aOffset", new THREE.InstancedBufferAttribute(offset, 3).setUsage(THREE.DynamicDrawUsage));
     const size = new Float32Array(count);
     const color = new Float32Array(count * 3);
@@ -125,6 +160,8 @@ function Nodes({ model, atlas, target }: { model: GraphModel; atlas: THREE.Textu
     g.setAttribute("aAct", new THREE.InstancedBufferAttribute(act, 4).setUsage(THREE.DynamicDrawUsage));
     g.instanceCount = count;
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 4000);
+    brainHandle.positions = offset;
+    brainHandle.model = model;
     return g;
   }, [model, count]);
   useEffect(() => () => geom.dispose(), [geom]);
@@ -143,6 +180,7 @@ function Nodes({ model, atlas, target }: { model: GraphModel; atlas: THREE.Textu
           uScale: { value: 0.72 },
           uAtlas: { value: null },
           uStateTint: { value: new THREE.Color() },
+          uDim: { value: 0 },
         },
       }),
     [],
@@ -150,20 +188,27 @@ function Nodes({ model, atlas, target }: { model: GraphModel; atlas: THREE.Textu
   useEffect(() => {
     mat.uniforms.uAtlas!.value = atlas;
   }, [atlas, mat]);
+  useEffect(() => () => mat.dispose(), [mat]);
 
-  const seen = useRef({ liveRev: -1, hidden: null as unknown, selected: null as string | null, hovered: null as string | null });
+  const seen = useRef({ liveRev: -1, visRev: -1, hovered: null as string | null });
   useFrame((_, dt) => {
     const t = performance.now() / 1000;
+    const b = useBrain.getState();
     mat.uniforms.uTime!.value = t;
     const tint = STATE_TINT[currentState()];
     (mat.uniforms.uStateTint!.value as THREE.Color).setRGB(tint[0], tint[1], tint[2]);
-    // ease displayed positions towards the layout target
+    // in the brain, knowledge nodes read as bright neurons among the substrate – a little smaller
+    mat.uniforms.uScale!.value = 0.72 * (1 - 0.32 * brainHandle.brainness);
+    const dim = b.view === "activity" ? 1 : 0;
+    mat.uniforms.uDim!.value += (dim - mat.uniforms.uDim!.value) * Math.min(1, dt * 3);
+    // ease displayed positions towards the target of the current view
     const off = geom.getAttribute("aOffset") as THREE.InstancedBufferAttribute;
     const cur = off.array as Float32Array;
-    brainHandle.positions = cur; // edges, labels and picking read exactly what is drawn
-    const tgt = target.current;
-    if (tgt && tgt.length === cur.length) {
-      const k = Math.min(1, dt * 3.2);
+    brainHandle.positions = cur; // edges, labels, impulses and picking read exactly what is drawn
+    const tgt = targetFor(b.view, b.live, t);
+    brainHandle.target = tgt;
+    if (tgt.length === cur.length) {
+      const k = Math.min(1, dt * 2.6);
       let moved = 0;
       for (let i = 0; i < cur.length; i += 1) {
         const d = (tgt[i] ?? 0) - (cur[i] ?? 0);
@@ -172,15 +217,14 @@ function Nodes({ model, atlas, target }: { model: GraphModel; atlas: THREE.Textu
           moved += 1;
         }
       }
+      moving = moved > 0;
       if (moved) off.needsUpdate = true;
     }
     // activity / filter / selection → aAct and aSize (only when something changed)
-    const b = useBrain.getState();
     const s = seen.current;
-    if (b.live.rev !== s.liveRev || b.hidden !== s.hidden || b.selected !== s.selected || b.hovered !== s.hovered) {
+    if (b.live.rev !== s.liveRev || b.visRev !== s.visRev || b.hovered !== s.hovered) {
       s.liveRev = b.live.rev;
-      s.hidden = b.hidden;
-      s.selected = b.selected;
+      s.visRev = b.visRev;
       s.hovered = b.hovered;
       const act = geom.getAttribute("aAct") as THREE.InstancedBufferAttribute;
       const size = geom.getAttribute("aSize") as THREE.InstancedBufferAttribute;
@@ -189,11 +233,13 @@ function Nodes({ model, atlas, target }: { model: GraphModel; atlas: THREE.Textu
       const sel = b.selected ? model.byId.get(b.selected) : undefined;
       const neigh = new Set(sel !== undefined ? model.neighbors[sel] : []);
       const hov = b.hovered ? model.byId.get(b.hovered) : undefined;
+      const inFlight = b.view === "activity" ? activeIds(b.live) : null;
       for (const n of model.nodes) {
         const i = n.index;
         const live = b.live.nodes[n.id];
         const code = live ? STATUS_CODE[live.status] : STATUS_CODE.none;
         let emph = live ? (live.status === "ok" ? 0.5 : 1) : 0;
+        if (inFlight?.has(n.id)) emph = Math.max(emph, 0.6);
         if (i === sel || i === hov) emph = 1;
         else if (neigh.has(i)) emph = Math.max(emph, 0.55);
         else if (sel !== undefined) emph = Math.min(emph, 0.15);
@@ -201,7 +247,7 @@ function Nodes({ model, atlas, target }: { model: GraphModel; atlas: THREE.Textu
         a[i * 4] = emph;
         if (live && (prevCode !== code || (a[i * 4 + 1] ?? 0) < live.since / 1000 - 0.05)) a[i * 4 + 1] = live.since / 1000;
         a[i * 4 + 2] = code;
-        sz[i] = b.hidden.has(n.category) && i !== sel ? 0 : nodeSize(n);
+        sz[i] = nodeVisible(b, n) ? nodeSize(n) : 0;
       }
       act.needsUpdate = true;
       size.needsUpdate = true;
@@ -211,27 +257,68 @@ function Nodes({ model, atlas, target }: { model: GraphModel; atlas: THREE.Textu
   return <mesh geometry={geom} material={mat} frustumCulled={false} renderOrder={2} />;
 }
 
+/** Set by Nodes each frame: whether any node is still on its way (edges only rebuild their curves then). */
+let moving = true;
+
 // ------------------------------------------------------------------ edges
+const SEG = 4; // each relation is a short curved polyline – through the depth in the brain view
+/** Relations of the previous graph – a relation that was not in it grows from its source when it appears. */
+let previousEdges: Set<string> | null = null;
+const grownGeometries = new WeakSet<THREE.BufferGeometry>();
+const edgeKey = (a: string, b: string, rel: string) => (a < b ? `${a}|${b}|${rel}` : `${b}|${a}|${rel}`);
+
 function Edges({ model }: { model: GraphModel }) {
   const n = model.edges.length;
   const geom = useMemo(() => {
     const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(n * 6), 3).setUsage(THREE.DynamicDrawUsage));
-    const along = new Float32Array(n * 2);
-    const base = new Float32Array(n * 2);
+    const verts = n * SEG * 2;
+    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(verts * 3), 3).setUsage(THREE.DynamicDrawUsage));
+    const along = new Float32Array(verts);
+    const base = new Float32Array(verts);
+    const usage = (i: number) => {
+      const c = model.nodes[i]?.meta.access_count;
+      return typeof c === "number" ? Math.min(1, Math.log1p(c) / 3) : 0;
+    };
     model.edges.forEach((e, i) => {
-      along[i * 2 + 1] = 1;
-      const b = e.relation === "ähnlich" ? 0.035 : e.relation === "gehört zu" || e.relation === "kann" ? 0.03 : 0.07 + 0.05 * Math.min(1, e.weight);
-      base[i * 2] = b;
-      base[i * 2 + 1] = b;
+      // frequently used memories are more strongly wired
+      const b0 = e.relation === "ähnlich" ? 0.035 : e.relation === "gehört zu" || e.relation === "kann" ? 0.03 : 0.07 + 0.05 * Math.min(1, e.weight);
+      const b = b0 + 0.05 * Math.max(usage(e.source), usage(e.target));
+      for (let k = 0; k < SEG; k += 1) {
+        const v = (i * SEG + k) * 2;
+        along[v] = k / SEG;
+        along[v + 1] = (k + 1) / SEG;
+        base[v] = b;
+        base[v + 1] = b;
+      }
     });
     g.setAttribute("aAlong", new THREE.BufferAttribute(along, 1));
     g.setAttribute("aBase", new THREE.BufferAttribute(base, 1));
-    g.setAttribute("aEdge", new THREE.BufferAttribute(new Float32Array(n * 4), 2).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute("aBorn", new THREE.BufferAttribute(new Float32Array(verts), 1));
+    g.setAttribute("aEdge", new THREE.BufferAttribute(new Float32Array(verts * 2), 2).setUsage(THREE.DynamicDrawUsage));
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 4000);
     return g;
   }, [model, n]);
   useEffect(() => () => geom.dispose(), [geom]);
+  // new relations (a new memory, a new link) grow from their source: compared with the previous graph
+  useEffect(() => {
+    if (grownGeometries.has(geom)) return;
+    grownGeometries.add(geom);
+    const now = performance.now() / 1000;
+    const keys = new Set<string>();
+    const born = geom.getAttribute("aBorn") as THREE.BufferAttribute;
+    const arr = born.array as Float32Array;
+    model.edges.forEach((e, i) => {
+      const src = model.nodes[e.source]!;
+      const tgt = model.nodes[e.target]!;
+      const key = edgeKey(src.id, tgt.id, e.relation);
+      keys.add(key);
+      if (previousEdges === null || previousEdges.has(key)) return;
+      const t = Math.max(src.bornAt, tgt.bornAt, fx.grow.get(src.id) ?? 0, fx.grow.get(tgt.id) ?? 0, now - 0.2);
+      arr.fill(t, i * SEG * 2, (i + 1) * SEG * 2);
+    });
+    previousEdges = keys;
+    born.needsUpdate = true;
+  }, [geom, model]);
   const mat = useMemo(
     () =>
       new THREE.ShaderMaterial({
@@ -244,65 +331,95 @@ function Edges({ model }: { model: GraphModel }) {
           uTime: { value: 0 },
           uColor: { value: new THREE.Color(0.42, 0.7, 0.8) },
           uFlowColor: { value: new THREE.Color(0.9, 0.98, 1.0) },
+          uDim: { value: 1 },
         },
       }),
     [],
   );
-  const seen = useRef({ liveRev: -1, selected: null as string | null, hovered: null as string | null, hidden: null as unknown });
+  useEffect(() => () => mat.dispose(), [mat]);
+  const seen = useRef({ liveRev: -1, visRev: -1, hovered: null as string | null, brain: -1, frames: 0 });
   useFrame(() => {
     mat.uniforms.uTime!.value = performance.now() / 1000;
+    const brain = brainHandle.brainness;
+    // relations stay quiet in the brain (anatomy first) and in the live view (only active paths matter)
+    const quiet = useBrain.getState().view === "activity" ? 0.85 : 0;
+    mat.uniforms.uDim!.value += (Math.max(brain, quiet) - mat.uniforms.uDim!.value) * 0.08;
+    const s = seen.current;
     const pos = geom.getAttribute("position") as THREE.BufferAttribute;
     const arr = pos.array as Float32Array;
     const p = brainHandle.positions;
-    if (p.length >= model.nodes.length * 3) {
-      model.edges.forEach((e, i) => {
-        arr[i * 6] = p[e.source * 3] ?? 0;
-        arr[i * 6 + 1] = p[e.source * 3 + 1] ?? 0;
-        arr[i * 6 + 2] = p[e.source * 3 + 2] ?? 0;
-        arr[i * 6 + 3] = p[e.target * 3] ?? 0;
-        arr[i * 6 + 4] = p[e.target * 3 + 1] ?? 0;
-        arr[i * 6 + 5] = p[e.target * 3 + 2] ?? 0;
-      });
+    if (p.length >= model.nodes.length * 3 && (moving || brain !== s.brain || s.frames < 3)) {
+      s.brain = brain;
+      s.frames += 1;
+      const pull = 1 - 0.32 * brain; // control point pulled towards the centre: the curve runs through the depth
+      for (let i = 0; i < n; i += 1) {
+        const e = model.edges[i]!;
+        const ax = p[e.source * 3]!;
+        const ay = p[e.source * 3 + 1]!;
+        const az = p[e.source * 3 + 2]!;
+        const bx = p[e.target * 3]!;
+        const by = p[e.target * 3 + 1]!;
+        const bz = p[e.target * 3 + 2]!;
+        const cx = ((ax + bx) / 2) * pull;
+        const cy = ((ay + by) / 2) * pull;
+        const cz = ((az + bz) / 2) * pull;
+        let px = ax;
+        let py = ay;
+        let pz = az;
+        for (let k = 1; k <= SEG; k += 1) {
+          const t = k / SEG;
+          const u = 1 - t;
+          const qx = u * u * ax + 2 * u * t * cx + t * t * bx;
+          const qy = u * u * ay + 2 * u * t * cy + t * t * by;
+          const qz = u * u * az + 2 * u * t * cz + t * t * bz;
+          const v = (i * SEG + k - 1) * 6;
+          arr[v] = px;
+          arr[v + 1] = py;
+          arr[v + 2] = pz;
+          arr[v + 3] = qx;
+          arr[v + 4] = qy;
+          arr[v + 5] = qz;
+          px = qx;
+          py = qy;
+          pz = qz;
+        }
+      }
       pos.needsUpdate = true;
     }
     const b = useBrain.getState();
-    const s = seen.current;
-    if (b.live.rev === s.liveRev && b.selected === s.selected && b.hovered === s.hovered && b.hidden === s.hidden) return;
+    if (b.live.rev === s.liveRev && b.visRev === s.visRev && b.hovered === s.hovered) return;
     s.liveRev = b.live.rev;
-    s.selected = b.selected;
+    s.visRev = b.visRev;
     s.hovered = b.hovered;
-    s.hidden = b.hidden;
-    // edges on active streams carry a moving signal (source → target); edges of the selection are emphasised
+    // edges along the data paths of running work carry a moving signal; edges of the selection are emphasised
     const flow = new Map<string, number>();
     const mark = (a: number, c: number, v: number) => {
       const key = a < c ? `${a}-${c}` : `${c}-${a}`;
       flow.set(key, Math.max(flow.get(key) ?? 0, v));
     };
-    for (const st of Object.values(b.live.streams)) {
-      const ids = st.path.map((id) => model.byId.get(id)).filter((x): x is number => x !== undefined);
-      const strength = st.status === "running" ? 1 : 0.55;
-      const chain = ids.filter((i) => !model.nodes[i]?.id.startsWith("memory:"));
-      for (let k = 0; k + 1 < chain.length; k += 1) mark(chain[k]!, chain[k + 1]!, strength);
-      // memory hits hang off the last element of the chain (agent or the memory tool)
-      const hub = chain[chain.length - 1];
-      if (hub !== undefined) for (const i of ids) if (model.nodes[i]?.id.startsWith("memory:")) mark(hub, i, strength);
+    for (const pr of Object.values(b.live.processes)) {
+      const ids = pr.path.map((id) => model.byId.get(id)).filter((x): x is number => x !== undefined);
+      const strength = pr.until === undefined ? 1 : 0.55;
+      for (let k = 0; k + 1 < ids.length; k += 1) mark(ids[k]!, ids[k + 1]!, strength);
     }
     const sel = b.selected ? model.byId.get(b.selected) : undefined;
     const hov = b.hovered ? model.byId.get(b.hovered) : undefined;
     const ed = geom.getAttribute("aEdge") as THREE.BufferAttribute;
     const ea = ed.array as Float32Array;
-    model.edges.forEach((e, i) => {
-      const hiddenEdge = b.hidden.has(model.nodes[e.source]!.category) || b.hidden.has(model.nodes[e.target]!.category);
+    for (let i = 0; i < n; i += 1) {
+      const e = model.edges[i]!;
+      const hiddenEdge = !nodeVisible(b, model.nodes[e.source]!) || !nodeVisible(b, model.nodes[e.target]!);
       const key = e.source < e.target ? `${e.source}-${e.target}` : `${e.target}-${e.source}`;
       const f = flow.get(key) ?? 0;
       let emph = f > 0 ? 0.8 : 0;
       if (e.source === sel || e.target === sel || e.source === hov || e.target === hov) emph = Math.max(emph, 0.7);
-      if (hiddenEdge) emph = -0.3;
-      ea[i * 4] = emph;
-      ea[i * 4 + 1] = f;
-      ea[i * 4 + 2] = emph;
-      ea[i * 4 + 3] = f;
-    });
+      if (hiddenEdge) emph = -1;
+      for (let k = 0; k < SEG * 2; k += 1) {
+        const v = (i * SEG * 2 + k) * 2;
+        ea[v] = emph;
+        ea[v + 1] = hiddenEdge ? 0 : f;
+      }
+    }
     ed.needsUpdate = true;
   });
   return <lineSegments geometry={geom} material={mat} frustumCulled={false} renderOrder={1} />;
@@ -380,8 +497,12 @@ function Core() {
     const model = useBrain.getState().model;
     const ji = model?.byId.get("agent:jarvis");
     if (ref.current) {
+      const b = useBrain.getState();
+      ref.current.visible = ji !== undefined && nodeVisible(b, model!.nodes[ji]!);
       if (ji !== undefined && p.length > ji * 3 + 2) ref.current.position.set(p[ji * 3]!, p[ji * 3 + 1]!, p[ji * 3 + 2]!);
       ref.current.quaternion.copy(camera.quaternion);
+      ref.current.scale.setScalar(1 - 0.5 * brainHandle.brainness); // deep in the brain it sits in the thalamus
+
     }
   });
   return (
@@ -392,11 +513,46 @@ function Core() {
 }
 
 // ------------------------------------------------------------------ camera: focus requests, idle drift, picking
-/** Distance that frames the whole brain in the part of the window the chat dock leaves free. */
+/** Viewing direction of the overview per view: the brain from front-left (language areas and lobes readable),
+ * the live flow straight on (it reads left → right). */
+const VIEW_DIR: Record<ViewMode, Vec3> = {
+  brain: [-0.9, 0.24, 0.36],
+  network: [0, 0.18, 1],
+  activity: [0, 0.05, 1],
+  explorer: [0.12, 0.2, 1],
+};
+
+/** Distance that frames the current view in the part of the window the chat dock leaves free. */
 function overviewDistance(model: GraphModel, camera: THREE.Camera, height: number) {
-  const sphere = boundingSphere(brainHandle.positions, model.nodes.map((n) => n.index), 0.85);
-  const free = freeFraction(useBrain.getState().occludedBottom, height);
-  return { sphere, distance: fitDistance(sphere.radius, (camera as THREE.PerspectiveCamera).fov, 1.05 * free) };
+  const b = useBrain.getState();
+  const tgt = brainHandle.target.length === model.nodes.length * 3 ? brainHandle.target : brainHandle.positions;
+  const visible = model.nodes.filter((n) => nodeVisible(b, n)).map((n) => n.index);
+  const free = freeFraction(b.occludedBottom, height);
+  const cam = camera as THREE.PerspectiveCamera;
+  if (b.view === "activity") {
+    // the flow is wide: fit its box, not a sphere around it
+    const lo = [Infinity, Infinity];
+    const hi = [-Infinity, -Infinity];
+    for (const i of visible) {
+      lo[0] = Math.min(lo[0]!, tgt[i * 3]!);
+      hi[0] = Math.max(hi[0]!, tgt[i * 3]!);
+      lo[1] = Math.min(lo[1]!, tgt[i * 3 + 1]!);
+      hi[1] = Math.max(hi[1]!, tgt[i * 3 + 1]!);
+    }
+    if (!visible.length) return { sphere: { center: [0, 0, 0] as Vec3, radius: 300 }, distance: 1000 };
+    const center: Vec3 = [(lo[0]! + hi[0]!) / 2, (lo[1]! + hi[1]!) / 2 + 20, 0];
+    const freeW = 1 - Math.min(b.occludedLeft, brainHandle.size.width * 0.45) / Math.max(1, brainHandle.size.width);
+    const distance = fitBoxDistance((hi[0]! - lo[0]!) / 2 + 60, (hi[1]! - lo[1]!) / 2 + 70, cam.fov, cam.aspect * freeW, 0.92 * free);
+    return { sphere: { center, radius: (hi[0]! - lo[0]!) / 2 }, distance };
+  }
+  const sphere = b.view === "brain" ? { center: [0, -14, 0] as Vec3, radius: 168 } : boundingSphere(tgt, visible.length ? visible : model.nodes.map((n) => n.index), 0.85);
+  // fit height and width: on a portrait phone screen the width decides
+  const freeW = 1 - Math.min(b.occludedLeft, brainHandle.size.width * 0.45) / Math.max(1, brainHandle.size.width);
+  const distance = Math.max(
+    fitDistance(sphere.radius, cam.fov, 1.05 * free),
+    fitBoxDistance(sphere.radius * 1.05, sphere.radius * 0.8, cam.fov, cam.aspect * freeW, 0.98),
+  );
+  return { sphere, distance };
 }
 
 function CameraRig({ model, panelOpen }: { model: GraphModel; panelOpen: boolean }) {
@@ -427,9 +583,16 @@ function CameraRig({ model, panelOpen }: { model: GraphModel; panelOpen: boolean
       const fov = (camera as THREE.PerspectiveCamera).fov;
       const p = brainHandle.positions;
       if (s.focus.kind === "overview") {
-        const { sphere, distance: d } = overviewDistance(model, camera, height);
-        overviewAt.current = performance.now();
-        void c.setLookAt(sphere.center[0], sphere.center[1] + d * 0.18, sphere.center[2] + d, ...sphere.center, true);
+        const frame = () => {
+          const { sphere, distance: d } = overviewDistance(model, camera, height);
+          overviewAt.current = performance.now();
+          const [dx, dy, dz] = VIEW_DIR[useBrain.getState().view];
+          const l = Math.hypot(dx, dy, dz);
+          void c.setLookAt(sphere.center[0] + (dx / l) * d, sphere.center[1] + (dy / l) * d, sphere.center[2] + (dz / l) * d, ...sphere.center, true);
+        };
+        // after a view switch the new targets are set by the next frame – frame those, not the old view
+        if (s.view !== prev.view) setTimeout(frame, 80);
+        else frame();
         return;
       }
       overviewAt.current = -1;
@@ -489,7 +652,7 @@ function CameraRig({ model, panelOpen }: { model: GraphModel; panelOpen: boolean
         ev.clientX - r.left,
         ev.clientY - r.top,
         (k, w) => (nodeSize(model.nodes[k]!) * proj * r.height) / (2 * w) * 1.3,
-        (k) => !b.hidden.has(model.nodes[k]!.category),
+        (k) => nodeVisible(b, model.nodes[k]!),
       );
       return i >= 0 ? model.nodes[i]!.id : null;
     };
@@ -540,9 +703,10 @@ function CameraRig({ model, panelOpen }: { model: GraphModel; panelOpen: boolean
     if (!c) return;
     const b = useBrain.getState();
     const now = performance.now();
-    const idle = now - b.lastInteraction > 12_000 && !b.selected;
+    // the live flow and the explorer stay still – they are read, not admired
+    const idle = now - b.lastInteraction > 12_000 && !b.selected && (b.view === "brain" || b.view === "network");
     // calm idle rotation; stops the moment Sir touches the brain
-    if (idle && !c.active) void c.rotate(dt * 0.025, 0, false);
+    if (idle && !c.active) void c.rotate(dt * (b.view === "brain" ? 0.035 : 0.025), 0, false);
     // Jarvis recalls something while Sir is not navigating: drift the view subtly towards it
     if (idle && b.live.lastRecall > lastRecall.current) {
       lastRecall.current = b.live.lastRecall;
@@ -582,19 +746,26 @@ function CameraRig({ model, panelOpen }: { model: GraphModel; panelOpen: boolean
  * brain glides with the dock.
  */
 function SafeArea() {
-  const shift = useRef(0);
-  const applied = useRef({ w: 0, h: 0, y: 0 });
+  const shift = useRef({ x: 0, y: 0 });
+  const applied = useRef({ w: 0, h: 0, x: 0, y: 0 });
   useFrame(({ camera, size }, dt) => {
-    const target = viewShift(useBrain.getState().occludedBottom, size.height);
-    shift.current += (target - shift.current) * Math.min(1, dt * 6);
-    if (Math.abs(target - shift.current) < 0.5) shift.current = target;
-    const y = Math.round(shift.current * 2) / 2;
+    const b = useBrain.getState();
+    const ty = viewShift(b.occludedBottom, size.height);
+    const tx = Math.min(b.occludedLeft, size.width * 0.45) / 2; // a side panel moves the centre to the right
+    const s = shift.current;
+    const k = Math.min(1, dt * 6);
+    s.y += (ty - s.y) * k;
+    s.x += (tx - s.x) * k;
+    if (Math.abs(ty - s.y) < 0.5) s.y = ty;
+    if (Math.abs(tx - s.x) < 0.5) s.x = tx;
+    const y = Math.round(s.y * 2) / 2;
+    const x = Math.round(s.x * 2) / 2;
     const a = applied.current;
-    if (a.y === y && a.w === size.width && a.h === size.height) return;
-    applied.current = { w: size.width, h: size.height, y };
+    if (a.y === y && a.x === x && a.w === size.width && a.h === size.height) return;
+    applied.current = { w: size.width, h: size.height, x, y };
     const cam = camera as THREE.PerspectiveCamera;
-    if (y === 0) cam.clearViewOffset();
-    else cam.setViewOffset(size.width, size.height, 0, y, size.width, size.height);
+    if (y === 0 && x === 0) cam.clearViewOffset();
+    else cam.setViewOffset(size.width, size.height, -x, y, size.width, size.height);
   });
   return null;
 }
@@ -630,8 +801,11 @@ export function BrainCanvas({ panelOpen }: { panelOpen: boolean }) {
   const model = useBrain((s) => s.model);
   const target = useLayout(model);
   const [atlas, setAtlas] = useState<THREE.Texture | null>(null);
-  const [dpr, setDpr] = useState(Math.min(1.5, window.devicePixelRatio || 1));
-  const [dust, setDust] = useState(1400);
+  // adaptive quality: start at what the device can do, step down when frames drop, back up when they recover
+  const maxTier = useMemo<Tier>(() => detectTier(deviceInfo()), []);
+  const [tier, setTier] = useState<Tier>(maxTier);
+  const quality = QUALITY[tier];
+  const recording = useApp((s) => s.voice.state === "recording");
   useEffect(() => {
     let alive = true;
     void buildIconAtlas().then((canvas) => {
@@ -651,33 +825,35 @@ export function BrainCanvas({ panelOpen }: { panelOpen: boolean }) {
   return (
     <Canvas
       frameloop="demand"
-      dpr={dpr}
-      camera={{ position: [0, 160, 900], fov: 42, near: 1, far: 6000 }}
+      flat
+      linear
+      dpr={Math.min(quality.dprMax, window.devicePixelRatio || 1)}
+      camera={{ position: [-760, 260, 380], fov: 42, near: 1, far: 6000 }}
       gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
       onCreated={({ gl }) => gl.setClearColor(new THREE.Color("#030608"), 1)}
-      aria-label="Wissensgraph"
+      aria-label="Jarvis-Gehirn"
     >
       <PerformanceMonitor
-        onDecline={() => {
-          setDpr(1);
-          setDust(500);
-        }}
-        onIncline={() => {
-          setDpr(Math.min(1.5, window.devicePixelRatio || 1));
-          setDust(1400);
-        }}
+        flipflops={4}
+        onDecline={() => setTier((t) => stepTier(t, -1, maxTier))}
+        onIncline={() => setTier((t) => stepTier(t, 1, maxTier))}
+        onFallback={() => setTier(0)}
       />
       <FrameLimiter />
       <SafeArea />
-      <Dust count={dust} />
+      <FxDriver />
+      <Dust count={quality.dust} />
+      <Anatomy quality={quality} />
       {model && (
         <>
-          <Edges key={`e-${model.version}-${model.edges.length}`} model={model} />
           <Nodes key={`n-${model.version}-${model.nodes.length}`} model={model} atlas={atlas} target={target} />
+          <Edges key={`e-${model.version}-${model.edges.length}`} model={model} />
           <CameraRig model={model} panelOpen={panelOpen} />
         </>
       )}
+      <Impulses />
       <Core />
+      {quality.bloom && !recording && <Bloom />}
     </Canvas>
   );
 }

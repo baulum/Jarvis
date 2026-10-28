@@ -1,6 +1,6 @@
 // Global app state (zustand). Bus events are folded in here; views read slices.
 import { create } from "zustand";
-import { useBrain } from "../holo/store";
+import { setSnapshotLoader, useBrain } from "../holo/store";
 import { ApiError, CORE_URL, createApi } from "../lib/api";
 import { attachmentKey, type AttachmentInfo } from "../lib/attachments";
 import { BUILD_COMMIT, staleBuildNotice } from "../lib/build";
@@ -491,6 +491,7 @@ let client: RealtimeClient | null = null;
 
 export function startRealtime(): RealtimeClient {
   if (client) return client;
+  setSnapshotLoader((since, boot) => api.activity(since, boot));
   client = new RealtimeClient({
     baseUrl: useApp.getState().coreUrl,
     logs: true,
@@ -499,6 +500,7 @@ export function startRealtime(): RealtimeClient {
     onLog: handleLog,
     onState: (connection) => {
       useApp.setState({ connection });
+      useBrain.getState().setConnection(connection); // pauses the live brain; "open" resynchronises it
     },
     onOpen: (hello) => {
       useApp.setState({ principal: { label: hello.principal, role: hello.role } });

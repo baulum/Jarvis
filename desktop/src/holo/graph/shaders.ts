@@ -1,5 +1,5 @@
-// GLSL for the brain. Kept deliberately cheap: one instanced draw for all nodes, one line draw for all edges,
-// additive blending, no post-processing (voice recognition shares the GPU on an M1).
+// GLSL for the knowledge nodes and their relations. Kept deliberately cheap: one instanced draw for all nodes,
+// one line draw for all edges, additive blending. The anatomy (cortex, neurons, impulses) lives in anatomyShaders.ts.
 
 /** Status codes written into aAct.z (must match STATUS_CODE in BrainCanvas). */
 export const STATUS_CODE = { none: 0, active: 1, ok: 2, error: 3, recalled: 4, new: 5, approval: 6, pulse: 7 } as const;
@@ -41,6 +41,7 @@ export const nodeFragment = /* glsl */ `
 uniform sampler2D uAtlas;
 uniform float uTime;
 uniform vec3 uStateTint;
+uniform float uDim;       // live view: nodes without activity step back
 varying vec2 vUv;
 varying vec3 vColor;
 varying float vIcon;
@@ -86,26 +87,30 @@ void main() {
   // waiting for approval: slow breathing, so it stays noticeable without flashing
   if (vAct.z > 5.5 && vAct.z < 6.5) a *= 0.75 + 0.25 * sin(uTime * 2.4);
 
-  float alpha = (a * (0.45 + 0.55 * max(emph, 0.35)) + pulse) * vFog;
+  float dim = emph < 0.05 ? 1.0 - uDim * 0.5 : 1.0;
+  float alpha = (a * (0.45 + 0.55 * max(emph, 0.35)) * dim + pulse) * vFog;
   if (alpha < 0.004) discard;
   gl_FragColor = vec4(col * (1.0 + emph * 0.4) + uStateTint * 0.04, alpha);
 }
 `;
 
 export const edgeVertex = /* glsl */ `
-attribute float aAlong;    // 0 at source, 1 at target
+attribute float aAlong;    // 0 at source, 1 at target (edges are drawn as short curved polylines)
 attribute vec2 aEdge;      // x: emphasis 0..1 (selection/activity), y: flow (1 = signal travelling)
-attribute float aBase;     // resting opacity (relation weight)
+attribute float aBase;     // resting opacity (relation weight, usage)
+attribute float aBorn;     // seconds: when a new relation appeared (0 = existed before) – it grows from its source
 varying float vAlong;
 varying vec2 vEdge;
 varying float vBase;
 varying float vFog;
+varying float vBorn;
 void main() {
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   gl_Position = projectionMatrix * mv;
   vAlong = aAlong;
   vEdge = aEdge;
   vBase = aBase;
+  vBorn = aBorn;
   vFog = smoothstep(2400.0, 200.0, -mv.z);
 }
 `;
@@ -114,20 +119,25 @@ export const edgeFragment = /* glsl */ `
 uniform float uTime;
 uniform vec3 uColor;
 uniform vec3 uFlowColor;
+uniform float uDim;        // brain view: relations stay quiet so the anatomy reads
 varying float vAlong;
 varying vec2 vEdge;
 varying float vBase;
 varying float vFog;
+varying float vBorn;
 void main() {
-  float a = vBase + vEdge.x * 0.42;
+  float grow = vBorn > 0.0 ? clamp((uTime - vBorn) / 1.6, 0.0, 1.0) : 1.0;
+  if (vAlong > grow) discard;
+  float front = vBorn > 0.0 && grow < 1.0 ? exp(-pow((vAlong - grow) * 18.0, 2.0)) : 0.0;
+  float a = vBase * (1.0 - uDim * 0.55) + vEdge.x * 0.42;
   float flow = 0.0;
   if (vEdge.y > 0.0) {
     float head = fract(uTime * 0.85);
     float d = vAlong - head;
     flow = exp(-d * d * 90.0) * vEdge.y;   // a packet moving source → target
   }
-  vec3 col = mix(uColor, uFlowColor, clamp(vEdge.x + flow, 0.0, 1.0));
-  float alpha = (a + flow * 0.9) * vFog;
+  vec3 col = mix(uColor, uFlowColor, clamp(vEdge.x + flow + front, 0.0, 1.0));
+  float alpha = (a + flow * 0.9 + front * 0.8) * vFog;
   if (alpha < 0.003) discard;
   gl_FragColor = vec4(col, alpha);
 }

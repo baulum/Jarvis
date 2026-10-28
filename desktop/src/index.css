@@ -220,6 +220,38 @@
 .holo-label[data-strong="0"] {
   color: var(--color-ink-dim);
 }
+/* Names of brain regions / live-view columns, placed in 3D space */
+.holo-space-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-ink-faint);
+  text-shadow: 0 0 6px #030608;
+  will-change: transform;
+}
+.holo-space-label[data-active="1"] {
+  color: var(--color-ink-dim);
+}
+
+/* Something runs right now (live activity) */
+@keyframes live-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.live-dot {
+  animation: live-dot 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-dot {
+    animation: none;
+  }
+}
 
 /* Live caret for streaming answers */
 @keyframes caret {
