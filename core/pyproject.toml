@@ -38,7 +38,7 @@ dependencies = [
 [project.optional-dependencies]
 antibrow = ["antibrow>=1.0"]
 voice = [
-    "sounddevice>=0.5",
+    "sounddevice>=0.5.6",
     "onnxruntime>=1.20",
 ]
 
