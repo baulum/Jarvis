@@ -90,8 +90,8 @@ anderen Projekten (z. B. Lead-Tool) lösen nie einen Neustart aus. Reihenfolge:
    beendet (kein AppleScript-Beenden: das löst ggf. einen Automation-Dialog aus und stoppt je nach Einstellung „Dienste
    beim Beenden stoppen“ alle Dienste; SIGKILL nur, wenn sie nach 10 s noch läuft). Dann wird der Core neu
    gestartet – als launchd-Dienst `com.jarvis.core` per `launchctl kickstart -k`, sonst Stopp über die PID-Datei und
-   `scripts/start.sh --no-voice --no-app` – und per `/api/health` geprüft. Zuletzt wird die Desktop-App wieder geöffnet,
-   aber nur, wenn sie vorher lief.
+   `scripts/start.sh --no-app` (startet auch den Voice-Daemon, falls keiner läuft) – und per `/api/health` geprüft.
+   Zuletzt wird die Desktop-App wieder geöffnet, aber nur, wenn sie vorher lief.
 4. Der neue Core trägt das Ergebnis in den Job ein: `result.ship.self_restart` (`state`: `done`, `failed` oder `skipped`,
    dazu Core und Desktop-App im Einzelnen). Fehler stehen zusätzlich unter `result.warnings` und kommen als Benachrichtigung
    `coding.self_restart`; die Auslieferung selbst bleibt davon unberührt. Protokoll: `~/Library/Logs/Jarvis/self-restart.log`.

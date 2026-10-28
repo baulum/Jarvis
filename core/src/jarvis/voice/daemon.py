@@ -353,8 +353,10 @@ class VoiceDaemon:
                 self._spoken.append(" ".join(r.pieces))
 
     async def _watch_reply(self, r: Reply, listen_for_barge_in: bool) -> str:
-        assert self.audio is not None
-        aec = bool(self.audio.aec)
+        audio = self.audio
+        if audio is None:
+            return "done"
+        aec = bool(audio.aec)
         barge = BargeInDetector(
             RATE,
             need_ms=self.cfg.barge_in_ms,
@@ -368,10 +370,14 @@ class VoiceDaemon:
             self.aec_q.get_nowait()
         drained: asyncio.Task[bool] | None = None
         while True:
+            if self.audio is None:  # muted meanwhile: the microphone and speaker are closed (``_command``)
+                if drained is not None:
+                    drained.cancel()
+                return "done"
             if r.ended.is_set() and drained is None:
                 if r.error == "interrupted":
                     return "barge_in" if self._primed is not None else "done"
-                drained = asyncio.create_task(self.audio.drained(120))
+                drained = asyncio.create_task(audio.drained(120))
             if drained is not None and drained.done():
                 return "done" if drained.result() else ("barge_in" if self._primed is not None else "done")
             if self._interrupt.is_set():
@@ -385,9 +391,9 @@ class VoiceDaemon:
             voiced = False
             while not self.aec_q.empty():  # echo-cancelled signal: Sir's voice without Jarvis' own
                 frame = self.aec_q.get_nowait()
-                if listen_for_barge_in and self.voice_barge_in and (self.audio.playing or r.first_audio is None):
+                if listen_for_barge_in and self.voice_barge_in and (audio.playing or r.first_audio is None):
                     voiced = barge.feed(frame) or voiced
-            if pcm is not None and not aec and listen_for_barge_in and self.voice_barge_in and self.audio.playing:
+            if pcm is not None and not aec and listen_for_barge_in and self.voice_barge_in and audio.playing:
                 voiced = barge.feed(pcm) or voiced
             if pcm is None and not voiced:
                 continue
@@ -405,7 +411,7 @@ class VoiceDaemon:
                 if voiced and not aec and r.agent_turn:
                     # the raw microphone also hears Jarvis himself: silence him now, but cancel the answer only
                     # once the transcript shows that Sir spoke (``handle_turn``)
-                    await self.audio.flush()
+                    await audio.flush()
                     self._barged = r
                 else:
                     await self.interrupt()

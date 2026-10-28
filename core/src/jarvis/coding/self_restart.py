@@ -12,8 +12,9 @@ Ablauf (Beschreibung für Sir: README, Abschnitt „Coding-Jobs an Jarvis selbst
 3. Der Helfer (``python -m jarvis.coding.self_restart``, ``Restarter.restart``): Läuft die Desktop-App, wird sie
    zuerst per SIGTERM beendet (kein AppleScript: kein Automation-Dialog, und ihr reguläres Beenden würde über
    „Dienste beim Beenden stoppen“ alle Dienste stoppen). Dann wird der Core neu gestartet (launchd ``kickstart -k`` bzw.
-   Stop + ``scripts/start.sh --no-voice --no-app``), per ``/api/health`` geprüft und die Desktop-App wieder geöffnet –
-   nur, wenn sie vorher lief. Das Ergebnis steht in der Statusdatei (``STATUS_FILE`` im Datenordner).
+   Stop + ``scripts/start.sh --no-app``, das auch den Voice-Daemon startet), per ``/api/health`` geprüft und die
+   Desktop-App wieder geöffnet – nur, wenn sie vorher lief. Das Ergebnis steht in der Statusdatei (``STATUS_FILE`` im
+   Datenordner).
 4. Der neue Core trägt das Ergebnis beim Start in die auslösenden Jobs ein (``result.ship.self_restart``, Fehler
    zusätzlich unter ``result.warnings``). Die Auslieferung selbst wird dabei nie verändert.
 """
@@ -310,10 +311,12 @@ class Restarter:
         if not script.is_file():
             raise RestartError(f"Startskript {script} fehlt")
         self.stop_core()
-        code, text = self.run(["/bin/bash", str(script), "--no-voice", "--no-app"], 180)
+        # the voice daemon is part of the restart (the script starts it unless one already runs); only the desktop app
+        # is left to ``open_desktop`` – and only if it was running before
+        code, text = self.run(["/bin/bash", str(script), "--no-app"], 180)
         if code != 0:
             raise RestartError(f"{script.name} fehlgeschlagen (Exit {code}): {text.strip()[-300:]}")
-        return f"{script.relative_to(self.root)} --no-voice --no-app"
+        return f"{script.relative_to(self.root)} --no-app"
 
     def stop_core(self) -> None:
         """Ends the old core (its python process and the ``uv run`` wrapper of the pid file). Only processes whose

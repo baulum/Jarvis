@@ -574,3 +574,17 @@ async def test_daemon_barge_in_with_echo_cancellation_cancels_at_once(monkeypatc
     vd.aec_q.put_nowait(np.concatenate([quiet(200), tone(600)]))  # Sir's voice, Jarvis' own already removed
     assert await asyncio.wait_for(task, 3) == "barge_in"
     assert vd.sent == [{"type": "cancel", "tag": 7}] and vd._barged is None
+
+
+async def test_daemon_muted_while_a_reply_is_awaited_does_not_crash(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    from jarvis.voice import daemon as d
+
+    vd = _daemon(monkeypatch, tmp_path)
+    vd.detector = SimpleNamespace(reset=lambda: None, feed=lambda pcm: False)
+    r = d.Reply(tag=8, agent_turn=True)
+    vd.reply = r
+    task = asyncio.create_task(vd._await_reply(r, True))
+    await asyncio.sleep(0.05)
+    vd.audio = None  # the mute button closed microphone and speaker (``_command``) while the answer was awaited
+    r.ended.set()  # the answer ended normally, no interruption recorded
+    assert await asyncio.wait_for(task, 3) == "done"  # used to end the whole daemon with an AttributeError

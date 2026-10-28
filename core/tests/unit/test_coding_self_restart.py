@@ -685,8 +685,8 @@ def test_core_from_the_start_script_is_stopped_and_started_again(tmp_path: Path)
     run = FakeRun({"launchctl print": (113, "Could not find service")})
     method = _restarter(run, tmp_path).restart_core()
 
-    assert method == "scripts/start.sh --no-voice --no-app"
-    assert run.calls[-1] == ["/bin/bash", str(tmp_path / "scripts" / "start.sh"), "--no-voice", "--no-app"]
+    assert method == "scripts/start.sh --no-app"
+    assert run.calls[-1] == ["/bin/bash", str(tmp_path / "scripts" / "start.sh"), "--no-app"]  # voice daemon included
     assert not (tmp_path / "run" / "core.pid").exists()  # the start script would otherwise think the core still runs
 
 
