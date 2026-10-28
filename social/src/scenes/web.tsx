@@ -3,7 +3,7 @@
 import type { CSSProperties } from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 import { C, FONT, MONO, SAFE, SAFE_W, fit, useTheme } from "../brand";
-import { EASE_IN_OUT, EASE_OUT, mix, pop, prog, rnd, typed } from "../motion";
+import { EASE_IN_OUT, EASE_OUT, mix, pace, pop, prog, rnd, typed } from "../motion";
 import { Button, Cursor, Dotted, Headline, Label, Stage, Window } from "../ui";
 
 export function OldSite({ scale = 1 }: { scale?: number }) {
@@ -190,9 +190,10 @@ interface Result {
 
 export function Search({ query, results }: { query: string; results: Result[] }) {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
-  const q = typed(query, frame, 2, fps, 26);
-  const typedDone = 2 + Math.ceil((query.length / 26) * fps);
+  const { fps, durationInFrames } = useVideoConfig();
+  const cps = pace(query.length, 2, durationInFrames * 0.35, fps, 26);
+  const q = typed(query, frame, 2, fps, cps);
+  const typedDone = 2 + Math.ceil((query.length / cps) * fps);
   return (
     <Stage>
       <div style={{ background: C.white, borderRadius: 999, padding: "30px 42px", display: "flex", alignItems: "center", gap: 26, boxShadow: "0 20px 50px -24px rgba(11,12,14,0.4)" }}>

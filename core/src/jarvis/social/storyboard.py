@@ -18,6 +18,7 @@ WIDTH, HEIGHT = 1080, 1920
 MIN_TOTAL_S, IDEAL_MAX_S, MAX_TOTAL_S = 8.0, 12.0, 15.0
 MIN_SCENE_S, MAX_SCENE_S = 0.8, 4.5
 HOOK_WITHIN_S = 2.0
+HOOK_SCENE_MAX_S = 3.5  # the hook hits at frame 0; the opening scene may hold a little longer so its text is readable
 WORDS_PER_SECOND = 3.5  # reading speed for short on-screen text (subtitle norms: ~15–17 characters/s)
 READ_BASE_S = 0.3  # orientation time before the first word is read
 
@@ -217,6 +218,7 @@ COMPONENTS: dict[str, dict[str, Any]] = {
 }  # fmt: skip
 
 SATIRE_COMPONENTS = {"review", "weather", "dating", "chat"}
+HOOK_EXEMPT = {"chat", "notification", "review"}  # these hook with their first message/card and then build up
 
 
 def _scene_schema() -> dict[str, Any]:
@@ -289,7 +291,18 @@ LLM_STORYBOARD_SCHEMA: dict[str, Any] = {
                     "transition": {"enum": TRANSITIONS},
                     "surface": {"enum": SURFACES},
                     "props": {"type": "object"},
-                    "sfx": {"type": "array", "items": {"type": "object"}},
+                    "sfx": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "sound": {"enum": SOUNDS},
+                                "at": {"type": "number"},
+                                "gain": {"type": "number"},
+                            },
+                            "required": ["sound", "at"],
+                        },
+                    },
                 },
                 "required": ["id", "component", "duration", "props"],
             },
@@ -337,8 +350,40 @@ def scene_texts(scene: dict[str, Any], facts: dict[str, str] | None = None) -> l
 
 
 def reading_seconds(texts: list[str]) -> float:
-    words = sum(len(re.findall(r"\w+", t)) for t in texts)
+    # a token like "pje-systems.de" or "facebook.com/…" is read as one word, not three
+    words = sum(1 for t in texts for tok in t.split() if re.search(r"\w", tok))
     return READ_BASE_S + words / WORDS_PER_SECOND
+
+
+def needed_seconds(scene: dict[str, Any], facts: dict[str, str] | None = None) -> float:
+    need = reading_seconds(scene_texts(scene, facts))
+    if scene.get("component") == "end_card":
+        need = max(1.8, need * 0.8)  # logo + button are glanced at, not read
+    return need
+
+
+def _fact_text(board: dict[str, Any]) -> dict[str, str]:
+    return {
+        f["id"]: f"{f['value']} {f['label']}" for f in board.get("facts") or [] if isinstance(f, dict) and "id" in f
+    }
+
+
+def fit_durations(board: dict[str, Any]) -> list[str]:
+    """Lengthens scenes that are too short for their text (up to the scene maximum; the opening scene up to the
+    hook limit) instead of sending the LLM into another round – it tends to fix one timing and break another.
+    Returns what was changed; what still does not fit is reported by ``validate``."""
+    changed: list[str] = []
+    facts = _fact_text(board)
+    for i, s in enumerate(board.get("scenes") or []):
+        if not isinstance(s, dict) or s.get("component") not in COMPONENTS:
+            continue
+        cap = MAX_SCENE_S if i or s.get("component") in HOOK_EXEMPT else HOOK_SCENE_MAX_S
+        dur = float(s.get("duration") or 0)
+        want = min(cap, needed_seconds(s, facts))
+        if want > dur + 0.35:
+            s["duration"] = round(-(-want * FPS // 1) / FPS, 3)  # whole frames, rounded up
+            changed.append(f"Szene {s.get('id')}: {dur:g} → {s['duration']:g} s (Lesezeit)")
+    return changed
 
 
 # Phrases that give away a template opener; the brief bans them as video starts.
@@ -376,22 +421,22 @@ def validate(board: dict[str, Any], *, fact_ids: set[str] | None = None) -> Chec
     if any(s["component"] == "end_card" for s in scenes[:-1]):
         problems.append("end_card nur als letzte Szene")
     first = scenes[0]
-    if first["duration"] > HOOK_WITHIN_S + 0.6 and first["component"] not in ("chat", "notification", "review"):
-        problems.append(f"Hook: die erste Szene muss in {HOOK_WITHIN_S:.0f} s greifen (ist {first['duration']} s lang)")
+    if first["duration"] > HOOK_SCENE_MAX_S and first["component"] not in HOOK_EXEMPT:
+        problems.append(
+            f"Hook: die erste Szene darf höchstens {HOOK_SCENE_MAX_S:g} s dauern (ist {first['duration']} s) – "
+            "kürzerer Text oder Einstieg teilen"
+        )
     opener = " ".join(scene_texts(first)).lower()
     for banned in BANNED_OPENERS:
         if banned in opener:
             problems.append(f"Abgedroschener Einstieg „{banned}“ – eigenen Hook finden")
-    fact_text = {
-        f["id"]: f"{f['value']} {f['label']}" for f in board.get("facts") or [] if isinstance(f, dict) and "id" in f
-    }
+    fact_text = _fact_text(board)
     for s in scenes:
-        need = reading_seconds(scene_texts(s, fact_text))
-        if s["component"] in ("end_card",):
-            need = max(1.8, need * 0.8)  # logo + button are glanced at, not read
+        need = needed_seconds(s, fact_text)
         if need > s["duration"] + 0.35:
+            hint = " – Text kürzen" if need > MAX_SCENE_S else ""
             problems.append(
-                f"Szene {s['id']} ({s['component']}): {s['duration']} s zu kurz zum Lesen (braucht ~{need:.1f} s)"
+                f"Szene {s['id']} ({s['component']}): {s['duration']} s zu kurz zum Lesen (braucht ~{need:.1f} s){hint}"
             )
         if s["component"] == "fact":
             fid = s["props"].get("fact_id")
@@ -419,7 +464,14 @@ def normalize(board: dict[str, Any], *, title: str, category: str, tone: str) ->
         s["id"] = re.sub(r"[^a-z0-9_-]", "", str(s.get("id") or f"s{i + 1}").lower())[:20] or f"s{i + 1}"
         s["duration"] = round(round(float(s.get("duration", 1.5)) * FPS) / FPS, 3)
         s.setdefault("transition", "cut" if i == 0 else "fade")
-        s["sfx"] = [c for c in (s.get("sfx") or []) if isinstance(c, dict)][:4]
+        cues = []
+        for c in s.get("sfx") or []:  # a cue without a known sound or time is dropped, not worth a new round
+            if isinstance(c, dict) and c.get("sound") in SOUNDS and isinstance(c.get("at"), int | float):
+                cue = {"sound": c["sound"], "at": round(max(0.0, min(float(c["at"]), s["duration"])), 3)}
+                if isinstance(c.get("gain"), int | float):
+                    cue["gain"] = round(min(1.0, max(0.05, float(c["gain"]))), 3)
+                cues.append(cue)
+        s["sfx"] = cues[:4]
         scenes.append(s)
     out["scenes"] = scenes
     if any(s.get("component") in ("review", "dating", "weather") for s in scenes):

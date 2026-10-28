@@ -1,28 +1,65 @@
 // Shared building parts of the scenes: stage with safe area, headline with the brand dot, device frames, cursor.
 import type { CSSProperties, ReactNode } from "react";
-import { AbsoluteFill } from "remotion";
+import { AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 import { C, FONT, MONO, SAFE, useTheme } from "./brand";
+import { EASE_IN_OUT } from "./motion";
+
+/** Atmosphere behind every scene: a slow brand-blue light drifting across the frame plus fine grain, so no frame
+ * is a flat fill. Subtle on purpose – it must never compete with the text. */
+function Ambient() {
+  const frame = useCurrentFrame();
+  const { durationInFrames } = useVideoConfig();
+  const t = useTheme();
+  const k = interpolate(frame, [0, durationInFrames], [0, 1], { easing: EASE_IN_OUT });
+  const glow = t.surface === "dark" ? "rgba(38,81,240,0.30)" : t.surface === "accent" ? "rgba(255,255,255,0.16)" : "rgba(38,81,240,0.10)";
+  const x = 20 + 60 * k;
+  const y = 18 + 14 * Math.sin(k * Math.PI);
+  return (
+    <AbsoluteFill style={{ pointerEvents: "none" }}>
+      <AbsoluteFill style={{ background: `radial-gradient(70% 45% at ${x}% ${y}%, ${glow}, transparent 70%)` }} />
+      <AbsoluteFill
+        style={{
+          opacity: t.surface === "light" ? 0.05 : 0.09,
+          backgroundImage:
+            "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>\")",
+          backgroundPosition: `${(frame * 37) % 220}px ${(frame * 53) % 220}px`,
+        }}
+      />
+    </AbsoluteFill>
+  );
+}
+
+/** Slow camera push over the whole scene (≈2.5 %): keeps held frames alive between the actual animations. */
+function Push({ children }: { children: ReactNode }) {
+  const frame = useCurrentFrame();
+  const { durationInFrames } = useVideoConfig();
+  const s = interpolate(frame, [0, durationInFrames], [1, 1.025], { easing: EASE_IN_OUT });
+  return <AbsoluteFill style={{ scale: String(s) }}>{children}</AbsoluteFill>;
+}
 
 export function Stage({ children, style, center = true }: { children?: ReactNode; style?: CSSProperties; center?: boolean }) {
   const t = useTheme();
   return (
     <AbsoluteFill style={{ background: t.bg, color: t.fg, fontFamily: FONT }}>
-      <div
-        style={{
-          position: "absolute",
-          top: SAFE.top,
-          bottom: SAFE.bottom,
-          left: SAFE.left,
-          right: SAFE.right,
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: center ? "center" : "flex-start",
-          gap: 36,
-          ...style,
-        }}
-      >
-        {children}
-      </div>
+      <Ambient />
+      <Push>
+        <div
+          style={{
+            position: "absolute",
+            top: SAFE.top,
+            bottom: SAFE.bottom,
+            left: SAFE.left,
+            right: SAFE.right,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: center ? "center" : "flex-start",
+            gap: 36,
+            ...style,
+          }}
+        >
+          {children}
+        </div>
+      </Push>
     </AbsoluteFill>
   );
 }

@@ -47,8 +47,35 @@ def test_total_length_end_card_and_hook_rules() -> None:
     slow = board()
     slow["scenes"][0]["component"] = "kinetic_type"
     slow["scenes"][0]["props"] = {"lines": [{"text": "Langsam."}], "style": "stack"}
-    slow["scenes"][0]["duration"] = 3.5
+    slow["scenes"][0]["duration"] = 4.0
     assert any("Hook" in p for p in sb.validate(slow, fact_ids=FACTS).problems)
+    slow["scenes"][0]["duration"] = sb.HOOK_SCENE_MAX_S  # the opening may hold briefly so its text can be read
+    assert not any("Hook" in p for p in sb.validate(slow, fact_ids=FACTS).problems)
+
+
+def test_fit_durations_lengthens_scenes_instead_of_rejecting() -> None:
+    b = board(facts=WITH_FACT)
+    b["scenes"][0]["props"]["message"] = "Kundenvertrauen wurde leider an keiner bekannten Stelle gefunden."
+    b["scenes"][0]["duration"] = 1.2
+    changed = sb.fit_durations(b)
+    assert changed and 1.2 < b["scenes"][0]["duration"] <= sb.HOOK_SCENE_MAX_S
+    frames = b["scenes"][0]["duration"] * sb.FPS
+    assert abs(frames - round(frames)) < 0.05  # whole frames (durations carry 3 decimals)
+    assert not any("zu kurz" in p for p in sb.validate(b, fact_ids=FACTS).problems)
+    # text that does not fit even the longest scene still goes back to the LLM
+    b["scenes"][1]["component"] = "glass_stack"
+    b["scenes"][1]["props"] = {"headline": "Wort " * 7, "items": ["eins zwei drei vier fünf"] * 4}
+    sb.fit_durations(b)
+    assert b["scenes"][1]["duration"] == sb.MAX_SCENE_S
+    assert any("Text kürzen" in p for p in sb.validate(b, fact_ids=FACTS).problems)
+
+
+def test_urls_read_as_one_word_and_bad_cues_are_dropped() -> None:
+    assert sb.reading_seconds(["pje-systems.de"]) == sb.reading_seconds(["Website"])
+    raw = {"title": "T", "palette": "ink", "scenes": [{"id": "s1", "component": "end_card", "duration": 2.0, "props": {},
+           "sfx": [{"at": 0.2}, {"sound": "laser", "at": 0}, {"sound": "pop", "at": 9, "gain": 3}]}]}  # fmt: skip
+    cues = sb.normalize(raw, title="T", category="C", tone="cineastisch")["scenes"][0]["sfx"]
+    assert cues == [{"sound": "pop", "at": 2.0, "gain": 1.0}]
 
 
 def test_reading_time_per_scene() -> None:

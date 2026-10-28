@@ -3,6 +3,30 @@
 > Wiedereinstiegspunkt für neue Sessions. Nach jeder größeren Änderung aktualisieren.
 > Doku: ARCHITECTURE.md (Aufbau), SETUP.md (Installation/Betrieb), SECURITY.md (Sicherheitsmodell).
 
+## Stand: 2026-10-28 – Social Media: tägliches PJE-Systems-Video
+
+Beschreibung, APIs und Technikwahl: docs/SOCIAL_MEDIA.md.
+- **Playbook `social_daily_video`** im normalen Zeitplaner („PJE Systems Daily Social Video“, 08:00 Europe/Berlin,
+  `daily_key` + `catch_up: same_day` → ein Auto-Video pro Tag, auch nach Neustarts/zwei Prozessen): Idee (Claude Opus,
+  Anti-Wiederholung über die Videobibliothek) → Storyboard (Schema, Lesezeit, Fakten nur aus `config/social/brand.yaml`)
+  → Remotion-Render (`social/`, 21 Bausteine, 12 Übergänge) → FFmpeg-Sounddesign (synthetisiert, −14 LUFS) → QA
+  (ffprobe, Lautheit, Frames per Vision, automatische Korrektur + Neu-Render) → Captions je Plattform → Bibliothek →
+  E-Mail an Sir (Gmail) → Autopost (Instagram/Facebook/TikTok/YouTube über offizielle APIs, **standardmäßig aus**)
+- **UI:** Menüpunkt „Social Media“ in Desktop und Handy (Dashboard, Bibliothek mit Player/Download/Captions kopieren/neu
+  generieren/manuell veröffentlichen, Automatisierung, Connector)
+- **Robustheit (nach dem ersten echten Lauf):** Szenen werden für ihre Lesezeit automatisch verlängert statt abgelehnt,
+  Hook-Regel (erste Szene ≤ 3,5 s) widerspricht der Lesezeit nicht mehr, Korrekturrunden sehen alle früheren Verstöße,
+  ungültige Sound-Cues werden verworfen; Remotion-Timeouts 120 s und ein zweiter Render mit weniger Parallelität
+  (unter Speicherdruck lud Chrome die Seite nicht in 30 s)
+- **Render-Absturz „Target closed“ behoben:** vom Core gestartet starb der GPU-Prozess der Chrome Headless Shell
+  („icudtl.dat not found in bundle“), aus dem Terminal nie. macOS nutzt jetzt Chrome for Testing (`npm run browser`
+  = `node render.mjs --ensure`); `--check` startet den Browser wirklich (vorher meldete das Dashboard „bereit“);
+  Fehler zeigen die Meldung statt des Stack-Endes, Details in `render-error.log`
+- **`scripts/start.sh` installiert die Mac-App selbst:** ist Desktop-/Bridge-Code neuer als `<data>/app-build.commit`,
+  baut `install-app.sh` die App im Hintergrund neu (`app-install.log`) und öffnet sie wieder, wenn sie lief; `start.sh`
+  öffnet jetzt die installierte App statt der Kopie im Build-Ordner (vorher liefen zeitweise beide)
+- Remotion-Skills (remotion-dev/skills 4.0.539) global installiert. Remotion-Lizenz: frei bis drei Mitarbeiter
+
 ## Stand: 2026-10-22 – Barge-in schaltbar, Overlay-Detektor testbar
 
 - **Einstellung „Jarvis ins Wort fallen“** (Handy › Einstellungen, Standard an): Overlay (`WakeWord.bargeIn`) und Anruf

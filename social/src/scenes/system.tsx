@@ -1,7 +1,7 @@
 // System-UI parodies: error dialog, crash screen, terminal, loading screen, countdown.
 import { AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 import { C, FONT, MONO, SAFE, SAFE_W, fit, useTheme } from "../brand";
-import { EASE_IN_OUT, pop, prog, rnd, typed } from "../motion";
+import { EASE_IN_OUT, pace, pop, prog, rnd, typed } from "../motion";
 import { Dotted, Headline, Label, Stage, Window } from "../ui";
 
 const SEVERITY = {
@@ -69,26 +69,64 @@ export function SystemCrash({ headline, lines = [], percent }: { headline: strin
   const frame = useCurrentFrame();
   const { durationInFrames } = useVideoConfig();
   const t = useTheme();
-  const glitch = frame % 9 < 2 ? (rnd(frame) - 0.5) * 30 : 0;
-  const pct = percent === undefined ? undefined : Math.round(interpolate(frame, [6, durationInFrames - 6], [0, percent], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }));
-  return (
-    <AbsoluteFill style={{ background: t.surface === "light" ? C.ink : t.bg, color: C.white, fontFamily: MONO }}>
-      {/* scanlines */}
-      <AbsoluteFill style={{ backgroundImage: "repeating-linear-gradient(0deg, rgba(255,255,255,0.04) 0 2px, transparent 2px 6px)" }} />
-      <div style={{ position: "absolute", top: SAFE.top, left: SAFE.left, right: SAFE.right, bottom: SAFE.bottom, display: "flex", flexDirection: "column", justifyContent: "center", gap: 34 }}>
-        <div style={{ fontSize: 150, fontWeight: 300, lineHeight: 1, translate: `${glitch}px 0`, textShadow: glitch ? `${-glitch / 2}px 0 ${C.accent}, ${glitch / 2}px 0 ${C.danger}` : "none" }}>
-          :(
-        </div>
-        <div style={{ fontFamily: FONT, fontSize: fit(headline, SAFE_W * 1.8, 84, 52), fontWeight: 650, lineHeight: 1.08, letterSpacing: "-0.02em", textWrap: "balance" }}>
-          <Dotted text={headline} color={C.accentOnDark} />
-        </div>
-        {lines.map((l, i) => (
-          <div key={i} style={{ fontSize: 40, lineHeight: 1.3, color: "rgba(255,255,255,0.78)", opacity: prog(frame, 8 + i * 6, 6) }}>
-            {l}
-          </div>
-        ))}
-        {pct !== undefined ? <div style={{ fontSize: 44, color: C.accentOnDark }}>{pct} % abgeschlossen</div> : null}
+  // glitch bursts: hard at the impact, then short irregular bursts – between them the text stands still to be read
+  const burst = frame < 7 || (frame % 13 < 2 && rnd(Math.floor(frame / 13)) > 0.35);
+  const amp = frame < 7 ? 1 - frame / 9 : burst ? 0.55 : 0;
+  const shake = amp ? { x: (rnd(frame * 5) - 0.5) * 70 * amp, y: (rnd(frame * 11) - 0.5) * 40 * amp } : { x: 0, y: 0 };
+  // CRT power-off in the last frames: the picture collapses to a line, then a dot
+  const off = prog(frame, durationInFrames - 7, 6, EASE_IN_OUT);
+  const pct = percent === undefined ? undefined : Math.round(interpolate(frame, [6, durationInFrames - 8], [0, percent], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }));
+  const split = amp * 16;
+
+  const body = (
+    <div style={{ position: "absolute", top: SAFE.top, left: SAFE.left, right: SAFE.right, bottom: SAFE.bottom, display: "flex", flexDirection: "column", justifyContent: "center", gap: 34 }}>
+      <div style={{ fontSize: 230, fontWeight: 300, lineHeight: 0.9, letterSpacing: "-0.04em", textShadow: split ? `${-split}px 0 ${C.accent}, ${split}px 0 ${C.danger}` : "none" }}>:(</div>
+      <div style={{ fontFamily: FONT, fontSize: fit(headline, SAFE_W * 1.8, 96, 56), fontWeight: 700, lineHeight: 1.04, letterSpacing: "-0.03em", textWrap: "balance", textShadow: split ? `${-split * 0.6}px 0 ${C.accent}, ${split * 0.6}px 0 ${C.danger}` : "none" }}>
+        <Dotted text={headline} color={C.accentOnDark} />
       </div>
+      {lines.map((l, i) => (
+        <div key={i} style={{ fontSize: 40, lineHeight: 1.3, color: "rgba(255,255,255,0.78)", opacity: prog(frame, 8 + i * 6, 6) }}>
+          {l}
+        </div>
+      ))}
+      {pct !== undefined ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ fontSize: 44, color: C.accentOnDark }}>{pct} % abgeschlossen</div>
+          <div style={{ height: 10, background: "rgba(255,255,255,0.12)", borderRadius: 5, overflow: "hidden" }}>
+            <div style={{ width: `${pct}%`, height: "100%", background: C.accentOnDark }} />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+  // during a burst the picture tears into horizontal bands that slip sideways
+  const bands = burst ? 6 : 1;
+  return (
+    <AbsoluteFill style={{ background: "#000", fontFamily: MONO, color: C.white }}>
+      <AbsoluteFill style={{ background: t.surface === "light" ? C.ink : t.bg, scale: `${1 + off * 0.02} ${1 - off * 0.995}`, filter: `brightness(${1 + off * 2.5})`, opacity: 1 - prog(frame, durationInFrames - 2, 2) }}>
+        <AbsoluteFill style={{ translate: `${shake.x}px ${shake.y}px` }}>
+          {Array.from({ length: bands }, (_, i) => {
+            const top = (i / bands) * 100;
+            const dx = bands > 1 ? (rnd(frame * 17 + i * 31) - 0.5) * 140 * amp : 0;
+            return (
+              <AbsoluteFill key={i} style={{ clipPath: bands > 1 ? `inset(${top}% 0 ${100 - top - 100 / bands}% 0)` : undefined, translate: `${dx}px 0` }}>
+                {body}
+              </AbsoluteFill>
+            );
+          })}
+        </AbsoluteFill>
+        {/* compression blocks */}
+        {burst
+          ? Array.from({ length: 5 }, (_, i) => (
+              <div key={i} style={{ position: "absolute", left: `${rnd(frame * 3 + i) * 85}%`, top: `${rnd(frame * 7 + i * 13) * 90}%`, width: 60 + rnd(frame + i * 5) * 260, height: 14 + rnd(frame * 2 + i) * 50, background: [C.accent, C.danger, C.white, C.accentOnDark, C.graphite][i], opacity: 0.55 * amp + 0.25 }} />
+            ))
+          : null}
+        {/* scanlines + rolling bar */}
+        <AbsoluteFill style={{ backgroundImage: "repeating-linear-gradient(0deg, rgba(255,255,255,0.05) 0 2px, transparent 2px 6px)" }} />
+        <div style={{ position: "absolute", left: 0, right: 0, height: 220, top: `${((frame * 2.4) % 120) - 10}%`, background: "linear-gradient(180deg, transparent, rgba(255,255,255,0.05), transparent)" }} />
+        <AbsoluteFill style={{ background: "radial-gradient(120% 80% at 50% 50%, transparent 55%, rgba(0,0,0,0.55))" }} />
+        {frame < 3 ? <AbsoluteFill style={{ background: C.white, opacity: 1 - frame / 3 }} /> : null}
+      </AbsoluteFill>
     </AbsoluteFill>
   );
 }
@@ -100,11 +138,15 @@ interface TermLine {
 
 export function Terminal({ lines, title = "terminal" }: { lines: TermLine[]; title?: string }) {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
+  const { fps, durationInFrames } = useVideoConfig();
+  // all lines are on screen by ~65 % of the scene: commands type faster when the scene is short
+  const cmdChars = lines.reduce((n, l) => n + (l.kind === "cmd" ? l.text.length : 0), 0);
+  const gap = Math.min(7, Math.max(3, Math.floor((durationInFrames * 0.25) / Math.max(1, lines.length))));
+  const cps = pace(cmdChars, 4, durationInFrames * 0.65 - gap * lines.length, fps, 24);
   let at = 4;
   const timed = lines.map((l) => {
     const start = at;
-    at += l.kind === "cmd" ? Math.ceil((l.text.length / 24) * fps) + 6 : 7;
+    at += l.kind === "cmd" ? Math.ceil((l.text.length / cps) * fps) + gap : gap;
     return { l, start };
   });
   const color = { cmd: C.white, out: "rgba(255,255,255,0.68)", ok: "#6ee7a8", err: "#ff8a8d" } as const;
@@ -114,7 +156,7 @@ export function Terminal({ lines, title = "terminal" }: { lines: TermLine[]; tit
         <div style={{ padding: "40px 40px", fontFamily: MONO, fontSize: 40, lineHeight: 1.45, display: "flex", flexDirection: "column", gap: 4 }}>
           {timed.map(({ l, start }, i) => {
             if (frame < start) return null;
-            const text = l.kind === "cmd" ? typed(l.text, frame, start, fps, 24) : l.text;
+            const text = l.kind === "cmd" ? typed(l.text, frame, start, fps, cps) : l.text;
             const done = text.length === l.text.length;
             return (
               <div key={i} style={{ color: color[l.kind], whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
@@ -124,7 +166,7 @@ export function Terminal({ lines, title = "terminal" }: { lines: TermLine[]; tit
               </div>
             );
           })}
-          {frame % 20 < 10 && timed.every(({ l, start }) => frame > start + (l.text.length / 24) * fps) ? (
+          {frame % 20 < 10 && timed.every(({ l, start }) => frame > start + (l.text.length / cps) * fps) ? (
             <div style={{ color: C.accentOnDark }}>$ <span style={{ background: C.white }}> </span></div>
           ) : null}
         </div>

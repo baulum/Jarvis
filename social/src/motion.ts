@@ -24,6 +24,12 @@ export function typed(text: string, frame: number, start: number, fps: number, c
   return text.slice(0, Math.min(text.length, n));
 }
 
+/** Typing speed (chars/s) so that `chars` typed from `start` are done by frame `doneBy` – never slower than `base`.
+ * Keeps long texts in short scenes readable: the text has to stand still for a moment before the cut. */
+export function pace(chars: number, start: number, doneBy: number, fps: number, base = 22): number {
+  return Math.max(base, (chars * fps) / Math.max(6, doneBy - start));
+}
+
 /** Frames the typewriter needs for `text`. */
 export const typeFrames = (text: string, fps: number, cps = 22): number => Math.ceil((text.length / cps) * fps);
 

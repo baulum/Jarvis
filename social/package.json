@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "studio": "remotion studio src/index.ts",
     "render": "node render.mjs",
-    "browser": "remotion browser ensure"
+    "browser": "node render.mjs --ensure"
   },
   "dependencies": {
     "@remotion/bundler": "4.0.539",

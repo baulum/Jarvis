@@ -623,8 +623,10 @@ class ClaudeOneShot:
         read_dir: Path | None = None,
         timeout_s: float = 120,
         model: str | None = None,
+        effort: str | None = None,
     ) -> Any:
-        """``model``: alias (haiku | sonnet | opus) or full id; default ``agent.utility_model``."""
+        """``model``: alias (haiku | sonnet | opus) or full id; default ``agent.utility_model``.
+        ``effort``: low | medium | high | xhigh | max; default the CLI's own."""
         exe = shutil.which(self.cfg.claude_binary)
         if exe is None:
             raise ClaudeUnavailable("Claude Code CLI nicht gefunden")
@@ -642,6 +644,8 @@ class ClaudeOneShot:
             "--model",
             MODELS.get(model or self.cfg.utility_model, {"id": model or self.cfg.utility_model})["id"],
         ]
+        if effort:
+            argv += ["--effort", effort]
         if read_dir is not None:
             argv += ["--tools", "Read", "--allowedTools", "Read", "--add-dir", str(read_dir)]
         else:

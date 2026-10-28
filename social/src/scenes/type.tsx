@@ -1,7 +1,7 @@
 // Typography-led scenes: kinetic type (five styles) and a POV title card.
 import { useCurrentFrame, useVideoConfig } from "remotion";
 import { SAFE_W, fit, useTheme } from "../brand";
-import { EASE_IN_OUT, pop, prog, rnd, typed } from "../motion";
+import { EASE_IN_OUT, pace, pop, prog, rnd, typed } from "../motion";
 import { Dotted, Label, Stage } from "../ui";
 
 interface Line {
@@ -32,10 +32,11 @@ export function KineticType({ lines, style = "stack", kicker }: { lines: Line[];
           whiteSpace: "nowrap" as const,
         };
         if (style === "typewriter") {
+          const cps = pace(l.text.length, start, durationInFrames * 0.62, fps, 26);
           return (
             <div key={i} style={{ ...common, fontWeight: 600 }}>
-              <Dotted text={typed(l.text, frame, start, fps, 26)} />
-              {frame >= start && typed(l.text, frame, start, fps, 26).length < l.text.length ? (
+              <Dotted text={typed(l.text, frame, start, fps, cps)} />
+              {frame >= start && typed(l.text, frame, start, fps, cps).length < l.text.length ? (
                 <span style={{ color: t.accent }}>▍</span>
               ) : null}
             </div>
@@ -86,10 +87,12 @@ export function KineticType({ lines, style = "stack", kicker }: { lines: Line[];
   );
 }
 
-export function PovTitle({ text, caption }: { text: string; caption?: string }) {
+export function PovTitle({ text: raw, caption }: { text: string; caption?: string }) {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
+  const { fps, durationInFrames } = useVideoConfig();
   const t = useTheme();
+  const text = raw.replace(/^\s*POV\s*:\s*/i, ""); // the card draws "POV:" itself
+  const cps = pace(text.length, 6, durationInFrames * 0.58, fps, 30);
   const size = fit(text, SAFE_W * 2.2, 96, 60);
   const p = pop(frame, fps, 0, 16);
   return (
@@ -108,7 +111,7 @@ export function PovTitle({ text, caption }: { text: string; caption?: string }) 
         POV:
       </div>
       <div style={{ fontSize: size, fontWeight: 600, lineHeight: 1.08, letterSpacing: "-0.03em", textWrap: "balance" }}>
-        <Dotted text={typed(text, frame, 6, fps, 30)} />
+        <Dotted text={typed(text, frame, 6, fps, cps)} />
       </div>
       {caption ? <Label style={{ opacity: prog(frame, 22, 10) }}>{caption}</Label> : null}
     </Stage>

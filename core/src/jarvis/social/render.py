@@ -65,7 +65,7 @@ async def check_dependencies(cfg: SocialMediaCfg) -> dict[str, Any]:
         if code != 0:
             problems.append(
                 "Headless-Browser für Remotion fehlt oder startet nicht – in social/: npm run browser. "
-                + (err.strip().splitlines() or [""])[-1][:200]
+                + (err.strip().splitlines() or [""])[0][:200]  # render.mjs puts the message first, then the stack
             )
         else:
             browser = "ok"
@@ -98,17 +98,27 @@ async def render_video(
     props.write_text(json.dumps(board, ensure_ascii=False), encoding="utf-8")
     silent = work_dir / "silent.mp4"
     argv = [t.node, str(t.project / "render.mjs"), "--props", str(props), "--out", str(silent)]
-    code, stdout, stderr = await run(argv, timeout_s=cfg.render_timeout_s)
-    for line in stdout.splitlines():
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if ev.get("type") == "progress" and progress is not None:
-            progress(int(ev.get("progress", 0)))
+    # Headless Chrome occasionally drops its connection when the machine is busy (other builds, a coding job):
+    # one more attempt with fewer parallel tabs before the run counts as failed.
+    for attempt in (1, 2):
+        silent.unlink(missing_ok=True)
+        extra = [] if attempt == 1 else ["--concurrency", "2"]
+        code, stdout, stderr = await run(argv + extra, timeout_s=cfg.render_timeout_s)
+        for line in stdout.splitlines():
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("type") == "progress" and progress is not None:
+                progress(int(ev.get("progress", 0)))
+        if code == 0 and silent.is_file():
+            break
+        logger.warning("Remotion render attempt %d failed (exit %s)", attempt, code)
     if code != 0 or not silent.is_file():
-        tail = [ln for ln in stderr.strip().splitlines() if ln.strip()][-6:]
-        raise RenderError("Remotion-Render fehlgeschlagen: " + (" | ".join(tail)[:600] or f"Exit {code}"))
+        first = next((ln.strip() for ln in stderr.splitlines() if ln.strip()), "")  # the message, not the stack
+        log = work_dir / "render-error.log"
+        hint = f" (Details: {log})" if log.is_file() else ""
+        raise RenderError(f"Remotion-Render fehlgeschlagen: {first[:400] or f'Exit {code}'}{hint}")
     duration = total_seconds(board)
     mixed = work_dir / "mixed.mp4"
     cmd = sfx.mix_command(

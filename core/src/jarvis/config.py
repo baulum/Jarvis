@@ -432,8 +432,9 @@ class SocialMediaCfg(_Strict):
     owner_email: str = "paulhoflich@gmail.com"  # mails to this address need no approval (Sir's own inbox)
     default_time: str = Field(default="08:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     timezone: str = "Europe/Berlin"
-    concept_model: str = "sonnet"  # model alias of the Claude CLI (haiku | sonnet | opus)
-    qa_model: str = "sonnet"  # frame analysis and spelling check
+    concept_model: str = "opus"  # Claude CLI model alias (haiku | sonnet | opus): idea, script, storyboard, captions
+    qa_model: str = "opus"  # frame analysis and spelling check
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"  # Claude CLI --effort for all of it
     render_timeout_s: int = Field(default=900, ge=60, le=3600)
     max_render_attempts: int = Field(default=3, ge=1, le=5)
     max_video_mb: float = Field(default=19.0, gt=1, le=200)

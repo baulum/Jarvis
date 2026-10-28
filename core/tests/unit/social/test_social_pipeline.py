@@ -18,7 +18,7 @@ from jarvis.jobs.engine import StepSkip
 from jarvis.social import emailer, qa, sfx
 from jarvis.social import storyboard as sb
 from jarvis.social.brand import load_brand, load_inspiration
-from jarvis.social.concept import ConceptRejected, generate
+from jarvis.social.concept import MAX_ATTEMPTS, ConceptRejected, generate, revise_prompt
 from jarvis.social.media import loudness, probe
 from jarvis.social.platforms import InstagramConnector
 from jarvis.social.variety import Past
@@ -64,7 +64,16 @@ async def test_concept_gives_up_after_bounded_attempts() -> None:
     bad = answer()
     bad["storyboard"]["scenes"] = bad["storyboard"]["scenes"][:-1]  # no end card
     with pytest.raises(ConceptRejected):
-        await generate(Asker(bad, bad, bad), load_brand(), load_inspiration(), [], TODAY)
+        await generate(Asker(*[bad] * MAX_ATTEMPTS), load_brand(), load_inspiration(), [], TODAY)
+
+
+async def test_concept_retry_lists_earlier_violations_too() -> None:
+    no_end = answer()
+    no_end["storyboard"]["scenes"] = no_end["storyboard"]["scenes"][:-1]
+    asker = Asker(no_end, answer())
+    await generate(asker, load_brand(), load_inspiration(), [], TODAY)
+    assert "end_card" in asker.prompts[1] and "FRÜHERE" not in asker.prompts[1]
+    assert revise_prompt("B", {}, ["neu"], ["alt", "neu"]).count("- alt") == 1
 
 
 # ------------------------------------------------------------------ QA
@@ -224,3 +233,72 @@ async def test_publishing_always_needs_an_approval(social: SimpleNamespace, tiny
     res = await social.executor.execute("social_publish_video", {"video_id": str(vid), "platform": "youtube"}, ToolContext(principal=SYSTEM))
     assert res.status == "approval_required"
     assert social.registry.get("social_publish_video").risk == "high"
+
+
+async def test_render_retries_once_when_the_browser_drops(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from jarvis.config import SocialMediaCfg
+    from jarvis.social import render as rd
+
+    calls: list[list[str]] = []
+
+    async def fake_run(argv: list[str], timeout_s: float = 0) -> tuple[int, str, str]:
+        calls.append(argv)
+        if len(calls) == 1:
+            return 1, "", "Error: WebSocket closed"
+        if len(calls) == 2:
+            Path(argv[argv.index("--out") + 1]).write_bytes(b"x")
+            return 0, '{"type":"progress","progress":100}\n', ""
+        return 1, "", "mix failed"  # the mix step ends the test
+
+    monkeypatch.setattr(rd, "run", fake_run)
+    monkeypatch.setattr(rd.shutil, "which", lambda name: f"/bin/{name}")
+    seen: list[int] = []
+    with pytest.raises(rd.RenderError, match="Tonmischung"):
+        await rd.render_video(SocialMediaCfg(), board(), tmp_path / "w", tmp_path / "o.mp4", progress=seen.append)
+    assert "--concurrency" not in calls[0] and calls[1][-2:] == ["--concurrency", "2"] and seen == [100]
+
+
+async def test_all_claude_calls_use_opus_with_medium_effort(
+    social: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Sir 2026-10-28: idea, script, storyboard, captions and the frame check all run on Opus 5.5, effort medium."""
+    import json as _json
+
+    from jarvis.agent import claude_agent
+    from jarvis.config import SocialMediaCfg
+
+    assert (SocialMediaCfg().concept_model, SocialMediaCfg().qa_model, SocialMediaCfg().effort) == ("opus", "opus", "medium")
+    calls: list[dict[str, Any]] = []
+
+    async def oneshot(prompt: str, **kw: Any) -> Any:
+        calls.append(kw)
+        return {}
+
+    social.svc.cfg = SocialMediaCfg()
+    social.state.oneshot = SimpleNamespace(run=oneshot)
+    await social.svc._ask_concept("sys", "p", {"type": "object"})
+    await social.svc._ask_vision("p", tmp_path)
+    assert [(c["model"], c["effort"]) for c in calls] == [("opus", "medium"), ("opus", "medium")]
+
+    # and ClaudeOneShot turns it into the CLI flags
+    seen: list[tuple[str, ...]] = []
+
+    class Proc:
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return _json.dumps({"result": "ok"}).encode(), b""
+
+    async def fake_exec(*argv: str, **kw: Any) -> Proc:
+        seen.append(argv)
+        return Proc()
+
+    monkeypatch.setattr(claude_agent.shutil, "which", lambda name: "/bin/claude")
+    monkeypatch.setattr(claude_agent.asyncio, "create_subprocess_exec", fake_exec)
+    state = SimpleNamespace(
+        settings=SimpleNamespace(agent=SimpleNamespace(claude_binary="claude", utility_model="haiku"), paths=SimpleNamespace(data_dir=tmp_path))
+    )
+    one = claude_agent.ClaudeOneShot(state)  # type: ignore[arg-type]
+    assert await one.run("hi", model="opus", effort="medium") == "ok"
+    argv = seen[0]
+    assert argv[argv.index("--model") + 1] == "claude-opus-5-5" and argv[argv.index("--effort") + 1] == "medium"
+    await one.run("hi")
+    assert "--effort" not in seen[1]

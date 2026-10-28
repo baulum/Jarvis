@@ -409,7 +409,8 @@ class SocialMediaService:
     async def _render(
         self, vid: uuid.UUID, board: dict[str, Any], work: Path, out: Path, *, attempt: int, gain: float = 0.0
     ) -> dict[str, Any]:
-        await self.repo.update(vid, stage="render", attempts=attempt)
+        # status back to "producing": a retried task (Aufgaben › Erneut versuchen) must not keep showing "failed"
+        await self.repo.update(vid, status="producing", stage="render", attempts=attempt, error=None)
         await self.repo.log(vid, f"Rendern (Versuch {attempt})")
         self.progress = {"video_id": str(vid), "stage": "render", "percent": 0}
 
@@ -774,12 +775,17 @@ class SocialMediaService:
     # ------------------------------------------------------------------ LLM + TTS adapters
     async def _ask_concept(self, system: str, prompt: str, schema: dict[str, Any]) -> Any:
         return await self.state.oneshot.run(
-            prompt, schema=schema, system=system, model=self.cfg.concept_model, timeout_s=420
+            prompt, schema=schema, system=system, model=self.cfg.concept_model, effort=self.cfg.effort, timeout_s=420
         )
 
     async def _ask_vision(self, prompt: str, frames_dir: Path) -> Any:
         return await self.state.oneshot.run(
-            prompt, schema=qa.VISION_SCHEMA, read_dir=frames_dir, model=self.cfg.qa_model, timeout_s=420
+            prompt,
+            schema=qa.VISION_SCHEMA,
+            read_dir=frames_dir,
+            model=self.cfg.qa_model,
+            effort=self.cfg.effort,
+            timeout_s=420,
         )
 
     async def _voiceover(self, text: str, out: Path) -> None:

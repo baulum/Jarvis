@@ -16,7 +16,7 @@ from jarvis.social.brand import Brand
 from jarvis.social.variety import Candidate, Past, constraints, slug, violations
 
 logger = logging.getLogger(__name__)
-MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = 4
 
 CONCEPT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -123,7 +123,8 @@ def build_prompt(
         "",
         "REGELN:",
         f"- Gesamtlänge 8–12 s (höchstens {sb.MAX_TOTAL_S:.0f} s), 3–7 Szenen, jede Szene {sb.MIN_SCENE_S}–{sb.MAX_SCENE_S} s.",
-        "- Hook in den ersten 1–2 Sekunden: die erste Szene muss sofort stoppen lassen (Pattern Interrupt, Frage, Konflikt).",
+        "- Hook in den ersten 1–2 Sekunden: die erste Szene muss sofort stoppen lassen (Pattern Interrupt, Frage, Konflikt); "
+        f"sie dauert höchstens {sb.HOOK_SCENE_MAX_S:g} s, ihr Kern muss in 2 s erfasst sein.",
         f"- Lesezeit: pro Szene ≥ {sb.READ_BASE_S} s + Wörter / {sb.WORDS_PER_SECOND}; lieber weniger Text, größer.",
         f"- Letzte Szene ist end_card mit button „{brand.cta_button}“ und url „{brand.website}“, mindestens 2 s lang.",
         "- Szene fact nur mit einer fact_id aus der Faktenliste. Preise/Angebote nur aus „Gültige Angebote“.",
@@ -142,13 +143,22 @@ def build_prompt(
     return "\n".join(rules)
 
 
-def revise_prompt(base: str, previous: dict[str, Any], problems: list[str]) -> str:
+def revise_prompt(base: str, previous: dict[str, Any], problems: list[str], earlier: list[str] | None = None) -> str:
+    """``earlier``: violations of previous attempts – fixing one rule must not bring back another."""
+    old = [p for p in earlier or [] if p not in problems]
     return (
         base
         + "\n\nDEIN LETZTER ENTWURF:\n"
         + json.dumps(previous, ensure_ascii=False)[:12000]
         + "\n\nER VERLETZT DIESE REGELN – liefere eine korrigierte, vollständige Fassung (gleiche Struktur):\n"
         + "\n".join(f"- {p}" for p in problems)
+        + (
+            "\n\nFRÜHERE ENTWÜRFE VERLETZTEN DIESE REGELN – nicht wieder einführen:\n"
+            + "\n".join(f"- {p}" for p in old)
+            if old
+            else ""
+        )
+        + "\nTiming: Szenen mit wenig Text kurz halten, Text eher kürzen als Szenen verlängern; Gesamtlänge beachten."
     )
 
 
@@ -163,6 +173,7 @@ def check(raw: dict[str, Any], brand: Brand, history: list[Past], today: date) -
     )
     used = {s.get("props", {}).get("fact_id") for s in board.get("scenes", []) if s.get("component") == "fact"}
     board["facts"] = [f for f in brand.facts if f["id"] in used]
+    sb.fit_durations(board)
     problems = list(sb.validate(board, fact_ids=brand.fact_ids).problems)
     end = board["scenes"][-1] if board.get("scenes") else {}
     if end.get("component") == "end_card" and str(end.get("props", {}).get("url", "")).strip() != brand.website:
@@ -191,6 +202,7 @@ async def generate(
     prompt = base
     notes: list[str] = []
     problems: list[str] = []
+    seen: list[str] = []
     raw: dict[str, Any] = {}
     for attempt in range(1, attempts + 1):
         out = await ask(SYSTEM, prompt, CONCEPT_SCHEMA)
@@ -204,7 +216,8 @@ async def generate(
             return ConceptResult(raw["concept"], str(raw.get("script", "")), board, attempt, notes)
         notes.append(f"Versuch {attempt}: " + "; ".join(problems)[:600])
         logger.info("Concept attempt %d rejected: %s", attempt, problems)
-        prompt = revise_prompt(base, {k: raw.get(k) for k in ("concept", "script", "storyboard")}, problems)
+        prompt = revise_prompt(base, {k: raw.get(k) for k in ("concept", "script", "storyboard")}, problems, seen)
+        seen += [p for p in problems if p not in seen]
     raise ConceptRejected(problems, notes)
 
 
@@ -232,4 +245,5 @@ async def revise_storyboard(ask: Ask, brand: Brand, board: dict[str, Any], issue
         raise ConceptRejected(["Korrektur war kein JSON"], [])
     fixed = sb.normalize(out, title=board.get("title", ""), category=board["category"], tone=board["tone"])
     fixed["facts"] = board.get("facts", [])
+    sb.fit_durations(fixed)
     return fixed
