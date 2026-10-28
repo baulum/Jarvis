@@ -114,7 +114,9 @@ def test_the_abbreviation_is_never_spoken() -> None:
 def test_a_broken_extra_persona_never_stops_the_core(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import jarvis.config as config
 
-    (tmp_path / "personality.yaml").write_text((CONFIG_DIR / "personality.yaml").read_text(encoding="utf-8"))
+    (tmp_path / "personality.yaml").write_text(
+        (CONFIG_DIR / "personality.yaml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
     (tmp_path / "personalities").mkdir()
     (tmp_path / "personalities" / "a.yaml").write_text("id: zed\nname: Zed\ntraits: [x: y]\n", encoding="utf-8")  # invalid
     (tmp_path / "personalities" / "b.yaml").write_text("id: jarvis\nname: Doppelt\n", encoding="utf-8")  # duplicate id
