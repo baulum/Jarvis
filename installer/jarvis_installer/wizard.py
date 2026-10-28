@@ -222,6 +222,18 @@ class Wizard:
             (self.summary.done if code == 0 else self.summary.open).append(
                 "Piper-Stimme eingerichtet" if code == 0 else f"Piper-Umgebung fehlgeschlagen: {out[-200:]}"
             )
+        social = self.opts.repo / "social"
+        if (social / "package.json").is_file() and self.confirm(
+            "Social-Media-Videos: Remotion und Headless-Browser einrichten (npm ci, ~300 MB)?", True
+        ):
+            npm = "npm.cmd" if h.os == "windows" else "npm"
+            code, out = self.run([npm, "ci", "--prefix", str(social), "--no-audit", "--no-fund"])
+            if code == 0:
+                code, out = self.run([npm, "run", "browser", "--prefix", str(social)])
+            ok = "Remotion für Social-Videos eingerichtet"
+            (self.summary.done if code == 0 else self.summary.open).append(
+                ok if code == 0 else f"Remotion-Einrichtung fehlgeschlagen: {out[-200:]}"
+            )
         start = "scripts\\windows\\start.ps1" if h.os == "windows" else "scripts/linux/start.sh"
         self.summary.open += [
             "Datenbank: PostgreSQL 17 + pgvector bereitstellen (oder JARVIS__DATABASE__HOST auf einen anderen Rechner)",

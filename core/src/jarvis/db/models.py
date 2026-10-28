@@ -566,3 +566,67 @@ WHATSAPP_TABLES = [
     WhatsAppSend.__table__,
     WhatsAppSuggestion.__table__,
 ]
+
+
+# --------------------------------------------------------------------------- social media (jarvis.social)
+class SocialVideo(Base):
+    """One produced (or failed) social video with its creative memory: concept, script, storyboard, components,
+    captions, QA report. ``auto_date`` (Europe/Berlin day) is unique: at most one automatic video per day, even
+    with two Core processes racing (the second INSERT fails)."""
+
+    __tablename__ = "social_videos"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    status: Mapped[str] = mapped_column(String(20), default="producing", index=True)
+    # producing | ready | failed
+    stage: Mapped[str] = mapped_column(String(30), default="concept")  # concept|render|qa|captions|email|done
+    trigger: Mapped[str] = mapped_column(String(20), default="manual")  # schedule | manual | regenerate
+    auto_date: Mapped[str | None] = mapped_column(String(10), unique=True)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column()  # regenerated from
+    task_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    category: Mapped[str] = mapped_column(String(2), default="", index=True)
+    concept_key: Mapped[str] = mapped_column(String(80), default="", index=True)
+    tone: Mapped[str] = mapped_column(String(30), default="")
+    palette: Mapped[str] = mapped_column(String(20), default="")
+    hook: Mapped[str] = mapped_column(String(200), default="")
+    concept: Mapped[dict[str, Any]] = mapped_column(PortableJSON, default=dict)  # idea, summary, inspiration …
+    script: Mapped[str] = mapped_column(Text, default="")
+    storyboard: Mapped[dict[str, Any]] = mapped_column(PortableJSON, default=dict)
+    components: Mapped[list[Any]] = mapped_column(PortableJSON, default=list)
+    transitions: Mapped[list[Any]] = mapped_column(PortableJSON, default=list)
+    sounds: Mapped[list[Any]] = mapped_column(PortableJSON, default=list)
+    captions: Mapped[dict[str, Any]] = mapped_column(PortableJSON, default=dict)
+    file_name: Mapped[str | None] = mapped_column(String(200))
+    size: Mapped[int] = mapped_column(PortableBigInt, default=0)
+    duration_s: Mapped[float] = mapped_column(Float, default=0.0)
+    qa: Mapped[dict[str, Any]] = mapped_column(PortableJSON, default=dict)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text)
+    log: Mapped[list[Any]] = mapped_column(PortableJSON, default=list)  # [{ts, level, msg}]
+    email: Mapped[dict[str, Any]] = mapped_column(PortableJSON, default=dict)  # status, to, sent_at, message_id
+    metrics: Mapped[dict[str, Any]] = mapped_column(PortableJSON, default=dict)  # performance from official APIs
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
+
+
+class SocialPublication(Base):
+    """Publishing state of a video on one platform (instagram | facebook | tiktok | youtube)."""
+
+    __tablename__ = "social_publications"
+    __table_args__ = (UniqueConstraint("video_id", "platform", name="uq_social_publications_video_platform"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    video_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("social_videos.id", ondelete="CASCADE"), index=True)
+    platform: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20), default="scheduled", index=True)
+    # scheduled | waiting_approval | publishing | published | failed | manual
+    scheduled_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), index=True)
+    published_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    post_id: Mapped[str | None] = mapped_column(String(200))
+    post_url: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    approval_id: Mapped[uuid.UUID | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
+
+
+SOCIAL_TABLES = [SocialVideo.__table__, SocialPublication.__table__]

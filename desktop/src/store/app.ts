@@ -37,6 +37,7 @@ export type ViewId =
   | "permissions"
   | "devices"
   | "whatsapp"
+  | "social"
   | "system";
 
 /** A view, optionally with the job/task to select in it. */
@@ -67,6 +68,7 @@ export type Topic =
   | "notification"
   | "session"
   | "whatsapp"
+  | "social"
   | "system";
 
 const LIVE_LOG_MAX = 3000;
@@ -154,6 +156,7 @@ export const useApp = create<AppState>((set, get) => ({
     notification: 0,
     session: 0,
     whatsapp: 0,
+    social: 0,
     system: 0,
   },
   taskInputFields: {},
@@ -461,6 +464,10 @@ export function handleBusEvent(ev: BusEvent): void {
         st.pushToast({ tone: "warn", title: "WhatsApp getrennt", body: String(d.error ?? ""), action: { label: "Öffnen", view: "whatsapp" } });
       }
     }
+    return;
+  }
+  if (type.startsWith("social.")) {
+    debounce("social", 300, () => bump("social"));
     return;
   }
   if (type.startsWith("telephony.")) {

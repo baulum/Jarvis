@@ -1,7 +1,7 @@
 // Where a notification leads: the approval, the coding job or the task it is about – never just the list.
 
 export interface Target {
-  view: "approvals" | "agents" | "tasks" | "whatsapp";
+  view: "approvals" | "agents" | "tasks" | "whatsapp" | "social";
   job?: string;
   task?: string;
 }
@@ -12,6 +12,7 @@ const id = (v: unknown): string | undefined => (typeof v === "string" && v ? v :
 export function notificationTarget(event: string, data: Record<string, unknown> | null | undefined): Target | null {
   const d = data ?? {};
   if (event === "approval.requested" || id(d.approval_id)) return { view: "approvals" };
+  if (event.startsWith("social.")) return { view: "social" }; // new video, failed production
   const job = id(d.job_id);
   if (job) return { view: "agents", job }; // a coding job has its own monitor, preferred over its task
   const task = id(d.task_id);

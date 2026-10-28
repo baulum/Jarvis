@@ -18,4 +18,9 @@ describe("notification targets", () => {
     expect(notificationTarget("agent.usage", { level: "warning" })).toBeNull();
     expect(notificationTarget("task.failed", { task_id: 42 })).toEqual({ view: "tasks" });
   });
+
+  it("opens Social Media for a new or failed video", () => {
+    expect(notificationTarget("social.ready", { video_id: "v1" })).toEqual({ view: "social" });
+    expect(notificationTarget("social.failed", { video_id: "v1" })).toEqual({ view: "social" });
+  });
 });

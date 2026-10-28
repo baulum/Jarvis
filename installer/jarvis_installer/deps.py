@@ -156,7 +156,8 @@ DEPENDENCIES: tuple[Dependency, ...] = (
     Dependency(
         "ffmpeg",
         "FFmpeg",
-        "wandelt Sprachnachrichten und Audio für die Spracherkennung um",
+        "wandelt Sprachnachrichten und Audio für die Spracherkennung um; Ton, Prüfung und Verkleinerung der "
+        "Social-Media-Videos",
         frozenset({"core"}),
         commands={"windows": ("ffmpeg",), "mac": ("ffmpeg",), "linux": ("ffmpeg",)},
         winget="Gyan.FFmpeg",
@@ -181,6 +182,19 @@ DEPENDENCIES: tuple[Dependency, ...] = (
             "%APPDATA%\\Jarvis\\bin) – oder voice.stt.server_url auf den Mac zeigen lassen",
             "mac": "brew install whisper-cpp",
             "linux": "whisper.cpp bauen (cmake) – oder voice.stt.server_url auf den Mac zeigen lassen",
+        },
+    ),
+    Dependency(
+        "node_core",
+        "Node.js ≥ 20",
+        "rendert die täglichen Social-Media-Videos (Remotion in social/, Headless-Chrome lädt npm run browser)",
+        frozenset({"core"}),
+        commands={"windows": ("node",), "mac": ("node",), "linux": ("node",)},
+        winget="OpenJS.NodeJS.LTS",
+        hints={
+            "windows": "winget install OpenJS.NodeJS.LTS",
+            "mac": "brew install node",
+            "linux": "sudo apt install nodejs npm (Node ≥ 20, z. B. über NodeSource)",
         },
     ),
     Dependency(

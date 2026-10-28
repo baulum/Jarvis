@@ -63,6 +63,14 @@ MOBILE_ROUTES: list[tuple[frozenset[str], re.Pattern[str]]] = [
     (frozenset({"POST"}), re.compile(r"^/api/coding/jobs/[0-9a-f-]{36}/(pause|resume|cancel|message)$")),
     (frozenset({"GET"}), re.compile(r"^/api/commands$")),  # slash-command list, same source as the desktop
     (frozenset({"POST"}), re.compile(r"^/api/voice/stt$")),
+    # Social Media: dashboard, library (MP4 streamed with Range), automation, platforms; signed download links
+    (frozenset({"GET"}), re.compile(r"^/api/social/(status|settings|platforms|videos)$")),
+    (frozenset({"PUT"}), re.compile(r"^/api/social/settings$")),
+    (frozenset({"POST"}), re.compile(r"^/api/social/(produce|dependencies/check)$")),
+    (frozenset({"GET"}), re.compile(r"^/api/social/videos/[0-9a-f-]{36}(/file)?$")),
+    (frozenset({"POST"}), re.compile(r"^/api/social/videos/[0-9a-f-]{36}/(link|regenerate|email|publish)$")),
+    (frozenset({"POST"}), re.compile(r"^/api/social/videos/[0-9a-f-]{36}/publications/[a-z]{3,12}/manual$")),
+    (frozenset({"GET"}), re.compile(r"^/api/social/download/[A-Za-z0-9_.-]{20,400}$")),
     (frozenset({"GET"}), re.compile(r"^/ws$")),
     (frozenset({"GET", "POST"}), re.compile(r"^/rtc(/.*)?$")),  # LiveKit signalling (proxied, see rtc_proxy)
     # Jarvis Device Agents: trade the pairing code for a token, then the command WebSocket
@@ -78,6 +86,7 @@ REMOTE_DENIED: list[re.Pattern[str]] = [
     re.compile(r"^/api/webhooks/"),
     re.compile(r"^/mcp"),
     re.compile(r"^/api/connectors/google/oauth/callback"),
+    re.compile(r"^/api/social/oauth/[a-z]+/callback"),
 ]
 REMOTE_PREFIXES = ("/api/", "/ws", "/app", "/rtc")
 

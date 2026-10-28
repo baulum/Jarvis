@@ -56,6 +56,7 @@ import type {
   WaStatus,
   WaSuggestion,
 } from "./whatsapp";
+import type { Platform, PlatformStatus, Publication, SocialSettings, SocialStatus, SocialVideo, SocialVideoDetail } from "./social";
 import type { DesktopBuild } from "./build";
 import type { SlashCommand } from "./slash";
 import type { TimelineEvent } from "./timeline";
@@ -353,6 +354,36 @@ export function createApi(opts: ApiOptions) {
       post<AgentMessageResult>(`/tasks/${id(tid)}/message`, { text, immediate }),
     commands: () => get<{ version: number; commands: SlashCommand[] }>("/commands"),
 
+    // social media (daily PJE Systems video; the library lives on the Core, the MP4 comes over the API)
+    social: {
+      status: () => get<SocialStatus>("/social/status"),
+      checkDependencies: () => post<SocialStatus["dependencies"]>("/social/dependencies/check"),
+      videos: (limit = 60) => get<{ videos: SocialVideo[]; has_more: boolean }>("/social/videos", { limit }),
+      video: (vid: string) => get<SocialVideoDetail>(`/social/videos/${id(vid)}`),
+      /** The MP4 as a Blob (authenticated; the webview only plays blob: URLs). */
+      file: async (vid: string, download = false) =>
+        (await raw("GET", `/social/videos/${id(vid)}/file`, undefined, download ? { download: true } : undefined, 300_000)).blob(),
+      link: (vid: string, hours = 24) => post<{ path: string; url: string | null; hours: number }>(`/social/videos/${id(vid)}/link`, { hours }),
+      produce: (hint = "") => post<{ task_id: string; title: string }>("/social/produce", { hint }),
+      regenerate: (vid: string, hint = "") => post<{ task_id: string }>(`/social/videos/${id(vid)}/regenerate`, { hint }),
+      email: (vid: string, to?: string) => post<{ status: string; summary?: string }>(`/social/videos/${id(vid)}/email`, to ? { to } : {}),
+      publish: (vid: string, platform: Platform) =>
+        post<{ status: string; summary?: string; data?: { url?: string } }>(`/social/videos/${id(vid)}/publish`, { platform }),
+      markManual: (vid: string, platform: Platform, postUrl: string | null) =>
+        post<Publication>(`/social/videos/${id(vid)}/publications/${platform}/manual`, { post_url: postUrl }),
+      settings: () => get<SocialSettings>("/social/settings"),
+      saveSettings: (
+        body: Partial<Omit<SocialSettings, "schedule" | "owner_email" | "platforms">> & {
+          platforms?: Partial<Record<Platform, { autopost: boolean }>>;
+          daily_enabled?: boolean;
+          production_time?: string;
+        },
+      ) =>
+        put<SocialSettings>("/social/settings", body),
+      platforms: () => get<PlatformStatus[]>("/social/platforms"),
+      oauthStart: (platform: Platform) => post<{ auth_url: string }>(`/social/oauth/${platform}/start`),
+      disconnect: (platform: Platform) => post<{ ok: boolean }>(`/social/platforms/${platform}/disconnect`, { confirm: true }),
+    },
     // whatsapp (one central connection on the Core; every client sees the same chats)
     whatsapp: {
       status: () => get<WaStatus>("/whatsapp/status"),

@@ -136,6 +136,25 @@ class Api {
     return res.bodyBytes;
   }
 
+  /// A social video (GET /api/social/videos/{id}/file) written to [target] – streamed in chunks over the pinned
+  /// connection, so a remote Core works the same; the player then plays the local file.
+  Future<File> socialVideo(String id, File target) async {
+    if (_client == null) await init();
+    final token = await native.accessToken();
+    final req = http.Request('GET', await _uri('/api/social/videos/${Uri.encodeComponent(id)}/file'))
+      ..headers['Authorization'] = 'Bearer $token';
+    final res = await _client!.send(req).timeout(const Duration(seconds: 30));
+    if (res.statusCode >= 400) throw ApiError(res.statusCode, 'Video nicht verfügbar');
+    final sink = target.openWrite();
+    try {
+      await res.stream.timeout(const Duration(minutes: 3)).pipe(sink);
+    } catch (_) {
+      if (await target.exists()) await target.delete();
+      rethrow;
+    }
+    return target;
+  }
+
   /// Uploads one chat attachment (POST /api/attachments, raw body). The core checks size, type and file signature.
   Future<Map<String, dynamic>> uploadAttachment(String name, List<int> bytes) async {
     if (_client == null) await init();

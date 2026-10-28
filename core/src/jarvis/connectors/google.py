@@ -275,11 +275,15 @@ class GoogleConnector(Connector):
         body: str,
         attachments: list[tuple[str, str, bytes]] | None = None,
         draft: bool = False,
+        html: str | None = None,
     ) -> Any:
+        """``body`` is the plain-text part; with ``html`` the mail is multipart/alternative (text as fallback)."""
         msg = EmailMessage()
         msg["To"] = to
         msg["Subject"] = subject
         msg.set_content(body)
+        if html:
+            msg.add_alternative(html, subtype="html")
         for name, mime, data in attachments or []:
             maintype, subtype = mime.split("/", 1)
             msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=name)

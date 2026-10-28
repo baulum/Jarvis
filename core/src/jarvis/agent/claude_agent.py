@@ -622,7 +622,9 @@ class ClaudeOneShot:
         system: str | None = None,
         read_dir: Path | None = None,
         timeout_s: float = 120,
+        model: str | None = None,
     ) -> Any:
+        """``model``: alias (haiku | sonnet | opus) or full id; default ``agent.utility_model``."""
         exe = shutil.which(self.cfg.claude_binary)
         if exe is None:
             raise ClaudeUnavailable("Claude Code CLI nicht gefunden")
@@ -638,7 +640,7 @@ class ClaudeOneShot:
             "none",
             "--disable-slash-commands",
             "--model",
-            MODELS.get(self.cfg.utility_model, {"id": self.cfg.utility_model})["id"],
+            MODELS.get(model or self.cfg.utility_model, {"id": model or self.cfg.utility_model})["id"],
         ]
         if read_dir is not None:
             argv += ["--tools", "Read", "--allowedTools", "Read", "--add-dir", str(read_dir)]
@@ -670,7 +672,7 @@ class ClaudeOneShot:
         if isinstance(data, list):
             data = data[-1]
         if (tracker := getattr(self.state, "usage", None)) is not None:
-            tracker.on_result(self.cfg.utility_model, data.get("usage"))
+            tracker.on_result(model or self.cfg.utility_model, data.get("usage"))
         if data.get("is_error"):
             raise ClaudeUnavailable(friendly_error(str(data.get("result") or data.get("errors"))))
         return data.get("structured_output") if schema is not None else str(data.get("result") or "")

@@ -1,4 +1,9 @@
-"""Cron scheduler persisted in Postgres (survives restarts, catches up one missed run)."""
+"""Cron scheduler persisted in Postgres (survives restarts, catches up one missed run).
+
+Playbook actions may carry two options for daily jobs (used by the social video, ``jarvis.social``):
+``daily_key`` – the task gets the idempotency key ``<daily_key>:<local date of the run>``, so two Core processes or
+a manual "Jetzt ausführen" never start the same day twice; ``catch_up: "same_day"`` – a run missed while the Core
+was down is made up only on the day it was due (a run from yesterday is skipped, not started today)."""
 
 from __future__ import annotations
 
@@ -105,8 +110,8 @@ class Scheduler:
             sched = await s.get(Schedule, sid)
             if sched is None:
                 raise LookupError("Zeitplan nicht gefunden")
-            action, name = dict(sched.action), sched.name
-        await self._execute(sid, name, action)
+            action, name, tz = dict(sched.action), sched.name, sched.timezone
+        await self._execute(sid, name, action, None, tz)
 
     async def _sweep_approvals(self) -> None:
         """Expire pending approvals past their TTL and fail ones that were approved but never finished (crash)."""
@@ -142,21 +147,38 @@ class Scheduler:
                         )
                         jobs = []
                         for sched in due:
+                            due_at = sched.next_run_at
                             sched.last_run_at = now
                             sched.next_run_at = next_run(sched.cron, sched.timezone, now)
-                            jobs.append((sched.id, sched.name, dict(sched.action)))
-                    for sid, name, action in jobs:
-                        spawn(self._execute(sid, name, action), name=f"schedule-{name}")
+                            jobs.append((sched.id, sched.name, dict(sched.action), due_at, sched.timezone))
+                    for sid, name, action, due_at, tz in jobs:
+                        spawn(self._execute(sid, name, action, due_at, tz), name=f"schedule-{name}")
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("Scheduler tick failed")
             await asyncio.sleep(tick)
 
-    async def _execute(self, sid: uuid.UUID, name: str, action: dict[str, Any]) -> None:
+    async def _execute(
+        self,
+        sid: uuid.UUID,
+        name: str,
+        action: dict[str, Any],
+        due_at: datetime | None = None,
+        tz: str = "Europe/Berlin",
+    ) -> None:
         status = "ok"
         try:
             kind = action["type"]
+            today = datetime.now(ZoneInfo(tz)).date()
+            if (
+                action.get("catch_up") == "same_day"
+                and due_at is not None
+                and due_at.astimezone(ZoneInfo(tz)).date() != today
+            ):
+                status = "skipped: verpasst"
+                logger.info("Schedule %s: run due %s was missed and is not made up today", name, due_at.isoformat())
+                kind = "skip"
             if kind == "prompt":
                 result = await self.state.orchestrator.handle(SCHEDULER, "scheduler", action["prompt"])
                 if action.get("notify", True) and result.text:
@@ -168,7 +190,10 @@ class Scheduler:
                 )
                 status = res.status
             elif kind == "playbook":
-                await self.state.tasks.create(action["playbook"], action.get("params", {}), SCHEDULER)
+                key = f"{action['daily_key']}:{today.isoformat()}" if action.get("daily_key") else None
+                await self.state.tasks.create(
+                    action["playbook"], action.get("params", {}), SCHEDULER, idempotency_key=key
+                )
         except Exception as e:
             logger.exception("Scheduled job %s failed", name)
             status = f"error: {e}"[:30]

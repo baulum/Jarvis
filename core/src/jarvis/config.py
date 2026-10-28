@@ -415,6 +415,37 @@ class WhatsAppCfg(_Strict):
         return _expand(v) if v else None
 
 
+class SocialMediaCfg(_Strict):
+    """Daily PJE Systems social video (jarvis.social): Remotion project, FFmpeg, library, e-mail.
+
+    Host-level options. What Sir switches in the app (daily production, time, e-mail, autopost …) lives in
+    ``<data_dir>/social-media.json``; the production time is the cron of the schedule "PJE Systems Daily Social
+    Video" in the normal scheduler."""
+
+    enabled: bool = True
+    node_binary: str = "node"  # Node.js ≥ 20
+    project_dir: Path | None = None  # default: <repo>/social (needs `npm ci && npm run browser`)
+    ffmpeg_binary: str = "ffmpeg"
+    ffprobe_binary: str = "ffprobe"
+    library_dir: Path | None = None  # default: <data_dir>/social-videos
+    owner_email: str = "paulhoflich@gmail.com"  # mails to this address need no approval (Sir's own inbox)
+    default_time: str = Field(default="08:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    timezone: str = "Europe/Berlin"
+    concept_model: str = "sonnet"  # model alias of the Claude CLI (haiku | sonnet | opus)
+    qa_model: str = "sonnet"  # frame analysis and spelling check
+    render_timeout_s: int = Field(default=900, ge=60, le=3600)
+    max_render_attempts: int = Field(default=3, ge=1, le=5)
+    max_video_mb: float = Field(default=19.0, gt=1, le=200)
+    email_attachment_max_mb: float = Field(default=18.0, gt=0, le=24)  # Gmail: 25 MB per message incl. encoding
+    link_ttl_hours: int = Field(default=72, ge=1, le=24 * 30)
+    public_base_url: str = ""  # address of this Core for download links in the e-mail (default server.public_base_url)
+
+    @field_validator("project_dir", "library_dir", mode="before")
+    @classmethod
+    def _exp(cls, v: Any) -> Path | None:
+        return _expand(v) if v else None
+
+
 class Settings(_Strict):
     server: ServerCfg = Field(default_factory=ServerCfg)
     paths: PathsCfg
@@ -435,6 +466,7 @@ class Settings(_Strict):
     devices: DevicesCfg = Field(default_factory=DevicesCfg)
     clients: ClientsCfg = Field(default_factory=ClientsCfg)
     whatsapp: WhatsAppCfg = Field(default_factory=WhatsAppCfg)
+    social_media: SocialMediaCfg = Field(default_factory=SocialMediaCfg)
 
 
 class Personality(_Strict):

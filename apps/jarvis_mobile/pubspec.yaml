@@ -42,6 +42,7 @@ dependencies:
   permission_handler: ^13.0.2
   file_picker: ^13.2.0
   image_picker: ^1.2.4
+  video_player: ^2.11.1
 
 dev_dependencies:
   flutter_test:

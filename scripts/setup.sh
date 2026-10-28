@@ -56,6 +56,9 @@ step "Lokale Jarvis-Stimme (MLX, ~2 GB Modell beim ersten Start)"
 uv pip install --python "$DATA/tts-local/.venv/bin/python" -q -r "$ROOT/scripts/local-tts/requirements.txt"
 [ -f "$DATA/voices/jarvis_ref_short.wav" ] || echo "ℹ Referenz-Clip fehlt: $DATA/voices/jarvis_ref_short.wav + .txt (6 s Jarvis-Stimme + Transkript)"
 
+step "Social-Media-Videos (Remotion + Headless-Browser, ~300 MB)"
+(cd "$ROOT/social" && npm ci --no-audit --no-fund && npm run browser)
+
 step "Claude Code (Agent-Gehirn)"
 env -u ANTHROPIC_API_KEY claude auth status | grep -q '"loggedIn": true' || echo "⚠ Claude Code nicht angemeldet: im Terminal 'claude' starten und /login ausführen"
 

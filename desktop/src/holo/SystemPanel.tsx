@@ -14,6 +14,7 @@ import { PermissionsView } from "../views/PermissionsView";
 import { SchedulerView } from "../views/SchedulerView";
 import { SettingsView } from "../views/SettingsView";
 import { SkillsView } from "../views/SkillsView";
+import { SocialView } from "../views/SocialView";
 import { SystemView } from "../views/SystemView";
 import { TasksView } from "../views/TasksView";
 import { VoiceView } from "../views/VoiceView";
@@ -22,6 +23,7 @@ import { useApp } from "../store/app";
 import { useBrain } from "./store";
 
 export const SYSTEM_VIEWS: { id: string; label: string; keywords: string[]; view: ComponentType }[] = [
+  { id: "social", label: "Social Media", keywords: ["video", "reels", "tiktok", "instagram", "youtube", "pje", "werbung", "captions"], view: SocialView },
   { id: "tasks", label: "Aufgaben", keywords: ["tasks", "playbook", "ablauf"], view: TasksView },
   { id: "approvals", label: "Freigaben", keywords: ["approval", "freigeben"], view: ApprovalsView },
   { id: "chat", label: "Gespräche", keywords: ["chat", "verlauf", "sessions"], view: ChatView },

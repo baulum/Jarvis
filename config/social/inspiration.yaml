@@ -1,0 +1,71 @@
+# 60 Beispielformate für die täglichen PJE-Systems-Videos – nur INSPIRATION.
+# Der Konzeptgenerator (jarvis.social.concept) kombiniert und verändert sie zu eigenen Ideen; er kopiert sie nicht.
+# Satire/Parodie wird im Video als „Satire · fiktiv“ markiert. Keine erfundenen Bewertungen als echt ausgeben.
+categories:
+  A: Humor & provokante Hooks
+  B: Überraschung & Pattern Interrupts
+  C: Premium Motion Graphics
+  D: Psychologie & Kundenprobleme
+  E: Angebote, Referenzen & echte Projekte
+  F: Experimentelle Formate
+formats:
+  - {id: A01, category: A, title: "Satirische 1-Sterne-Bewertung", idea: "Eine fiktive Bewertung über eine alte Website („Lädt länger als mein Kaffee“), klar als Satire markiert.", components: [review, kinetic_type]}
+  - {id: A02, category: A, title: "WhatsApp-Chat zweier Unternehmer", idea: "Zwei Betriebsinhaber schreiben sich; einer gesteht seine Website von 2011.", components: [chat]}
+  - {id: A03, category: A, title: "POV: 2026 ohne Website", idea: "POV-Titelkarte, danach die Folgen in drei schnellen Schnitten.", components: [pov_title, search, kinetic_type]}
+  - {id: A04, category: A, title: "Dating-App-Parodie", idea: "Die alte Website hat ein Dating-Profil – Kunden wischen nach links.", components: [dating]}
+  - {id: A05, category: A, title: "Wetterbericht für die alte Website", idea: "„Aussichten für deine alte Website: düster.“ Mit Sturmwarnung.", components: [weather]}
+  - {id: A06, category: A, title: "Tech-Support-Hotline-Parodie", idea: "Warteschleifen-Ansage als Kinetic Type, Pointe: bei PJE kein Ticketsystem.", components: [kinetic_type, loading]}
+  - {id: A07, category: A, title: "Ausreden-Bingo", idea: "Die fünf häufigsten Ausreden gegen eine neue Website, abgehakt.", components: [glass_stack, kinetic_type]}
+  - {id: A08, category: A, title: "Website-Horoskop", idea: "Sternzeichen ‚Baukasten‘: Diese Woche verlierst du Anfragen.", components: [kinetic_type, notification]}
+  - {id: A09, category: A, title: "Nachrichtensprecher-Eilmeldung", idea: "Eilmeldung-Bauchbinde: ‚Website lädt seit 2011‘.", components: [kinetic_type, loading]}
+  - {id: A10, category: A, title: "Gästebuch-Nostalgie", idea: "Besucherzähler und Gästebuch – Museum statt Verkaufsseite.", components: [browser, kinetic_type]}
+  - {id: B01, category: B, title: "Fake-Fehlermeldung", idea: "„ERROR 404: Kundenvertrauen nicht gefunden“ – Button ‚Beheben‘ führt zu PJE.", components: [error_dialog, cursor_click]}
+  - {id: B02, category: B, title: "Fake-Systemabsturz", idea: "Der Bildschirm ‚stürzt ab‘, Neustart mit neuer Website.", components: [system_crash, browser]}
+  - {id: B03, category: B, title: "iPhone-Benachrichtigung der Konkurrenz", idea: "„Deine Konkurrenz hat gerade eine neue Website veröffentlicht.“", components: [notification, kinetic_type]}
+  - {id: B04, category: B, title: "Terminal-Upgrade", idea: "‚upgrade website --from baukasten --to code‘ mit echtem Fortschritt.", components: [terminal, browser]}
+  - {id: B05, category: B, title: "Tab-Chaos", idea: "Zwanzig offene Tabs, weil der Kunde nichts findet.", components: [tab_chaos]}
+  - {id: B06, category: B, title: "Falscher Countdown", idea: "Countdown zu etwas Großem – und es ist nur die Ladezeit.", components: [countdown, loading]}
+  - {id: B07, category: B, title: "Das Video ‚hängt‘", idea: "Bild friert scheinbar ein, Ladekreis – Pattern Interrupt mit Pointe.", components: [loading, kinetic_type]}
+  - {id: B08, category: B, title: "Captcha-Prüfung", idea: "‚Bestätige, dass du kein Kunde von 2011 bist‘.", components: [error_dialog, cursor_click]}
+  - {id: B09, category: B, title: "Suchergebnis Seite 2", idea: "Google-Suche, der Betrieb erscheint erst auf Seite 2.", components: [search]}
+  - {id: B10, category: B, title: "Cookie-Banner-Wahnsinn", idea: "Ein Banner nach dem anderen versperrt die Seite.", components: [error_dialog, browser]}
+  - {id: C01, category: C, title: "Kinetic Typography Manifest", idea: "Die Haltung von PJE in fünf harten Schnitten Typografie.", components: [kinetic_type]}
+  - {id: C02, category: C, title: "Split-Screen alt/neu", idea: "Baukasten links, eigener Code rechts, der Divider entscheidet.", components: [split_screen]}
+  - {id: C03, category: C, title: "3D-Browserfenster", idea: "Ein Browser dreht sich in den Raum und zeigt die neue Seite.", components: [browser_3d]}
+  - {id: C04, category: C, title: "Glassmorphism-Leistungen", idea: "Vier Leistungen als gläserne Ebenen über Licht in Markenblau.", components: [glass_stack]}
+  - {id: C05, category: C, title: "Cursor-Storytelling", idea: "Ein Mauszeiger erzählt die Reise zum Klick auf ‚Projekt anfragen‘.", components: [cursor_click]}
+  - {id: C06, category: C, title: "Der blaue Punkt", idea: "Der Punkt aus dem Logo wandert durch alle Szenen und landet im CTA.", components: [kinetic_type, end_card]}
+  - {id: C07, category: C, title: "Typo-Countdown", idea: "3-2-1 in Markenschrift, dann die Website.", components: [countdown, browser]}
+  - {id: C08, category: C, title: "Ladebalken als Bühne", idea: "Ein Ladebalken wird zur Erzählung: 10 % alt, 100 % neu.", components: [loading, browser]}
+  - {id: C09, category: C, title: "Minimal Black", idea: "Nur Schwarz, Weiß und ein blauer Punkt. Eine Aussage.", components: [kinetic_type, fact]}
+  - {id: C10, category: C, title: "Interface-Collage", idea: "Schnelle Collage aus Fenstern, Tabs und Mitteilungen.", components: [tab_chaos, notification, browser]}
+  - {id: D01, category: D, title: "Der erste Eindruck", idea: "Kunden entscheiden in Sekunden – zeig, was sie sehen.", components: [browser, kinetic_type]}
+  - {id: D02, category: D, title: "Handy zuerst", idea: "Die Seite auf dem Handy zerbricht; PJE prüft drei Breiten.", components: [browser, fact]}
+  - {id: D03, category: D, title: "Abo-Falle", idea: "Monatliche Kosten stapeln sich; Festpreis statt Abo.", components: [glass_stack, fact]}
+  - {id: D04, category: D, title: "Wem gehört deine Website?", idea: "Domain auf fremdem Namen – PJE: läuft auf deinen Namen.", components: [error_dialog, fact]}
+  - {id: D05, category: D, title: "Warteschleife", idea: "Ticketsystem vs. direkter Draht.", components: [loading, chat]}
+  - {id: D06, category: D, title: "Verlorene Anfrage", idea: "Kontaktformular verschluckt die Anfrage.", components: [error_dialog, notification]}
+  - {id: D07, category: D, title: "Gefunden werden", idea: "Suche nach dem Gewerk + Ort, der Betrieb fehlt.", components: [search, kinetic_type]}
+  - {id: D08, category: D, title: "Vertrauen in 3 Sekunden", idea: "Was Besucher in drei Sekunden prüfen.", components: [countdown, glass_stack]}
+  - {id: D09, category: D, title: "Selbst gebaut am Wochenende", idea: "Baukasten-Wochenende vs. Ergebnis.", components: [split_screen, kinetic_type]}
+  - {id: D10, category: D, title: "Die Frage der Kunden", idea: "Chat: ‚Haben Sie eine Website?‘ – peinliche Pause.", components: [chat, kinetic_type]}
+  - {id: E01, category: E, title: "Festpreis-Ansage", idea: "Klarer Festpreis aus der Konfiguration, kein Kleingedrucktes.", components: [fact, end_card]}
+  - {id: E02, category: E, title: "Drei Pakete", idea: "Starter, Business, Premium – nur mit gültigen Preisen aus der Konfiguration.", components: [glass_stack, fact]}
+  - {id: E03, category: E, title: "So läuft ein Projekt", idea: "Anfrage, Gespräch, Umsetzung, Übergabe – echter Ablauf von PJE.", components: [cursor_click, glass_stack]}
+  - {id: E04, category: E, title: "Echtes Projekt (nur mit Freigabe)", idea: "Kundenseite im 3D-Browser – nur wenn references.allowed: true.", components: [browser_3d]}
+  - {id: E05, category: E, title: "Aus Wolnzach", idea: "Lokaler Bezug: Wolnzach, München, 50 km Umgebung.", components: [kinetic_type, fact]}
+  - {id: E06, category: E, title: "Antwort am nächsten Werktag", idea: "Antwortzeit als Versprechen der Website.", components: [notification, fact]}
+  - {id: E07, category: E, title: "Übergabe mit Zugängen", idea: "Domain, Hosting, Dokumentation – alles gehört dem Kunden.", components: [glass_stack, terminal]}
+  - {id: E08, category: E, title: "IT-Service vor Ort", idea: "Neben Websites: IT-Hilfe vor Ort, ohne Preisangaben außer aus der Konfiguration.", components: [kinetic_type, glass_stack]}
+  - {id: E09, category: E, title: "Relaunch", idea: "Alte Adressen werden weitergeleitet – nichts geht verloren.", components: [browser, terminal]}
+  - {id: E10, category: E, title: "Automatisierung", idea: "Jede Woche dieselbe Excel-Arbeit – wird zum Skript.", components: [terminal, kinetic_type]}
+  - {id: F01, category: F, title: "Video im Video", idea: "Ein Reel über ein Reel, das zu langsam lädt.", components: [loading, notification]}
+  - {id: F02, category: F, title: "Rückwärts erzählt", idea: "Vom CTA zurück zum Problem, dann wieder vorwärts.", components: [end_card, kinetic_type]}
+  - {id: F03, category: F, title: "Nur Mauszeiger", idea: "Die ganze Geschichte aus Sicht des Cursors.", components: [cursor_click]}
+  - {id: F04, category: F, title: "Eine Zeile Code", idea: "Terminal schreibt die Website in einer Zeile (Pointe).", components: [terminal, browser_3d]}
+  - {id: F05, category: F, title: "Interface spricht", idea: "Die alte Website schreibt dem Inhaber eine Nachricht.", components: [chat, notification]}
+  - {id: F06, category: F, title: "Fehlerkaskade", idea: "Eine Warnung nach der anderen, bis alles abstürzt.", components: [error_dialog, system_crash]}
+  - {id: F07, category: F, title: "Quiz", idea: "Welche Seite ist von 2011? Auflösung per Split-Screen.", components: [split_screen, countdown]}
+  - {id: F08, category: F, title: "Wetter + Chat-Crossover", idea: "Unwetterwarnung wird im Chat weitergeleitet.", components: [weather, chat]}
+  - {id: F09, category: F, title: "Suche nach Sinn", idea: "Suchanfrage ‚Website ohne Abo‘ – die Antwort ist ein Festpreis (keine Ranking-Behauptung).", components: [search, fact]}
+  - {id: F10, category: F, title: "Countdown zum Livegang", idea: "Countdown, Terminal, Browser – live.", components: [countdown, terminal, browser]}

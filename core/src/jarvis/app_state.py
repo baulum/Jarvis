@@ -69,6 +69,10 @@ from jarvis.platform import create_adapter, set_adapter
 from jarvis.secrets import secret_store
 from jarvis.security.audit import audit
 from jarvis.security.guards import KillSwitch
+from jarvis.social.platforms import PLATFORM_CONNECTORS
+from jarvis.social.service import SocialMediaService
+from jarvis.social.service import playbook as social_playbook
+from jarvis.social.tools import SocialMediaConnector
 from jarvis.telephony.service import TelephonyService
 from jarvis.tools.approval_mode import ApprovalPolicy
 from jarvis.tools.executor import ToolExecutor
@@ -178,6 +182,8 @@ class AppState:
         self.device_pairing = PairingService(settings.devices.pairing_ttl_s)
         # WhatsApp: one central connection on this server (Node sidecar, supervised), shared by every client
         self.whatsapp = WhatsAppService(self)
+        # Daily PJE Systems social video (jarvis.social): schedule → playbook → Remotion/FFmpeg → library → e-mail
+        self.social = SocialMediaService(self)
 
         for conn_cls in (
             SystemConnector,
@@ -200,11 +206,15 @@ class AppState:
             RoutingConnector,
             AttachmentsConnector,
             WhatsAppConnector,
+            SocialMediaConnector,
         ):
             self.connectors.add(conn_cls(self))
+        for platform_cls in PLATFORM_CONNECTORS:  # Instagram, Facebook, TikTok, YouTube – off until Sir connects
+            self.connectors.add(platform_cls(self))
         self._register_phone_tool()
         self._register_mobile_tools()
         register_playbooks(self)
+        self.tasks.register(social_playbook(self.social))
 
     def _register_phone_tool(self) -> None:
         from jarvis.tools.registry import ToolContext, ToolSpec
@@ -269,6 +279,7 @@ class AppState:
         interrupted_jobs = await self.coding.resume_interrupted()
         await self.tasks.start()
         await self.scheduler.start()
+        await self.social.start()
         await self.backup.start()
         self.notifier.start()
         if self.settings.mobile.enabled:
@@ -351,6 +362,7 @@ class AppState:
         await self.coding.shutdown()
         await self.tasks.stop()
         await self.scheduler.stop()
+        await self.social.stop()
         await self.backup.stop()
         await self.memory.stop()
         await self.alerts.stop()

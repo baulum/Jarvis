@@ -1,0 +1,83 @@
+# PJE Systems – Markenbasis für die täglichen Social-Media-Videos (jarvis.social).
+# Quelle: https://pje-systems.de (Startseite, CSS-Tokens, Logo, icon.svg), gelesen am 2026-10-28.
+# Nur was hier steht, darf ein Video behaupten. Neue Fakten/Angebote/Referenzen nur mit Quelle eintragen.
+company: PJE Systems
+owner: Paul Höflich
+location: Wolnzach
+region: München, Wolnzach und rund 50 km Umgebung
+website: pje-systems.de
+cta:
+  default_button: Projekt anfragen        # Button-Text der Website
+  url: pje-systems.de
+claims:                                   # Formulierungen, die so auf der Website stehen
+  - "Websites, gebaut. Nicht geklickt."
+  - "Eigenes Layout, echter Code statt Baukasten."
+  - "Festpreis statt Abo."
+  - "Ihre Website gehört Ihnen."
+  - "Erst das Handy, dann der Desktop."
+  - "Direkter Draht. Kein Ticketsystem, keine Warteschleife."
+  - "Let's build something."
+services:
+  - Websites (Onepager, Unternehmenswebsite, Relaunch)
+  - Webentwicklung (Webapps, Kundenportale, Dashboards, Schnittstellen)
+  - Automatisierung (Python-Skripte, Excel-Automatisierung)
+  - IT-Service vor Ort (München, Wolnzach, ~50 km)
+# Fakten für die Szene "fact" (nur diese Werte dürfen als große Zahl/Wert erscheinen).
+facts:
+  - id: price_from
+    value: "499 €"
+    label: "Festpreis für einen Onepager. Einmalig, kein Abo."
+    kind: price
+    source: pje-systems.de, Abschnitt Leistungen (2026-10-28)
+  - id: price_tiers
+    value: "499 · 799 · 1.499 €"
+    label: "Festpreise für Websites. Einmalig statt monatlich."
+    kind: price
+    source: pje-systems.de, „Festpreis statt Abo“ (2026-10-28)
+  - id: reply_time
+    value: "1 Werktag"
+    label: "Antwort am selben oder nächsten Werktag."
+    kind: claim
+    source: pje-systems.de, Kontakt (2026-10-28)
+  - id: mobile_first
+    value: "3 Breiten"
+    label: "Jede Seite wird auf Handy, Tablet und Desktop geprüft, bevor sie online geht."
+    kind: claim
+    source: pje-systems.de, „Erst das Handy, dann der Desktop“ (2026-10-28)
+  - id: own_domain
+    value: "100 % Ihre"
+    label: "Domain und Hosting laufen auf Ihren Namen."
+    kind: claim
+    source: pje-systems.de, „Ihre Website gehört Ihnen“ (2026-10-28)
+# Angebote: nur Einträge mit active: true dürfen in Videos/Captions genannt werden (Kategorie E).
+# Aktionen wie „299 €“ hier mit Zeitraum eintragen – sonst nennt Jarvis sie nicht.
+offers:
+  - id: website_fixed_price
+    text: "Websites zum Festpreis ab 499 €, einmalig, kein Abo"
+    active: true
+    valid_until: null
+    source: pje-systems.de (2026-10-28)
+# Echte Kundenprojekte stehen öffentlich auf pje-systems.de, eine Freigabe für Werbevideos ist aber nicht
+# dokumentiert. allowed: true erst nach Zustimmung des Kunden setzen.
+references:
+  - {name: CEN-GIZ, url: cen-giz.de, allowed: false}
+  - {name: Most Unlikely, url: most-unlikely.com, allowed: false}
+  - {name: Westside Taxi, url: westside-taxi.de, allowed: false}
+  - {name: Burgis Physiotherapie, url: burgis-physio.vercel.app, allowed: false}
+  - {name: Express Räumung, url: express-raemung.com, allowed: false}
+  - {name: Amperwerk FM, url: amperwerk-fm.de, allowed: false}
+  - {name: Amel, url: amel.de, allowed: false}
+  - {name: 089 Dienstleistungen, url: 089-dienstleistungen.vercel.app, allowed: false}
+  - {name: Burgerheart Ingolstadt, url: burgerheart.vercel.app, allowed: false}
+colors:                                   # CSS-Tokens der Website
+  ink: "#0b0c0e"
+  graphite: "#1c1e22"
+  canvas: "#e3e5e8"
+  accent: "#2651f0"
+  accent_deep: "#1a3fd0"
+  accent_on_dark: "#8fa6ff"
+fonts: [Geist, Geist Mono]
+voice:                                    # Tonalität der Website
+  - Sie-Form auf der Website; in Social-Videos ist Du erlaubt, Captions duzen.
+  - Kurze, konkrete Sätze. Punkt am Ende von Headlines (Markenmotiv).
+  - Keine Superlative ohne Beleg, keine erfundenen Zahlen, Kunden, Bewertungen oder Ergebnisse.

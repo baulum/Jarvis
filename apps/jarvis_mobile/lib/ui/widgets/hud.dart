@@ -199,7 +199,7 @@ class Rail<T> extends StatelessWidget {
 }
 
 // ------------------------------------------------------------------ custom glyphs
-enum GlyphKind { memory, activity, settings, back, chat }
+enum GlyphKind { memory, activity, settings, back, chat, social }
 
 class Glyph extends StatelessWidget {
   const Glyph(this.kind, {super.key, this.size = 22, this.color = J.text, this.badge = false});
@@ -250,6 +250,14 @@ class _GlyphPainter extends CustomPainter {
               Offset(w / 2 + math.cos(a) * w * .46, w / 2 + math.sin(a) * w * .46), p);
         }
         c.drawCircle(Offset(w / 2, w / 2), w * .08, Paint()..color = color);
+      case GlyphKind.social: // a 9:16 frame with a play mark
+        c.drawRRect(RRect.fromLTRBR(w * .28, w * .12, w * .72, w * .88, Radius.circular(w * .08)), p);
+        final play = Path()
+          ..moveTo(w * .44, w * .38)
+          ..lineTo(w * .6, w * .5)
+          ..lineTo(w * .44, w * .62)
+          ..close();
+        c.drawPath(play, Paint()..color = color);
       case GlyphKind.back:
         final path = Path()
           ..moveTo(w * .62, w * .2)

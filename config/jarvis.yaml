@@ -259,3 +259,22 @@ browser:
 scheduler:
   enabled: true
   tick_seconds: 20
+
+social_media:
+  # Tägliches PJE-Systems-Werbevideo (core/src/jarvis/social, Remotion-Projekt social/, docs/SOCIAL_MEDIA.md).
+  # Schalter, Uhrzeit, E-Mail und Autopost stellt Sir in der App ein (Social Media › Automatisierung);
+  # die Uhrzeit ist der Zeitplan „PJE Systems Daily Social Video“ im normalen Zeitplaner.
+  enabled: true
+  node_binary: node
+  ffmpeg_binary: ffmpeg
+  ffprobe_binary: ffprobe
+  owner_email: paulhoflich@gmail.com   # E-Mails an diese Adresse laufen ohne Einzelfreigabe (Sirs Freigabe 2026-10-28)
+  default_time: "08:00"
+  timezone: Europe/Berlin
+  concept_model: sonnet                # Konzept, Storyboard, Captions
+  qa_model: sonnet                     # Frame-Analyse, Rechtschreibung
+  max_render_attempts: 3
+  max_video_mb: 19
+  email_attachment_max_mb: 18
+  link_ttl_hours: 72
+  public_base_url: ""                  # für Download-Links in der Mail; leer = server.public_base_url

@@ -74,6 +74,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     onTap: () => context.push('/memory'),
                     child: const Glyph(GlyphKind.memory, size: 20),
                   ),
+                  const SizedBox(width: J.s2),
+                  RingButton(
+                    size: 44,
+                    semantics: 'Social Media',
+                    onTap: () => context.push('/social'),
+                    child: const Glyph(GlyphKind.social, size: 20),
+                  ),
                   Expanded(
                     child: Column(children: [
                       Text('J.A.R.V.I.S.', style: J.wordmark),
@@ -82,6 +89,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       const ModelChip(),
                     ]),
                   ),
+                  RingButton(
+                    size: 44,
+                    semantics: 'Einstellungen',
+                    onTap: () => context.push('/settings'),
+                    child: const Glyph(GlyphKind.settings, size: 20),
+                  ),
+                  const SizedBox(width: J.s2),
                   RingButton(
                     size: 44,
                     semantics: live.pendingApprovals > 0 ? 'Aktivität – ${live.pendingApprovals} Freigaben warten' : 'Aktivität',

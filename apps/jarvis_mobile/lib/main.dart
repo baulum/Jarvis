@@ -16,6 +16,7 @@ import 'ui/screens/job_screen.dart';
 import 'ui/screens/memory_screen.dart';
 import 'ui/screens/pair_screen.dart';
 import 'ui/screens/settings_screen.dart';
+import 'ui/screens/social_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,6 +49,8 @@ String routeForLink(String link) {
       return '/activity';
     case 'memory':
       return '/memory';
+    case 'social': // new daily video, failed production
+      return '/social';
     case 'settings': // e.g. the app-update notification
       return '/settings';
     case 'pair': // jarvis://pair?p=<base64url pairing payload> – confirmed on screen before anything happens
@@ -103,6 +106,7 @@ class _JarvisMobileState extends ConsumerState<JarvisMobile> with WidgetsBinding
         ),
         GoRoute(path: '/memory', pageBuilder: (_, _) => _slide(const MemoryScreen(), const Offset(-1, 0))),
         GoRoute(path: '/settings', pageBuilder: (_, _) => _slide(const SettingsScreen(), const Offset(1, 0))),
+        GoRoute(path: '/social', pageBuilder: (_, _) => _slide(const SocialScreen(), const Offset(1, 0))),
         GoRoute(path: '/call', pageBuilder: (_, _) => _fadeUp(const CallScreen())),
       ],
     );

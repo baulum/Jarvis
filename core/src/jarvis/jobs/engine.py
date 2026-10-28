@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 import jsonschema
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from jarvis.db import session_scope
@@ -160,6 +161,38 @@ class TaskEngine:
             raise ValueError(f"Unbekanntes Playbook: {playbook}")
         params = _with_defaults(params, pb.params_schema)
         jsonschema.validate(params, pb.params_schema)
+        try:
+            task_id = await self._insert(pb, playbook, params, principal, session_id, idempotency_key)
+        except IntegrityError:
+            # a parallel process created the task with the same idempotency key a moment earlier
+            async with session_scope() as s:
+                existing = (
+                    await s.execute(select(Task).where(Task.idempotency_key == idempotency_key))
+                ).scalar_one_or_none()
+            if existing is None:
+                raise
+            return existing
+        if isinstance(task_id, Task):
+            return task_id
+        task = await self.get_task(task_id)
+        assert task is not None
+        await audit(
+            principal.label, "task.create", target=str(task_id), details={"playbook": playbook, "params": params}
+        )
+        await bus.publish("task.created", task_id=str(task_id), title=task.title, playbook=playbook)
+        self._wake.set()
+        return task
+
+    async def _insert(
+        self,
+        pb: Playbook,
+        playbook: str,
+        params: dict[str, Any],
+        principal: Principal,
+        session_id: uuid.UUID | None,
+        idempotency_key: str | None,
+    ) -> uuid.UUID | Task:
+        """New task with its steps, or the existing task with this idempotency key."""
         async with session_scope() as s:
             if idempotency_key:
                 existing = (
@@ -184,13 +217,7 @@ class TaskEngine:
             await s.flush()
             for i, sd in enumerate(pb.steps):
                 s.add(TaskStep(task_id=task.id, idx=i, name=sd.name, status="pending"))
-            task_id = task.id
-        await audit(
-            principal.label, "task.create", target=str(task_id), details={"playbook": playbook, "params": params}
-        )
-        await bus.publish("task.created", task_id=str(task_id), title=title, playbook=playbook)
-        self._wake.set()
-        return await self.get_task(task_id)  # type: ignore[return-value]
+            return task.id
 
     async def get_task(self, task_id: uuid.UUID) -> Task | None:
         async with session_scope() as s:
