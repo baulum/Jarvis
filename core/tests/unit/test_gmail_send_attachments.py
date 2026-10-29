@@ -76,3 +76,79 @@ async def test_mime_structure_and_backward_compat() -> None:
     assert att[0].get_filename() == "Angebot.pdf"
     assert att[0].get_content() == b"%PDF-1"
     assert msg.get_body(("plain",)).get_content().strip() == "Text"  # type: ignore[union-attr]
+
+
+def _connector_with_transport(monkeypatch: pytest.MonkeyPatch, handler: Any, timeouts: list[Any]) -> GoogleConnector:
+    import httpx
+
+    from jarvis.connectors import google as gmod
+
+    real = httpx.AsyncClient
+
+    def factory(*, timeout: Any = None, **kw: Any) -> httpx.AsyncClient:
+        timeouts.append(timeout)
+        return real(transport=httpx.MockTransport(handler), timeout=timeout)
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    async def token() -> str:
+        return "t"
+
+    monkeypatch.setattr(gmod.httpx, "AsyncClient", factory)
+    monkeypatch.setattr(gmod.asyncio, "sleep", no_sleep)
+    g = GoogleConnector.__new__(GoogleConnector)
+    g._token = token  # type: ignore[method-assign]
+    return g
+
+
+@pytest.mark.asyncio
+async def test_send_uses_long_write_timeout_and_retries_write_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise httpx.WriteTimeout("write timeout", request=request)
+        return httpx.Response(200, json={"id": "m1"})
+
+    timeouts: list[Any] = []
+    g = _connector_with_transport(monkeypatch, handler, timeouts)
+    res = await g.send_mail("a@b.de", "Hallo", "Text")
+    assert res == {"id": "m1"}
+    assert calls["n"] == 3
+    assert all(t.write >= 120 for t in timeouts)
+
+
+@pytest.mark.asyncio
+async def test_send_reports_persistent_write_timeout_as_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        raise httpx.WriteTimeout("write timeout", request=request)
+
+    g = _connector_with_transport(monkeypatch, handler, [])
+    with pytest.raises(ToolUserError, match="nicht vollständig"):
+        await g.send_mail("a@b.de", "Hallo", "geheim")
+    assert calls["n"] == 3  # 1 Versuch + 2 Wiederholungen
+
+
+@pytest.mark.asyncio
+async def test_read_timeout_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        raise httpx.ReadTimeout("read", request=request)
+
+    g = _connector_with_transport(monkeypatch, handler, [])
+    with pytest.raises(httpx.ReadTimeout):
+        await g.send_mail("a@b.de", "Hallo", "Text")
+    assert calls["n"] == 1  # Server könnte die Mail schon verarbeitet haben – kein Doppelversand

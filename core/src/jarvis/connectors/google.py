@@ -8,6 +8,7 @@ in the Keychain. The redirect goes to the local core (loopback flow).
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -54,6 +55,9 @@ ATTACHMENT_ROOTS = (
 )
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_ATTACHMENTS = 10
+# Der Versand lädt den ganzen Body (bis ~27 MB base64) hoch; das pauschale 30-s-Limit lief dabei in einen Write-Timeout.
+SEND_TIMEOUT = httpx.Timeout(30, write=180)
+SEND_RETRIES = 2
 _BLOCKED_PARTS = {".git", ".ssh", ".env", ".aws", ".gnupg"}
 
 
@@ -220,10 +224,30 @@ class GoogleConnector(Connector):
         self._access = (tok["access_token"], time.time() + int(tok.get("expires_in", 3600)) - 60)
         return self._access[0]
 
-    async def _api(self, method: str, url: str, **kw: Any) -> Any:
+    async def _api(
+        self,
+        method: str,
+        url: str,
+        *,
+        timeout: httpx.Timeout | float = 30,
+        retries: int = 0,
+        **kw: Any,
+    ) -> Any:
+        """``retries`` only repeats connect/write timeouts: the request never fully reached Google, so a retry cannot double-send."""
         token = await self._token()
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.request(method, url, headers={"Authorization": f"Bearer {token}"}, **kw)
+        attempt = 0
+        while True:
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as c:
+                    r = await c.request(method, url, headers={"Authorization": f"Bearer {token}"}, **kw)
+                break
+            except (httpx.WriteTimeout, httpx.ConnectTimeout) as e:
+                if attempt >= retries:
+                    raise ToolUserError(
+                        f"Google-API nicht erreichbar ({type(e).__name__}) – Anfrage wurde nicht vollständig übertragen."
+                    ) from None
+                attempt += 1
+                await asyncio.sleep(2**attempt)
         if r.status_code >= 400:
             raise ToolUserError(f"Google-API-Fehler {r.status_code}: {r.text[:300]}")
         return r.json() if r.headers.get("content-type", "").startswith("application/json") else r.content
@@ -290,10 +314,18 @@ class GoogleConnector(Connector):
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         if draft:
             return await self._api(
-                "POST", "https://gmail.googleapis.com/gmail/v1/users/me/drafts", json={"message": {"raw": raw}}
+                "POST",
+                "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+                json={"message": {"raw": raw}},
+                timeout=SEND_TIMEOUT,
+                retries=SEND_RETRIES,
             )
         return await self._api(
-            "POST", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", json={"raw": raw}
+            "POST",
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            json={"raw": raw},
+            timeout=SEND_TIMEOUT,
+            retries=SEND_RETRIES,
         )
 
     # ------------------------------------------------------------------ tools
