@@ -90,6 +90,32 @@ export interface UptikInboxItem {
   created_at: string;
 }
 
+/** A file in the Core's UpTik uploads folder (GET /uptik/uploads). */
+export interface UptikUpload {
+  name: string;
+  size: number;
+  modified_at: string;
+}
+
+/** Where the publish form takes the video from: the inbox („inbox:<id>“) or the uploads folder („upload:<name>“). */
+export type VideoSource = "inbox" | "upload";
+
+export function videoRef(source: VideoSource, value: string): string {
+  const v = value.trim();
+  return v ? `${source}:${v}` : "";
+}
+
+/** "upload:a.mp4" → { source: "upload", value: "a.mp4" }; anything else (a path, "") has no picker value. */
+export function parseVideoRef(ref: string): { source: VideoSource; value: string } | null {
+  const [, source, value] = /^(inbox|upload):(.+)$/.exec(ref) ?? [];
+  return source && value ? { source: source as VideoSource, value } : null;
+}
+
+/** "3f9a01bc-Mein Clip.mp4" → "Mein Clip" (the Core prefixes uploads with 8 hex characters). */
+export function uploadTitle(name: string): string {
+  return name.replace(/^[0-9a-f]{8}-/, "").replace(/\.[^.]+$/, "");
+}
+
 export interface UptikPostBody {
   video: string;
   caption: string;

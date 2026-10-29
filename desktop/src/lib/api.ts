@@ -57,7 +57,7 @@ import type {
   WaSuggestion,
 } from "./whatsapp";
 import type { Platform, PlatformStatus, Publication, SocialSettings, SocialStatus, SocialVideo, SocialVideoDetail } from "./social";
-import type { UptikAccount, UptikInboxItem, UptikPlatform, UptikPost, UptikPostBody, UptikSettings, UptikStatus } from "./uptik";
+import type { UptikAccount, UptikInboxItem, UptikPlatform, UptikPost, UptikPostBody, UptikSettings, UptikStatus, UptikUpload } from "./uptik";
 import type { DesktopBuild } from "./build";
 import type { SlashCommand } from "./slash";
 import type { TimelineEvent } from "./timeline";
@@ -403,6 +403,7 @@ export function createApi(opts: ApiOptions) {
         post<{ account: UptikAccount; requeued: number }>(`/uptik/accounts/${id(aid)}/resume`, { confirm: true, requeue }),
       inbox: () => get<UptikInboxItem[]>("/uptik/inbox"),
       removeInbox: (iid: string) => del<{ ok: boolean }>(`/uptik/inbox/${id(iid)}`),
+      uploads: () => get<UptikUpload[]>("/uptik/uploads"),
       upload: async (file: Blob, name: string) =>
         (await (await raw("POST", "/uptik/uploads", file, { name }, 600_000)).json()) as UptikInboxItem,
       validate: (body: UptikPostBody) =>

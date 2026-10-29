@@ -393,6 +393,20 @@ class UptikService:
         roots += [Path(str(d)).expanduser() for d in self.settings.get("video_dirs") or []]
         return [r.resolve() for r in roots]
 
+    def uploads(self) -> list[dict[str, Any]]:
+        """Video files in the uploads folder, newest first – the choices for the video source „upload:<name>“."""
+        if not self.uploads_dir.is_dir():
+            return []
+        out = []
+        for p in self.uploads_dir.iterdir():
+            if p.suffix.lower() not in VIDEO_EXT or p.is_symlink() or not p.is_file():
+                continue
+            st = p.stat()
+            out.append(
+                {"name": p.name, "size": st.st_size, "modified_at": iso(datetime.fromtimestamp(st.st_mtime, UTC))}
+            )
+        return sorted(out, key=lambda x: (x["modified_at"], x["name"]), reverse=True)
+
     async def resolve_video(self, ref: str) -> VideoInfo:
         ref = (ref or "").strip()
         if ref.startswith("inbox:"):
@@ -401,7 +415,9 @@ class UptikService:
                 raise ToolUserError("Video aus dem Eingang nicht gefunden")
             path = Path(item["path"])
         elif ref.startswith("upload:"):
-            name = Path(ref.removeprefix("upload:")).name
+            name = Path(ref.removeprefix("upload:").strip().replace("\\", "/")).name
+            if name in ("", ".", ".."):
+                raise ToolUserError("Upload-Name fehlt – „upload:<Dateiname>“ aus dem Upload-Ordner angeben")
             path = self.uploads_dir / name
         else:
             path = Path(ref).expanduser()

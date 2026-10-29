@@ -169,11 +169,13 @@ Pfade und Schlüsselbund sind gekapselt: Datenordner über `config/platform/<os>
 
 * **Connectoren › UpTik Autopost**: aktivieren/deaktivieren, Einstellungen, „Konten und Warteschlange“.
 * **Desktop › UpTik Autopost**: Konten (anlegen, anmelden, prüfen, abmelden, Autopost, angehaltene Konten
-  freigeben), Veröffentlichen (Video aus dem Eingang oder hochladen, Text, Hashtags, Titel, Konten, Einstellungen,
-  Zeitpunkt, „Prüfen“), Warteschlange (abbrechen), Historie (Link öffnen, unklare Beiträge abschließen),
-  Einstellungen.
+  freigeben), Veröffentlichen (Quelle **Eingang** → `inbox:<id>` oder **Upload** → `upload:<name>` aus
+  `<data_dir>/uptik/uploads`, Liste über `GET /api/uptik/uploads`; „Hochladen“ legt eine Datei dort ab, Text,
+  Hashtags, Titel, Konten, Einstellungen, Zeitpunkt, „Prüfen“), Warteschlange (abbrechen), Historie (Link öffnen,
+  unklare Beiträge abschließen), Einstellungen.
 * **Handy › Social Media › Connector › „UpTik Autopost (Browser) öffnen“** (oder Deep Link `jarvis://uptik`): dieselben
-  Funktionen über dieselben Endpunkte; Videos kommen aus dem Eingang (Hochladen vom Handy ist nicht eingebaut).
+  Funktionen über dieselben Endpunkte; Videos aus dem Eingang oder dem Upload-Ordner (Hochladen vom Handy ist nicht
+  eingebaut).
 * **Agent**: `uptik_status`, `uptik_list_accounts`, `uptik_connect_account`, `uptik_publish_now`,
   `uptik_schedule_post`, `uptik_validate_post`, `uptik_list_queue`, `uptik_cancel_post`, `uptik_history`.
 

@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { accountState, buildPostBody, overLimit, parseHashtags, postStatusLabel, postText, postTone, publishAtValue, type UptikAccount } from "./uptik";
+import {
+  accountState,
+  buildPostBody,
+  overLimit,
+  parseHashtags,
+  parseVideoRef,
+  postStatusLabel,
+  postText,
+  postTone,
+  publishAtValue,
+  uploadTitle,
+  videoRef,
+  type UptikAccount,
+} from "./uptik";
 
 const account = (over: Partial<UptikAccount> = {}): UptikAccount => ({
   id: "a1", platform: "tiktok", platform_label: "TikTok", label: "PJE", handle: "", runner: "local", device: "",
@@ -35,5 +48,22 @@ describe("uptik helpers", () => {
     expect(postStatusLabel("needs_review")).toBe("prüfen");
     expect(postTone("blocked")).toBe("bad");
     expect(postTone("published")).toBe("ok");
+  });
+
+  it("builds and reads the video reference for the sources Eingang and Upload", () => {
+    expect(videoRef("upload", "3f9a01bc-Clip.mp4")).toBe("upload:3f9a01bc-Clip.mp4");
+    expect(videoRef("inbox", "abc")).toBe("inbox:abc");
+    expect(videoRef("upload", "  ")).toBe("");
+    expect(parseVideoRef("upload:3f9a01bc-Clip.mp4")).toEqual({ source: "upload", value: "3f9a01bc-Clip.mp4" });
+    expect(parseVideoRef("inbox:abc")).toEqual({ source: "inbox", value: "abc" });
+    expect(parseVideoRef("/Users/x/clip.mp4")).toBeNull();
+    expect(parseVideoRef("upload:")).toBeNull();
+    expect(buildPostBody({ video: "upload:a.mp4", caption: "", hashtags: "", title: "", accounts: ["a1"], when: "" }).video).toBe("upload:a.mp4");
+  });
+
+  it("shows uploads without the Core's random prefix and the extension", () => {
+    expect(uploadTitle("3f9a01bc-Mein Clip.mp4")).toBe("Mein Clip");
+    expect(uploadTitle("clip.final.mov")).toBe("clip.final");
+    expect(uploadTitle("ohne-prefix-video.webm")).toBe("ohne-prefix-video");
   });
 });

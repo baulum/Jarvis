@@ -72,6 +72,16 @@ String? uptikPublishAt(DateTime? local) {
   return '${local.year}-${two(local.month)}-${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
 }
 
+/// Video source of the publish form: 'inbox' (Eingang) → `inbox:<id>`, 'upload' (Upload-Ordner) → `upload:<name>`.
+String? uptikVideoRef(String source, String? value) {
+  final v = value?.trim() ?? '';
+  return v.isEmpty ? null : '$source:$v';
+}
+
+/// "3f9a01bc-Mein Clip.mp4" → "Mein Clip" (the Core prefixes uploads with 8 hex characters).
+String uptikUploadTitle(String name) =>
+    name.replaceFirst(RegExp(r'^[0-9a-f]{8}-'), '').replaceFirst(RegExp(r'\.[^.]+$'), '');
+
 Map<String, dynamic> _map(Object? o) => (o as Map).cast<String, dynamic>();
 List<Map<String, dynamic>> _list(Object? o) => ((o as List?) ?? const []).map(_map).toList();
 
@@ -81,6 +91,10 @@ final uptikStatusProvider = FutureProvider.autoDispose<Map<String, dynamic>>((re
 
 final uptikInboxProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
   return _list(await ref.read(apiProvider).get('/api/uptik/inbox'));
+});
+
+final uptikUploadsProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
+  return _list(await ref.read(apiProvider).get('/api/uptik/uploads'));
 });
 
 final uptikQueueProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {

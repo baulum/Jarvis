@@ -83,6 +83,36 @@ async def test_connector_switch_accounts_and_publish_flow(api: SimpleNamespace) 
     assert [e["kind"] for e in detail["events"]] == ["queued", "cancelled"]
 
 
+async def test_upload_video_source(api: SimpleNamespace) -> None:
+    """Video source „Upload“: the app lists the uploads folder and posts „upload:<name>“."""
+    c = api.client
+    assert (await c.get("/api/uptik/uploads")).json() == []
+    acct = await connected(api, "tiktok", "PJE")
+    item = (await c.post("/api/uptik/uploads", params={"name": "Reel.mp4"}, content=b"\x00" * 2048)).json()
+    (api.svc.uploads_dir / "notes.txt").write_text("kein Video")
+    [up] = (await c.get("/api/uptik/uploads")).json()
+    assert up["name"] == item["name"] and up["size"] == 2048 and up["modified_at"]
+
+    body = {"video": f"upload:{up['name']}", "caption": "Hallo", "accounts": [acct["id"]]}
+    r = await c.post("/api/uptik/validate", json=body)
+    assert r.json()["ok"] is True and r.json()["video_name"] == up["name"], r.json()
+    r = await c.post("/api/uptik/publish", json=body)
+    assert r.status_code == 200 and r.json()["status"] == "approval_required" and up["name"] in r.json()["summary"]
+    assert api.web.published() == []  # nothing reached a (fake) platform before the approval
+
+    for ref, problem in [
+        ("upload:", "Upload-Name fehlt"), ("upload: .. ", "Upload-Name fehlt"),
+        ("upload:fehlt.mp4", "nicht gefunden"), ("upload:notes.txt", "Kein Videoformat"),
+    ]:  # fmt: skip
+        r = await c.post("/api/uptik/validate", json={**body, "video": ref})
+        assert r.json()["ok"] is False and problem in r.json()["problems"], (ref, r.json())
+    # a path in the name never leaves the uploads folder: only the last part counts
+    r = await c.post("/api/uptik/validate", json={**body, "video": f"upload:../../{up['name']}"})
+    assert r.json()["ok"] is True
+    r = await c.post("/api/uptik/validate", json={**body, "video": f"upload:..\\{up['name']}"})
+    assert r.json()["ok"] is True
+
+
 async def test_resume_needs_confirmation(api: SimpleNamespace) -> None:
     acct = await connected(api, "tiktok", "PJE")
     api.web.plans[acct["id"]] = ["captcha"]
@@ -103,7 +133,7 @@ def test_phone_reaches_the_same_endpoints() -> None:
     aid = "0f8fad5b-d9cb-469f-a165-70867728950e"
     for method, path in [
         ("GET", "/api/uptik/status"), ("PUT", "/api/uptik/connector"), ("POST", "/api/uptik/publish"),
-        ("POST", "/api/uptik/uploads"), ("GET", "/api/uptik/queue"), ("GET", "/api/uptik/history"),
+        ("POST", "/api/uptik/uploads"), ("GET", "/api/uptik/uploads"), ("GET", "/api/uptik/queue"), ("GET", "/api/uptik/history"),
         ("PATCH", f"/api/uptik/accounts/{aid}"), ("POST", f"/api/uptik/accounts/{aid}/resume"),
         ("POST", f"/api/uptik/posts/{aid}/cancel"),
     ]:  # fmt: skip

@@ -21,6 +21,15 @@ void main() {
     expect(uptikPostTone('blocked'), 'bad');
   });
 
+  test('video source Eingang or Upload → the Core reference', () {
+    expect(uptikVideoRef('upload', '3f9a01bc-Clip.mp4'), 'upload:3f9a01bc-Clip.mp4');
+    expect(uptikVideoRef('inbox', 'abc'), 'inbox:abc');
+    expect(uptikVideoRef('upload', null), isNull);
+    expect(uptikVideoRef('upload', ' '), isNull);
+    expect(uptikUploadTitle('3f9a01bc-Mein Clip.mp4'), 'Mein Clip');
+    expect(uptikUploadTitle('clip.final.mov'), 'clip.final');
+  });
+
   test('notification deep link opens UpTik', () {
     expect(routeForLink('jarvis://uptik'), '/uptik');
   });

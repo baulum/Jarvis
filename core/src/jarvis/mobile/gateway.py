@@ -72,7 +72,7 @@ MOBILE_ROUTES: list[tuple[frozenset[str], re.Pattern[str]]] = [
     (frozenset({"POST"}), re.compile(r"^/api/social/videos/[0-9a-f-]{36}/publications/[a-z]{3,12}/manual$")),
     (frozenset({"GET"}), re.compile(r"^/api/social/download/[A-Za-z0-9_.-]{20,400}$")),
     # UpTik connector: same functions as the desktop (publishing/connecting end in approvals on the Core)
-    (frozenset({"GET"}), re.compile(r"^/api/uptik/(status|accounts|inbox|queue|history)$")),
+    (frozenset({"GET"}), re.compile(r"^/api/uptik/(status|accounts|inbox|uploads|queue|history)$")),
     (frozenset({"PUT"}), re.compile(r"^/api/uptik/connector$")),
     (frozenset({"POST"}), re.compile(r"^/api/uptik/(accounts|uploads|validate|publish)$")),
     (frozenset({"PATCH", "DELETE"}), re.compile(r"^/api/uptik/accounts/[0-9a-f-]{36}$")),

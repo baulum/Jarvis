@@ -12,16 +12,20 @@ import {
   accountState,
   buildPostBody,
   overLimit,
+  parseVideoRef,
   PLATFORM_LABEL,
   postStatusLabel,
   postText,
   postTone,
+  uploadTitle,
+  videoRef,
   type UptikAccount,
   type UptikPlatform,
   type UptikPost,
   type UptikPostBody,
   type UptikSettings,
   type UptikStatus,
+  type VideoSource,
 } from "../lib/uptik";
 import { api, useApp } from "../store/app";
 
@@ -248,6 +252,8 @@ function AddAccountDialog({ st, onClose, onSaved }: { st: UptikStatus; onClose: 
 // ------------------------------------------------------------------ publish form
 function Publish({ st, onDone }: { st: UptikStatus; onDone: () => void }) {
   const inbox = useQuery(() => api.uptik.inbox(), "uptik-inbox", { topics: ["uptik"] });
+  const [source, setSource] = useState<VideoSource>("inbox");
+  const uploads = useQuery(() => api.uptik.uploads(), "uptik-uploads", { topics: ["uptik"], enabled: source === "upload" });
   const usable = st.accounts.filter((a) => a.status === "connected" && a.circuit_state === "ok");
   const [video, setVideo] = useState("");
   const [caption, setCaption] = useState("");
@@ -277,8 +283,16 @@ function Publish({ st, onDone }: { st: UptikStatus; onDone: () => void }) {
     return buildPostBody({ video, caption, hashtags, title, accounts, when, options });
   };
 
+  const picked = parseVideoRef(video);
+  const pickedValue = picked?.source === source ? picked.value : "";
+
+  const switchSource = (s: VideoSource) => {
+    setSource(s);
+    setVideo("");
+  };
+
   const pick = (iid: string) => {
-    setVideo(iid ? `inbox:${iid}` : "");
+    setVideo(videoRef("inbox", iid));
     const item = inbox.data?.find((i) => i.id === iid);
     const c = item?.captions.tiktok ?? item?.captions.instagram_reels;
     if (c && !caption) setCaption(c.caption ?? "");
@@ -286,10 +300,18 @@ function Publish({ st, onDone }: { st: UptikStatus; onDone: () => void }) {
     if (item && !title) setTitle(item.captions.youtube_shorts?.title ?? item.title);
   };
 
+  const pickUpload = (name: string) => {
+    setVideo(videoRef("upload", name));
+    if (name && !title) setTitle(uploadTitle(name));
+  };
+
   const upload = (f: File | undefined) => {
     if (!f) return;
     void act.run("upload", () => api.uptik.upload(f, f.name), "Video hochgeladen").then((item) => {
-      if (item) { void inbox.refetch(); setVideo(`inbox:${item.id}`); }
+      if (!item) return;
+      void inbox.refetch();
+      if (source === "upload") { void uploads.refetch(); pickUpload(item.name); }
+      else setVideo(videoRef("inbox", item.id));
     });
   };
 
@@ -313,17 +335,36 @@ function Publish({ st, onDone }: { st: UptikStatus; onDone: () => void }) {
     <div className="mx-auto flex max-w-[48rem] flex-col gap-4 px-6 py-5 text-sm">
       <Section title="Video" actions={<Button size="sm" icon={<Upload className="size-3.5" />} busy={act.busy === "upload"} onClick={() => fileRef.current?.click()}>Hochladen</Button>}>
         <div className="flex flex-col gap-2 p-4">
-          <input ref={fileRef} type="file" accept="video/mp4,video/quicktime,video/webm" className="hidden" onChange={(e) => upload(e.target.files?.[0])} />
-          {inbox.loading ? <Skeleton rows={2} /> : (
+          <input ref={fileRef} type="file" aria-label="Videodatei" accept="video/mp4,video/quicktime,video/webm" className="hidden"
+                 onChange={(e) => { upload(e.target.files?.[0]); e.target.value = ""; }} />
+          <Field label="Quelle">
+            {(id) => (
+              <select id={id} className="field" value={source} onChange={(e) => switchSource(e.target.value as VideoSource)}>
+                <option value="inbox">Eingang</option>
+                <option value="upload">Upload</option>
+              </select>
+            )}
+          </Field>
+          {source === "inbox" && (inbox.loading ? <Skeleton rows={2} /> : (
             <Field label="Aus dem Eingang (Videoproduktion und Uploads)">
               {(id) => (
-                <select id={id} className="field" value={video.replace(/^inbox:/, "")} onChange={(e) => pick(e.target.value)}>
+                <select id={id} className="field" value={pickedValue} onChange={(e) => pick(e.target.value)}>
                   <option value="">– Video wählen –</option>
                   {inbox.data?.map((i) => <option key={i.id} value={i.id}>{i.title || i.name} · {formatBytes(i.size)} · {formatRelative(i.created_at)}</option>)}
                 </select>
               )}
             </Field>
-          )}
+          ))}
+          {source === "upload" && (uploads.loading ? <Skeleton rows={2} /> : uploads.error ? <ErrorState message={uploads.error} onRetry={uploads.refetch} /> : (
+            <Field label="Aus dem Upload-Ordner" hint={uploads.data?.length ? undefined : "Noch keine Uploads – mit „Hochladen“ eine Datei wählen."}>
+              {(id) => (
+                <select id={id} className="field" value={pickedValue} onChange={(e) => pickUpload(e.target.value)}>
+                  <option value="">– Upload wählen –</option>
+                  {uploads.data?.map((u) => <option key={u.name} value={u.name}>{uploadTitle(u.name)} · {formatBytes(u.size)} · {formatRelative(u.modified_at)}</option>)}
+                </select>
+              )}
+            </Field>
+          ))}
         </div>
       </Section>
       <Section title="Konten" meta="Veröffentlicht wird auf jedem gewählten Konto (Fan-out)">

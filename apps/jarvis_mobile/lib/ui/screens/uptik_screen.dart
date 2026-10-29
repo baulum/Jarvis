@@ -39,6 +39,7 @@ class _UptikScreenState extends ConsumerState<UptikScreen> {
   void _refresh() {
     ref.invalidate(uptikStatusProvider);
     ref.invalidate(uptikInboxProvider);
+    ref.invalidate(uptikUploadsProvider);
     ref.invalidate(uptikQueueProvider);
     ref.invalidate(uptikHistoryProvider);
   }
@@ -294,7 +295,8 @@ class _PublishState extends ConsumerState<_Publish> {
   final _caption = TextEditingController();
   final _tags = TextEditingController();
   final _title = TextEditingController();
-  String? _video;
+  String _source = 'inbox'; // 'inbox' | 'upload'
+  String? _video; // inbox id or upload file name, depending on _source
   final Set<String> _chosen = {};
   DateTime? _when;
 
@@ -315,9 +317,46 @@ class _PublishState extends ConsumerState<_Publish> {
     setState(() => _when = DateTime(day.year, day.month, day.day, t.hour, t.minute));
   }
 
+  Widget _inboxPicker(List<Map<String, dynamic>> items) => items.isEmpty
+      ? Text('Eingang leer – Videos kommen aus der Videoproduktion oder per Upload am Mac.', style: J.bodyDim)
+      : DropdownButton<String>(
+          value: _video,
+          isExpanded: true,
+          hint: Text('Video wählen', style: J.bodyDim),
+          dropdownColor: J.panel,
+          style: J.body,
+          items: [for (final i in items) DropdownMenuItem(value: '${i['id']}', child: Text('${(i['title'] as String?)?.isNotEmpty == true ? i['title'] : i['name']}', overflow: TextOverflow.ellipsis))],
+          onChanged: (v) {
+            final item = items.firstWhere((i) => i['id'] == v);
+            final caps = (item['captions'] as Map?) ?? const {};
+            final c = (caps['tiktok'] ?? caps['instagram_reels']) as Map?;
+            setState(() {
+              _video = v;
+              if (_caption.text.isEmpty && c?['caption'] != null) _caption.text = '${c!['caption']}';
+              if (_tags.text.isEmpty && c?['hashtags'] is List) _tags.text = (c!['hashtags'] as List).join(' ');
+              if (_title.text.isEmpty) _title.text = '${(caps['youtube_shorts'] as Map?)?['title'] ?? item['title'] ?? ''}';
+            });
+          },
+        );
+
+  Widget _uploadPicker(List<Map<String, dynamic>> items) => items.isEmpty
+      ? Text('Noch keine Uploads – Videos per „Hochladen“ am Mac in den Upload-Ordner legen.', style: J.bodyDim)
+      : DropdownButton<String>(
+          value: items.any((u) => u['name'] == _video) ? _video : null,
+          isExpanded: true,
+          hint: Text('Upload wählen', style: J.bodyDim),
+          dropdownColor: J.panel,
+          style: J.body,
+          items: [for (final u in items) DropdownMenuItem(value: '${u['name']}', child: Text(uptikUploadTitle('${u['name']}'), overflow: TextOverflow.ellipsis))],
+          onChanged: (v) => setState(() {
+            _video = v;
+            if (_title.text.isEmpty && v != null) _title.text = uptikUploadTitle(v);
+          }),
+        );
+
   @override
   Widget build(BuildContext context) {
-    final inbox = ref.watch(uptikInboxProvider);
+    final picker = _source == 'upload' ? ref.watch(uptikUploadsProvider) : ref.watch(uptikInboxProvider);
     final usable = _accounts(widget.status).where((a) => a['status'] == 'connected' && a['circuit_state'] == 'ok').toList();
     if (usable.isEmpty) {
       return ListView(padding: const EdgeInsets.all(J.s4), children: [Text('Kein verbundenes Konto – unter Konten anlegen und anmelden.', style: J.bodyDim)]);
@@ -327,30 +366,20 @@ class _PublishState extends ConsumerState<_Publish> {
     final tooLong = uptikOverLimit(_caption.text, tags, platforms);
     return ListView(padding: const EdgeInsets.symmetric(horizontal: J.s4), children: [
       _section('Video', [
-        inbox.when(
+        Rail<String>(
+          values: const ['inbox', 'upload'],
+          labels: const ['Eingang', 'Upload'],
+          value: _source,
+          onChanged: (s) => setState(() {
+            _source = s;
+            _video = null;
+          }),
+        ),
+        const SizedBox(height: J.s2),
+        picker.when(
           loading: _loading,
           error: (e, _) => _error(e),
-          data: (items) => items.isEmpty
-              ? Text('Eingang leer – Videos kommen aus der Videoproduktion oder per Upload am Mac.', style: J.bodyDim)
-              : DropdownButton<String>(
-                  value: _video,
-                  isExpanded: true,
-                  hint: Text('Video wählen', style: J.bodyDim),
-                  dropdownColor: J.panel,
-                  style: J.body,
-                  items: [for (final i in items) DropdownMenuItem(value: '${i['id']}', child: Text('${(i['title'] as String?)?.isNotEmpty == true ? i['title'] : i['name']}', overflow: TextOverflow.ellipsis))],
-                  onChanged: (v) {
-                    final item = items.firstWhere((i) => i['id'] == v);
-                    final caps = (item['captions'] as Map?) ?? const {};
-                    final c = (caps['tiktok'] ?? caps['instagram_reels']) as Map?;
-                    setState(() {
-                      _video = v;
-                      if (_caption.text.isEmpty && c?['caption'] != null) _caption.text = '${c!['caption']}';
-                      if (_tags.text.isEmpty && c?['hashtags'] is List) _tags.text = (c!['hashtags'] as List).join(' ');
-                      if (_title.text.isEmpty) _title.text = '${(caps['youtube_shorts'] as Map?)?['title'] ?? item['title'] ?? ''}';
-                    });
-                  },
-                ),
+          data: (items) => _source == 'upload' ? _uploadPicker(items) : _inboxPicker(items),
         ),
       ]),
       _section('Konten', [
@@ -386,7 +415,7 @@ class _PublishState extends ConsumerState<_Publish> {
               : () async {
                   await widget.run(
                     () => ref.read(apiProvider).post('/api/uptik/publish', {
-                      'video': 'inbox:$_video',
+                      'video': uptikVideoRef(_source, _video),
                       'caption': _caption.text.trim(),
                       'hashtags': tags,
                       'title': _title.text.trim(),

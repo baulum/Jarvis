@@ -193,6 +193,12 @@ def _safe_name(raw: str) -> str:
     return name[-120:]
 
 
+@router.get("/uploads")
+async def uploads(st: AppState = StateDep, p: Principal = Sir) -> list[dict[str, Any]]:
+    """The uploads folder (video source „upload:<name>“): name, size, modified_at – newest first."""
+    return await asyncio.to_thread(_svc(st).uploads)
+
+
 @router.post("/uploads", status_code=201)
 async def upload(
     request: Request, name: str = Query(min_length=1, max_length=255), st: AppState = StateDep, p: Principal = Sir
