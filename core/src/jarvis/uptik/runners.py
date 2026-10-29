@@ -31,6 +31,14 @@ class BrowserSession(Protocol):
     async def exists(self, selector: str) -> bool: ...
     async def wait_for(self, selector: str, timeout_ms: int = 15_000) -> bool: ...
     async def click(self, selector: str) -> None: ...
+    async def mouse_click(self, selector: str) -> None:
+        """Real mouse input: scroll the element into view, move to the centre of its box, press and release."""
+        ...
+
+    async def press_on(self, selector: str, key: str) -> None:
+        """Focus the element, then send ``key`` to it (keyboard fallback for an element that only took focus)."""
+        ...
+
     async def fill(self, selector: str, value: str) -> None: ...
     async def insert_text(self, selector: str, value: str) -> None: ...
     async def press(self, key: str) -> None: ...
@@ -117,6 +125,27 @@ class _PlaywrightSession:
 
     async def click(self, selector: str) -> None:
         await self.page.locator(selector).first.click(timeout=15_000)
+
+    async def mouse_click(self, selector: str) -> None:
+        loc = self.page.locator(selector).first
+        try:
+            await loc.scroll_into_view_if_needed(timeout=10_000)
+            box = await loc.bounding_box(timeout=5_000)
+        except Exception as e:
+            raise RetryableError(f"nicht klickbar ({type(e).__name__})", code="selector") from None
+        if not box or box["width"] < 1 or box["height"] < 1:
+            raise RetryableError("nicht klickbar (keine sichtbare Fläche)", code="selector")
+        x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        await self.page.mouse.move(x, y, steps=4)
+        await asyncio.sleep(0.08)
+        await self.page.mouse.down()
+        await asyncio.sleep(0.06)
+        await self.page.mouse.up()
+
+    async def press_on(self, selector: str, key: str) -> None:
+        loc = self.page.locator(selector).first
+        await loc.focus(timeout=10_000)
+        await self.page.keyboard.press(key)
 
     async def fill(self, selector: str, value: str) -> None:
         await self.page.locator(selector).first.fill(value, timeout=15_000)
@@ -222,6 +251,14 @@ class _DeviceSession:
 
     async def click(self, selector: str) -> None:
         await self._op("click", selector=selector)
+
+    async def mouse_click(self, selector: str) -> None:
+        res = await self._op("mouse_click", selector=selector) or {}
+        if not res.get("ok", True):
+            raise RetryableError(f"nicht klickbar ({res.get('reason') or 'unbekannt'})", code="selector")
+
+    async def press_on(self, selector: str, key: str) -> None:
+        await self._op("press_on", selector=selector, key=key)
 
     async def fill(self, selector: str, value: str) -> None:
         await self._op("fill", selector=selector, value=value)

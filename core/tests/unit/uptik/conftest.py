@@ -162,6 +162,12 @@ class FakeSession:
     async def click(self, selector: str) -> None:
         self.act("click", selector)
 
+    async def mouse_click(self, selector: str) -> None:
+        self.act("click", selector)
+
+    async def press_on(self, selector: str, key: str) -> None:
+        self.act("press", key)
+
     async def fill(self, selector: str, value: str) -> None:
         self.act("fill", selector, value)
 

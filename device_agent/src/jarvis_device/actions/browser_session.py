@@ -31,6 +31,8 @@ OPS = (
     "exists",
     "wait_for",
     "click",
+    "mouse_click",
+    "press_on",
     "fill",
     "insert_text",
     "press",
@@ -89,6 +91,25 @@ def _sel(a: dict[str, Any]) -> str:
     if not isinstance(v, str) or not v or len(v) > 500:
         raise SessionError("invalid", "selector fehlt oder ist zu lang")
     return v
+
+
+async def _mouse_click(page: Any, selector: str) -> dict[str, Any]:
+    """Real mouse input at the centre of the element's box (scrolled into view first); ``ok: False`` if it has none."""
+    loc = page.locator(selector).first
+    try:
+        await loc.scroll_into_view_if_needed(timeout=10_000)
+        box = await loc.bounding_box(timeout=5_000)
+    except Exception as e:
+        return {"ok": False, "reason": type(e).__name__}
+    if not box or box["width"] < 1 or box["height"] < 1:
+        return {"ok": False, "reason": "keine sichtbare Fläche"}
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    await page.mouse.move(x, y, steps=4)
+    await asyncio.sleep(0.08)
+    await page.mouse.down()
+    await asyncio.sleep(0.06)
+    await page.mouse.up()
+    return {"ok": True}
 
 
 class BrowserSessions:
@@ -183,6 +204,15 @@ class BrowserSessions:
                     return {"found": False}
             if op == "click":
                 await page.locator(_sel(a)).first.click(timeout=15_000)
+                return {"ok": True}
+            if op == "mouse_click":
+                return await _mouse_click(page, _sel(a))
+            if op == "press_on":
+                key = str(a.get("key") or "")
+                if not key or len(key) > 40:
+                    raise SessionError("invalid", "key fehlt")
+                await page.locator(_sel(a)).first.focus(timeout=10_000)
+                await page.keyboard.press(key)
                 return {"ok": True}
             if op in ("fill", "insert_text"):
                 value = a.get("value")
