@@ -102,6 +102,11 @@ function ConnectorCard({ c, refetch }: { c: Connector; refetch: () => Promise<vo
             {c.enabled && h?.status === "ok" ? "Chats öffnen" : "Verbinden und verwalten"}
           </Button>
         )}
+        {c.id === "uptik" && (
+          <Button size="sm" variant={c.enabled ? "primary" : "ghost"} onClick={() => useApp.getState().setView("uptik")}>
+            Konten und Warteschlange
+          </Button>
+        )}
         {c.id === "telegram" && (
           <Button size="sm" variant="ghost" onClick={() => void act.run("pair", () => api.telegramPair()).then((r) => r && setPairCode(r.code))}>Koppeln</Button>
         )}

@@ -30,6 +30,7 @@ from jarvis.mobile.api import router as mobile_router
 from jarvis.mobile.ota.api import router as app_update_router
 from jarvis.mobile.rtc_proxy import router as rtc_router
 from jarvis.social.api import router as social_router
+from jarvis.uptik.api import router as uptik_router
 from jarvis.whatsapp.api import router as whatsapp_router
 
 logger = logging.getLogger("jarvis")
@@ -100,6 +101,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(rtc_router)
     app.include_router(whatsapp_router)
     app.include_router(social_router)
+    app.include_router(uptik_router)
     # A Route (not Mount) so that "/mcp" is served without a trailing-slash redirect.
     app.router.routes.append(Route("/mcp", endpoint=MCPAuthApp(mcp_manager), methods=["GET", "POST", "DELETE"]))
     if settings.clients.web_client:

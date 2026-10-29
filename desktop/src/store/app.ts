@@ -38,6 +38,7 @@ export type ViewId =
   | "devices"
   | "whatsapp"
   | "social"
+  | "uptik"
   | "system";
 
 /** A view, optionally with the job/task to select in it. */
@@ -69,6 +70,7 @@ export type Topic =
   | "session"
   | "whatsapp"
   | "social"
+  | "uptik"
   | "system";
 
 const LIVE_LOG_MAX = 3000;
@@ -157,6 +159,7 @@ export const useApp = create<AppState>((set, get) => ({
     session: 0,
     whatsapp: 0,
     social: 0,
+    uptik: 0,
     system: 0,
   },
   taskInputFields: {},
@@ -468,6 +471,12 @@ export function handleBusEvent(ev: BusEvent): void {
   }
   if (type.startsWith("social.")) {
     debounce("social", 300, () => bump("social"));
+    return;
+  }
+  if (type.startsWith("uptik.")) {
+    // ids and states only; the view refetches. A stopped account also arrives as a notification.
+    debounce("uptik", 300, () => bump("uptik"));
+    if (type === "uptik.circuit") debounce("connector", 500, () => bump("connector"));
     return;
   }
   if (type.startsWith("telephony.")) {

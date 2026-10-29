@@ -83,6 +83,9 @@ selben Tag nachgeholt.
 | TikTok | Content Posting API (Direct Post, `FILE_UPLOAD`) | TikTok-Developer-App mit `video.publish` | **ohne Audit durch TikTok nur privat (`SELF_ONLY`)**; danach Sichtbarkeit wählbar. Bis dahin: manuell posten (Caption aus der Bibliothek kopieren) |
 | YouTube | Data API v3 `videos.insert` (resumable) | Google-Cloud-Projekt mit YouTube Data API v3, OAuth-Client wie beim Google-Connector | 1 600 Quota-Einheiten je Upload (Standard 10 000/Tag); **ungeprüfte Projekte laden nur privat hoch** bis zum API-Audit. Shorts: ≤ 3 min, 9:16 |
 
+Ohne Developer-Apps: der eigenständige Connector **UpTik Autopost** (`core/src/jarvis/uptik`, docs/UPTIK_EVALUATION.md)
+veröffentlicht über die Weboberflächen; er übernimmt fertige Videos dieser Produktion nur, wenn das dort eingeschaltet ist.
+
 Zugangsdaten (App-ID/Secret, Tokens) liegen ausschließlich im Keychain (`secret_store`), nie in Logs, Fehlern oder
 der Datenbank. Der OAuth-Callback läuft über die lokale Core-Adresse `/api/social/oauth/<plattform>/callback` und
 ist von außen (Mobile-Gateway) gesperrt.

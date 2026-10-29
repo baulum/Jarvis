@@ -57,6 +57,7 @@ import type {
   WaSuggestion,
 } from "./whatsapp";
 import type { Platform, PlatformStatus, Publication, SocialSettings, SocialStatus, SocialVideo, SocialVideoDetail } from "./social";
+import type { UptikAccount, UptikInboxItem, UptikPlatform, UptikPost, UptikPostBody, UptikSettings, UptikStatus } from "./uptik";
 import type { DesktopBuild } from "./build";
 import type { SlashCommand } from "./slash";
 import type { TimelineEvent } from "./timeline";
@@ -181,6 +182,7 @@ export function createApi(opts: ApiOptions) {
   const post = <T>(path: string, body: unknown = {}) => json<T>("POST", path, body);
   const del = <T>(path: string) => json<T>("DELETE", path);
   const put = <T>(path: string, body: unknown = {}) => json<T>("PUT", path, body);
+  const patch = <T>(path: string, body: unknown = {}) => json<T>("PATCH", path, body);
   const id = encodeURIComponent;
 
   return {
@@ -383,6 +385,37 @@ export function createApi(opts: ApiOptions) {
       platforms: () => get<PlatformStatus[]>("/social/platforms"),
       oauthStart: (platform: Platform) => post<{ auth_url: string }>(`/social/oauth/${platform}/start`),
       disconnect: (platform: Platform) => post<{ ok: boolean }>(`/social/platforms/${platform}/disconnect`, { confirm: true }),
+    },
+    // UpTik connector (TikTok, Instagram Reels, YouTube Shorts over the web pages; publishing ends in approvals)
+    uptik: {
+      status: () => get<UptikStatus>("/uptik/status"),
+      configure: (body: { enabled?: boolean; settings?: Partial<UptikSettings> }) => put<UptikStatus>("/uptik/connector", body),
+      accounts: () => get<UptikAccount[]>("/uptik/accounts"),
+      createAccount: (platform: UptikPlatform, label: string, runner?: "local" | "device", device?: string) =>
+        post<UptikAccount>("/uptik/accounts", { platform, label, runner, device }),
+      updateAccount: (aid: string, body: { label?: string; runner?: "local" | "device"; device?: string; autopost?: boolean }) =>
+        patch<UptikAccount>(`/uptik/accounts/${id(aid)}`, body),
+      deleteAccount: (aid: string) => del<{ ok: boolean }>(`/uptik/accounts/${id(aid)}`),
+      connect: (aid: string) => post<{ status: string; summary?: string }>(`/uptik/accounts/${id(aid)}/connect`),
+      check: (aid: string) => post<UptikAccount>(`/uptik/accounts/${id(aid)}/check`),
+      disconnect: (aid: string) => post<UptikAccount>(`/uptik/accounts/${id(aid)}/disconnect`),
+      resume: (aid: string, requeue: boolean) =>
+        post<{ account: UptikAccount; requeued: number }>(`/uptik/accounts/${id(aid)}/resume`, { confirm: true, requeue }),
+      inbox: () => get<UptikInboxItem[]>("/uptik/inbox"),
+      removeInbox: (iid: string) => del<{ ok: boolean }>(`/uptik/inbox/${id(iid)}`),
+      upload: async (file: Blob, name: string) =>
+        (await (await raw("POST", "/uptik/uploads", file, { name }, 600_000)).json()) as UptikInboxItem,
+      validate: (body: UptikPostBody) =>
+        post<{ ok: boolean; problems?: string; targets?: { account_id: string; platform: UptikPlatform; label: string }[]; publish_at_label?: string }>(
+          "/uptik/validate",
+          body,
+        ),
+      publish: (body: UptikPostBody) => post<{ status: string; summary?: string; message?: string }>("/uptik/publish", body),
+      queue: () => get<UptikPost[]>("/uptik/queue"),
+      history: (limit = 100) => get<UptikPost[]>("/uptik/history", { limit }),
+      cancel: (pid: string) => post<{ status: string }>(`/uptik/posts/${id(pid)}/cancel`),
+      review: (pid: string, outcome: "published" | "failed", url?: string) =>
+        post<UptikPost>(`/uptik/posts/${id(pid)}/review`, url ? { outcome, url } : { outcome }),
     },
     // whatsapp (one central connection on the Core; every client sees the same chats)
     whatsapp: {

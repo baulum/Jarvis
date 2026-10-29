@@ -52,6 +52,7 @@ ACTIONS: dict[str, str] = {
     "claude.run": "claude_code",
     "browser.open": "browser.open",
     "browser.automate": "browser.automation",
+    "browser.session": "browser.automation",
     "notify": "notifications",
     "audio.volume": "audio.volume",
     "audio.speak": "audio.speak",

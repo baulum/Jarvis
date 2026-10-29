@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from jarvis_device.actions import automations, browser, files, shell
+from jarvis_device.actions.browser_session import BrowserSessions, SessionError
 from jarvis_device.actions.system import system_info
 from jarvis_device.backends.base import BackendError, Capture, DesktopBackend, UiTarget, Unavailable
 from jarvis_device.backends.keys import KeyError_
@@ -108,6 +109,7 @@ class Dispatcher:
         self.kill = kill
         self.automations_dir = automations_dir
         self.frame = CaptureFrame()
+        self.sessions = BrowserSessions()
         self.handlers: dict[str, Handler] = {
             "system.info": self._system_info,
             "apps.list": lambda a: self.backend.list_apps(),
@@ -138,6 +140,7 @@ class Dispatcher:
             "claude.run": self._claude,
             "browser.open": self._open_url,
             "browser.automate": self._browser,
+            "browser.session": self._browser_session,
             "notify": self._notify,
             "audio.volume": self._volume,
             "audio.speak": self._speak,
@@ -439,6 +442,17 @@ class Dispatcher:
             return await browser.automate(a.get("steps"), headless=bool(a.get("headless", False)))
         except RuntimeError as e:
             raise CommandError("unavailable", str(e)) from e
+
+    async def _browser_session(self, a: dict[str, Any]) -> Any:
+        """Kept-open browser for the Core's UpTik connector; files to upload only from the allowed folders."""
+        try:
+            return await self.sessions.handle(a, lambda p: self.policy.check(p, must_exist=True))
+        except SessionError as e:
+            raise CommandError(e.code, e.message) from e
+        except PolicyError as e:
+            raise CommandError("denied", str(e)) from e
+        except FileNotFoundError as e:
+            raise CommandError("invalid", "Datei nicht gefunden") from e
 
     async def _notify(self, a: dict[str, Any]) -> Any:
         title = _str(a, "title", max_len=120) or ""

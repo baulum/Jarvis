@@ -77,6 +77,8 @@ from jarvis.telephony.service import TelephonyService
 from jarvis.tools.approval_mode import ApprovalPolicy
 from jarvis.tools.executor import ToolExecutor
 from jarvis.tools.registry import ToolRegistry
+from jarvis.uptik.service import UptikService
+from jarvis.uptik.tools import UptikConnector
 from jarvis.voice.speech import STTService, TTSService
 from jarvis.voice.wakeup import WakeupStore
 from jarvis.whatsapp.connector import WhatsAppConnector
@@ -184,6 +186,8 @@ class AppState:
         self.whatsapp = WhatsAppService(self)
         # Daily PJE Systems social video (jarvis.social): schedule → playbook → Remotion/FFmpeg → library → e-mail
         self.social = SocialMediaService(self)
+        # UpTik: publishing over the platforms' web pages in a real browser (jarvis.uptik), off until Sir enables it
+        self.uptik = UptikService(self)
 
         for conn_cls in (
             SystemConnector,
@@ -207,6 +211,7 @@ class AppState:
             AttachmentsConnector,
             WhatsAppConnector,
             SocialMediaConnector,
+            UptikConnector,
         ):
             self.connectors.add(conn_cls(self))
         for platform_cls in PLATFORM_CONNECTORS:  # Instagram, Facebook, TikTok, YouTube – off until Sir connects

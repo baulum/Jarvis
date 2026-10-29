@@ -563,6 +563,11 @@ class _Connector extends ConsumerWidget {
           Text('Verbinden geschieht am Mac (Social Media › Connector). Hier: Status und Autopost je Plattform.',
               style: J.bodyDim.copyWith(fontSize: 13)),
           const SizedBox(height: J.s3),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: LightAction('UpTik Autopost (Browser) öffnen', onTap: () => context.push('/uptik')),
+          ),
+          const SizedBox(height: J.s3),
           for (final p in platforms)
             _section(platformLabel[p['platform']] ?? '${p['platform']}', [
               _kv('Verbindung', p['connected'] == true ? (p['enabled'] == true ? 'verbunden' : 'verbunden, deaktiviert') : 'nicht verbunden',
