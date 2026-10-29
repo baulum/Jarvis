@@ -1,8 +1,9 @@
 """Connector "Social Media" and its tools. Every action of the pipeline that leaves the Core goes through these
 tools and therefore through the ToolExecutor (approval mode, risk, kill switch, idempotency ledger, audit):
 
-* ``social_email_video`` – risk ``low`` like the ``mobile_*`` tools: it reaches only Sir. Sir approved the daily
-  mail to his own address (2026-10-28); any other recipient is put to an approval (``ask_if``), in every mode.
+* ``social_email_video`` – risk ``low`` like the ``mobile_*`` tools: it reaches only Sir and the configured
+  ``social_media.video_recipients`` (Bagy). Sir approved the daily mail to his own address (2026-10-28); any other
+  recipient is put to an approval (``ask_if``), in every mode.
 * ``social_publish_video`` – risk ``high``: visible to third parties, so it needs an approval unless Sir allows it
   explicitly (approval mode YOLO or a per-tool rule "Sofort" in „Eigene Regeln“).
 """
@@ -41,6 +42,15 @@ def owner_addresses(svc: SocialMediaService) -> set[str]:
     return {a for a in out if a}
 
 
+def _split(raw: Any) -> list[str]:
+    return [p.strip() for p in str(raw or "").split(",") if p.strip()]
+
+
+def approved_addresses(svc: SocialMediaService) -> set[str]:
+    """Sir's addresses plus the configured video recipients: mails to them need no extra approval."""
+    return owner_addresses(svc) | {r.strip().lower() for r in svc.cfg.video_recipients if r.strip()}
+
+
 def social_tools(svc: SocialMediaService) -> list[ToolSpec]:
     S = "social_media"
 
@@ -54,19 +64,22 @@ def social_tools(svc: SocialMediaService) -> list[ToolSpec]:
         return {"videos": [video_dict(v, full=False) for v in rows], "schedule": await svc.schedule_info()}
 
     async def prepare_email(ctx: ToolContext, a: dict[str, Any]) -> dict[str, Any]:
-        to = str(a.get("to") or svc.settings.load().get("email_recipient") or svc.cfg.owner_email).strip()
-        if "@" not in to or any(c in to for c in " ,;<>\n"):
-            raise ToolUserError("Ungültige E-Mail-Adresse")
-        return {**a, "to": to}
+        explicit = str(a.get("to") or "").strip()
+        recipients = [explicit] if explicit else svc.video_recipients()
+        for to in recipients:
+            if "@" not in to or any(c in to for c in " ,;<>\n"):
+                raise ToolUserError("Ungültige E-Mail-Adresse")
+        return {**a, "to": ", ".join(recipients)}  # prepared "to" is the comma-separated final recipient list
 
     def ask_email(a: dict[str, Any]) -> str | None:
-        to = str(a.get("to") or "").strip().lower()
-        if to and to not in owner_addresses(svc):
-            return f"Empfänger {to} ist nicht Sir – Versand nur mit Freigabe"
+        known = approved_addresses(svc)
+        others = [r.lower() for r in _split(a.get("to")) if r.lower() not in known]
+        if others:
+            return f"Empfänger {', '.join(others)} nicht freigegeben – Versand nur mit Freigabe"
         return None
 
     async def email(ctx: ToolContext, a: dict[str, Any]) -> Any:
-        return await svc.send_email(_uuid(a["video_id"]), a["to"])
+        return await svc.send_emails(_uuid(a["video_id"]), _split(a["to"]))
 
     async def publish(ctx: ToolContext, a: dict[str, Any]) -> Any:
         return await svc.publish(_uuid(a["video_id"]), a["platform"])
@@ -93,8 +106,8 @@ def social_tools(svc: SocialMediaService) -> list[ToolSpec]:
         ),
         ToolSpec(
             "social_email_video",
-            "Schickt ein fertiges Social-Video mit Captions per E-Mail (Standard: an Sir). "
-            "Andere Empfänger nur mit Freigabe.",
+            "Schickt ein fertiges Social-Video mit Captions per E-Mail (ohne „to“: an alle Empfänger der "
+            "Liste social_media.video_recipients, also Sir und Bagy). Andere Empfänger nur mit Freigabe.",
             _obj({"video_id": {"type": "string"}, "to": {"type": "string", "maxLength": 254}}, ["video_id"]),
             email,
             "low",

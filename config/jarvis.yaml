@@ -270,9 +270,11 @@ social_media:
   ffmpeg_binary: ffmpeg
   ffprobe_binary: ffprobe
   owner_email: paulhoflich@gmail.com   # E-Mails an diese Adresse laufen ohne Einzelfreigabe (Sirs Freigabe 2026-10-28)
+  video_recipients:                    # weitere Empfänger fertiger Videos neben Sir (gelten als freigegeben)
+    - bagy2014@gmail.com               # Bagy (Blagoja Ljubeski), Geschäftspartner
   default_time: "08:00"
   timezone: Europe/Berlin
-  concept_model: opus                  # Idee, Skript, Storyboard, Captions (Sir: alles mit Opus 5.5, 2026-10-28)
+  concept_model: opus                 # Idee, Skript, Storyboard, Captions (Sir: alles mit Opus 5.5, 2026-10-28)
   qa_model: opus                       # Frame-Analyse, Rechtschreibung
   effort: medium                       # --effort der Claude-CLI für alle Social-Media-Aufrufe
   max_render_attempts: 3

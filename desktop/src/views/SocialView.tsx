@@ -323,7 +323,7 @@ function VideoDetail({ id, onSelect }: { id: string; onSelect: (id: string) => v
             <Button size="sm" icon={<Download className="size-3.5" />} busy={act.busy === "dl"} onClick={download}>MP4</Button>
             <Button size="sm" icon={<RefreshCw className="size-3.5" />} onClick={() => setRegen(true)}>Neu generieren</Button>
             <Button size="sm" icon={<Mail className="size-3.5" />} busy={act.busy === "mail"}
-                    onClick={() => void act.run("mail", () => api.social.email(v.id), "E-Mail an Sir gesendet").then(q.refetch)}>E-Mail</Button>
+                    onClick={() => void act.run("mail", () => api.social.email(v.id), "E-Mail an Sir und Bagy gesendet").then(q.refetch)}>E-Mail</Button>
             <Button size="sm" icon={<Link2 className="size-3.5" />} busy={act.busy === "link"}
                     onClick={() => void act.run("link", () => api.social.link(v.id, 24)).then((r) => r && (r.url ? copy(r.url, "Download-Link (24 h)") : pushToast({ tone: "warn", title: "Kein öffentlicher Link", body: "server.public_base_url bzw. social_media.public_base_url ist nicht gesetzt." })))}>
               Link

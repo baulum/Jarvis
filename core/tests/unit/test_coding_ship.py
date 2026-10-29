@@ -97,6 +97,7 @@ class FakeNotifier:
 
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    monkeypatch.delenv("SUPABASE_DB_PASSWORD", raising=False)  # an ambient password must not reach the fake CLI
     store: dict[uuid.UUID, Any] = {}
     events: list[tuple[str, dict[str, Any]]] = []
 

@@ -430,6 +430,9 @@ class SocialMediaCfg(_Strict):
     ffprobe_binary: str = "ffprobe"
     library_dir: Path | None = None  # default: <data_dir>/social-videos
     owner_email: str = "paulhoflich@gmail.com"  # mails to this address need no approval (Sir's own inbox)
+    # further recipients of finished videos besides Sir (Bagy = Blagoja Ljubeski, business partner); they count as
+    # approved for social_email_video. Add more addresses here (config/jarvis.yaml › social_media.video_recipients).
+    video_recipients: list[str] = Field(default_factory=lambda: ["bagy2014@gmail.com"])
     default_time: str = Field(default="08:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     timezone: str = "Europe/Berlin"
     concept_model: str = "opus"  # Claude CLI model alias (haiku | sonnet | opus): idea, script, storyboard, captions

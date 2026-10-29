@@ -625,6 +625,32 @@ class SocialMediaService:
         return local.astimezone(UTC)
 
     # ------------------------------------------------------------------ e-mail & publishing (tool handlers)
+    def video_recipients(self) -> list[str]:
+        """Everyone who gets a finished video by default: Sir (his configured address) plus the configured list."""
+        out: list[str] = []
+        for addr in [self.settings.load()["email_recipient"], *self.cfg.video_recipients]:
+            addr = str(addr).strip()
+            if addr and addr.lower() not in (o.lower() for o in out):
+                out.append(addr)
+        return out
+
+    async def send_emails(self, vid: uuid.UUID, recipients: list[str]) -> dict[str, Any]:
+        """One mail per recipient; a failure for one never stops the others (logged and reported)."""
+        sent: list[dict[str, Any]] = []
+        failed: dict[str, str] = {}
+        for to in recipients:
+            try:
+                sent.append(await self.send_email(vid, to))
+            except Exception as e:
+                logger.exception("Social-Video %s: E-Mail an %s fehlgeschlagen", vid, to)
+                failed[to] = str(e) or type(e).__name__
+                await self.repo.log(vid, f"E-Mail an {to} fehlgeschlagen: {failed[to]}")
+        if not sent:
+            raise ToolUserError("E-Mail an keinen Empfänger gesendet: " + "; ".join(f"{k}: {v}" for k, v in failed.items()))
+        info = {**sent[-1], "to": ", ".join(s["to"] for s in sent), "recipients": [s["to"] for s in sent], "failed": failed}
+        await self.repo.update(vid, email=info)
+        return info
+
     async def send_email(self, vid: uuid.UUID, to: str) -> dict[str, Any]:
         v = await self.repo.get(vid)
         if v is None or v.status != "ready":
@@ -827,7 +853,7 @@ def playbook(svc: SocialMediaService) -> Playbook:
             StepDef("Qualitätskontrolle", svc.step_qa),
             StepDef("Captions und Hashtags", svc.step_captions),
             StepDef("In Bibliothek speichern", svc.step_library),
-            StepDef("E-Mail an Sir", svc.step_email),
+            StepDef("E-Mail an Sir und Bagy", svc.step_email),
             StepDef("Veröffentlichen (optional)", svc.step_publish),
         ],
     )

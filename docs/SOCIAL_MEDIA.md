@@ -56,6 +56,11 @@ nur dieser Node, FFmpeg und das Remotion-Projekt; App und Desktop zeigen Status 
 E-Mail nutzt den Google-Connector (Gmail, `send_mail`). Mails an `social_media.owner_email` laufen ohne
 Einzelfreigabe (Sirs Freigabe vom 2026-10-28), jeder andere Empfänger braucht eine Freigabe.
 
+Fertige Videos gehen standardmäßig an Sir **und** die Liste `social_media.video_recipients` (`config/jarvis.yaml`,
+Standard: `bagy2014@gmail.com` – Bagy / Blagoja Ljubeski). Je Empfänger eine eigene Mail; schlägt eine fehl, werden die
+anderen trotzdem gesendet (Fehler im Log und im Video-Protokoll). Adressen der Liste gelten als freigegeben.
+Weiteren Empfänger ergänzen: Adresse unter `video_recipients` eintragen und den Core neu starten.
+
 ## Bedienung
 
 * **Dashboard** – nächster Termin, Status der Aufgabe, laufende Produktion mit Fortschritt, letztes Video,

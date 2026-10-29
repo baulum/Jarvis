@@ -162,14 +162,42 @@ async def test_email_to_sir_runs_without_approval(social: SimpleNamespace, tiny_
     vid = await ready_video(social, tiny_video)
     res = await social.executor.execute("social_email_video", {"video_id": str(vid)}, ToolContext(principal=SYSTEM, idempotency_key="k1"))
     assert res.status == "ok", res.message
-    [sent] = social.google.sent
-    assert sent["to"] == "paulhoflich@gmail.com" and sent["attachments"][0][1] == "video/mp4"
+    assert [s["to"] for s in social.google.sent] == ["paulhoflich@gmail.com", "bagy2014@gmail.com"]
+    sent = social.google.sent[0]
+    assert sent["attachments"][0][1] == "video/mp4"
     assert (sent["html"].startswith("<!doctype html>") and "Captions" in sent["body"]) or "CAPTIONS" in sent["html"]
     v = await social.svc.repo.get(vid)
     assert v is not None and v.email["status"] == "sent" and v.email["attached"] is True
     # same idempotency key again: the ledger answers, no second mail
     again = await social.executor.execute("social_email_video", {"video_id": str(vid)}, ToolContext(principal=SYSTEM, idempotency_key="k1"))
-    assert again.status in ("ok", "duplicate") and len(social.google.sent) == 1
+    assert again.status in ("ok", "duplicate") and len(social.google.sent) == 2
+
+
+async def test_recipient_list_contains_sir_and_bagy(social: SimpleNamespace) -> None:
+    assert social.svc.video_recipients() == ["paulhoflich@gmail.com", "bagy2014@gmail.com"]
+
+
+async def test_one_failing_recipient_does_not_block_the_other(social: SimpleNamespace, tiny_video: Path) -> None:
+    vid = await ready_video(social, tiny_video)
+    real = social.google.send_mail
+
+    async def flaky(to: str, *args: Any, **kw: Any) -> Any:
+        if to == "paulhoflich@gmail.com":
+            raise RuntimeError("smtp down")
+        return await real(to, *args, **kw)
+
+    social.google.send_mail = flaky
+    res = await social.executor.execute("social_email_video", {"video_id": str(vid)}, ToolContext(principal=SYSTEM))
+    assert res.status == "ok", res.message
+    assert [s["to"] for s in social.google.sent] == ["bagy2014@gmail.com"]
+    v = await social.svc.repo.get(vid)
+    assert v is not None and "paulhoflich@gmail.com" in v.email["failed"] and v.email["to"] == "bagy2014@gmail.com"
+
+
+async def test_email_to_listed_recipient_needs_no_approval(social: SimpleNamespace, tiny_video: Path) -> None:
+    vid = await ready_video(social, tiny_video)
+    res = await social.executor.execute("social_email_video", {"video_id": str(vid), "to": "bagy2014@gmail.com"}, ToolContext(principal=OWNER))
+    assert res.status == "ok" and [s["to"] for s in social.google.sent] == ["bagy2014@gmail.com"]
 
 
 async def test_email_to_someone_else_needs_approval(social: SimpleNamespace, tiny_video: Path) -> None:
