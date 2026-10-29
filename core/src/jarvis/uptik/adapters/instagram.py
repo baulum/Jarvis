@@ -14,8 +14,21 @@ CREATE = (
     'svg[aria-label="Create"]',
     'svg[aria-label="Erstellen"]',
 )
-CREATE_POST = ('a:has-text("Post")', 'span:has-text("Beitrag")', 'div[role="menuitem"]:has-text("Post")')
-FILE_INPUT = ('div[role="dialog"] input[type="file"]', 'form input[type="file"][accept*="video"]', 'input[type="file"]')
+CREATE_POST = (
+    'a:has-text("Post")',
+    'span:has-text("Beitrag")',
+    'div[role="menuitem"]:has-text("Post")',
+    'div[role="menuitem"]:has-text("Beitrag")',
+    'span:text-is("Post")',
+)
+# hidden inputs count too (Playwright's count()); video-accepting inputs first, so a page with several file fields
+# (profile picture, stories) still gets the reel's one
+FILE_INPUT = (
+    'div[role="dialog"] input[type="file"]',
+    'form input[type="file"][accept*="video"]',
+    'input[type="file"][accept*="video"]',
+    'input[type="file"]',
+)
 REELS_INFO_OK = ('div[role="dialog"] button:has-text("OK")',)
 NEXT = (
     'div[role="dialog"] div[role="button"]:has-text("Next")',
@@ -72,11 +85,13 @@ class InstagramReelsAdapter(PlatformAdapter):
         if not_now:
             await s.click(not_now)
         await self.click_first(s, CREATE, "Erstellen")
-        sub = await self.first(s, CREATE_POST, 2_000)
+        # the menu can render a few seconds after "Create"; without a menu the dialog may open directly
+        sub = await self.first(s, CREATE_POST, 8_000)
         if sub:
             await s.click(sub)
-        file_input = await self.first(s, FILE_INPUT, 20_000)
+        file_input = await self.first(s, FILE_INPUT, 30_000)
         if file_input is None:
+            await self.guard(s)  # a checkpoint instead of the dialog is a manual review, not a selector retry
             raise RetryableError("Instagram: Upload-Feld nicht gefunden", code="selector")
         await on_stage("uploading")
         await s.upload(file_input, job.video_path)
