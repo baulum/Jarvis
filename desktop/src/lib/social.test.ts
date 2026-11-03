@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { captionOverLimit, captionText, publicationTone, safeFileName, validTime, videoStatusLabel } from "./social";
+import { captionOverLimit, captionText, publicationTone, safeFileName, splitList, validEmail, validHex, validTime, videoStatusLabel } from "./social";
 
 describe("social helpers", () => {
   it("builds the pasteable caption with hashtags", () => {
@@ -25,5 +25,13 @@ describe("social helpers", () => {
     expect(validTime("24:00")).toBe(false);
     expect(safeFileName({ file_name: "../x.mp4", title: "Captcha für Kunden!" })).toBe("Captcha-f-r-Kunden.mp4");
     expect(safeFileName({ file_name: "2026-10-28_a_b.mp4", title: "" })).toBe("2026-10-28_a_b.mp4");
+  });
+
+  it("parses company profile inputs", () => {
+    expect(splitList(" sir@example.com, bagy@example.com;\n ,x@y.de ")).toEqual(["sir@example.com", "bagy@example.com", "x@y.de"]);
+    expect(validEmail("hr@apo-hr.example")).toBe(true);
+    expect(validEmail("kein-mail")).toBe(false);
+    expect(validHex("#0f9d58")).toBe(true);
+    expect(validHex("grün")).toBe(false);
   });
 });

@@ -1,7 +1,8 @@
-// Social Media: the daily PJE Systems video. Dashboard (next run, running production, last video, errors),
-// library (player over the API, download, captions to copy, regenerate, e-mail, publish), automation switches
-// and the platform connectors. Everything with an outside effect goes through the Core's approvals.
-import { Check, Clapperboard, Copy, Download, ExternalLink, Link2, Mail, PlugZap, RefreshCw, Send, Sparkles, Unplug } from "lucide-react";
+// Social Media: the daily video per company profile (PJE Systems, Apo HR …). Company switcher (= the active profile
+// on the Core, also the default of Jarvis' tools), dashboard (next run, running production, last video, errors),
+// library (player over the API, download, captions to copy, regenerate, e-mail, publish), automation switches,
+// company profiles and the platform connectors. Everything with an outside effect goes through the Core's approvals.
+import { Building2, Check, Clapperboard, Copy, Download, ExternalLink, Link2, Mail, Plus, PlugZap, RefreshCw, Send, Sparkles, Trash2, Unplug } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Button, Dialog, EmptyState, ErrorState, Field, KeyValue, Section, Skeleton, StatusText, Tabs, Tag, Toggle } from "../components/ui";
 import { useBlobUrl } from "../hooks/useBlobUrl";
@@ -21,9 +22,15 @@ import {
   dependencyTone,
   publicationTone,
   safeFileName,
+  splitList,
+  validEmail,
+  validHex,
   validTime,
   videoStatusLabel,
   videoTone,
+  type ColorKey,
+  type Company,
+  type CompanyInput,
   type Platform,
   type SocialSettings,
   type SocialVideo,
@@ -31,18 +38,34 @@ import {
 } from "../lib/social";
 import { api, useApp } from "../store/app";
 
-type Tab = "overview" | "library" | "automation" | "connector";
+type Tab = "overview" | "library" | "automation" | "companies" | "connector";
 
 export function SocialView() {
-  const status = useQuery(() => api.social.status(), "social-status", { topics: ["social", "task", "schedule", "connector"], pollMs: 10_000 });
+  const companies = useQuery(() => api.social.companies(), "social-companies", { topics: ["social", "schedule"] });
+  const [picked, setPicked] = useState<string | null>(null);
+  const list = companies.data?.companies ?? [];
+  // the shown company: Sir's pick in this window, else the active profile of the Core
+  const company = list.find((c) => c.id === picked)?.id ?? companies.data?.active ?? null;
+  const status = useQuery(() => api.social.status(company ?? undefined), `social-status-${company ?? "-"}`, {
+    topics: ["social", "task", "schedule", "connector"],
+    pollMs: 10_000,
+    enabled: !!company,
+  });
   const [tab, setTab] = useState<Tab>("overview");
   const [selected, setSelected] = useState<string | null>(null);
   const [producing, setProducing] = useState(false);
+  const act = useAction();
   const st = status.data;
 
   const open = (id: string) => {
     setSelected(id);
     setTab("library");
+  };
+  const pick = (cid: string) => {
+    setPicked(cid);
+    setSelected(null);
+    // the pick is also the active profile on the Core: Jarvis' tools (social_produce_video …) default to it
+    void act.run("activate", () => api.social.activateCompany(cid)).then(() => companies.refetch());
   };
 
   return (
@@ -55,33 +78,47 @@ export function SocialView() {
             { id: "overview", label: "Übersicht" },
             { id: "library", label: "Bibliothek", count: st ? (st.counts.ready ?? 0) : undefined },
             { id: "automation", label: "Automatisierung" },
+            { id: "companies", label: "Unternehmen", count: list.length || undefined },
             { id: "connector", label: "Connector" },
           ]}
         />
         <div className="flex-1" />
+        {list.length > 0 && company && (
+          <label className="flex items-center gap-2 text-xs text-ink-dim">
+            <Building2 className="size-3.5" aria-hidden />
+            <span className="sr-only">Unternehmen</span>
+            <select className="field w-48" value={company} onChange={(e) => pick(e.target.value)} aria-label="Unternehmen">
+              {list.map((c) => <option key={c.id} value={c.id}>{c.name}{c.missing.length ? " (unvollständig)" : ""}</option>)}
+            </select>
+          </label>
+        )}
         <Button variant="primary" icon={<Sparkles className="size-3.5" />} onClick={() => setProducing(true)} disabled={!st?.dependencies.ok}>
           Jetzt produzieren
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {status.loading && <div className="p-8"><Skeleton rows={6} /></div>}
+        {(status.loading || companies.loading) && <div className="p-8"><Skeleton rows={6} /></div>}
+        {companies.error && <div className="p-8"><ErrorState message={companies.error} onRetry={companies.refetch} /></div>}
         {status.error && <div className="p-8"><ErrorState message={status.error} onRetry={status.refetch} /></div>}
-        {st && tab === "overview" && <Overview onOpen={open} />}
-        {st && tab === "library" && <Library selected={selected} onSelect={setSelected} />}
-        {st && tab === "automation" && <Automation />}
-        {st && tab === "connector" && <Connector />}
+        {st && company && tab === "overview" && <Overview key={company} company={company} onOpen={open} onEdit={() => setTab("companies")} />}
+        {st && company && tab === "library" && <Library key={company} company={company} selected={selected} onSelect={setSelected} />}
+        {st && company && tab === "automation" && <Automation key={company} company={company} />}
+        {st && company && tab === "companies" && <Companies current={company} companies={list} onPick={pick} onChanged={() => void companies.refetch()} />}
+        {st && company && tab === "connector" && <Connector key={company} company={company} />}
       </div>
-      {producing && <ProduceDialog onClose={() => setProducing(false)} />}
+      {producing && company && <ProduceDialog companies={list} company={company} onClose={() => setProducing(false)} />}
     </div>
   );
 }
 
-function ProduceDialog({ onClose, parent }: { onClose: () => void; parent?: SocialVideo }) {
+function ProduceDialog({ onClose, parent, companies = [], company }: { onClose: () => void; parent?: SocialVideo; companies?: Company[]; company?: string }) {
   const [hint, setHint] = useState("");
+  const [target, setTarget] = useState(parent?.company_id ?? company ?? "");
+  const profile = companies.find((c) => c.id === target);
   const act = useAction();
   const go = () =>
     void act
-      .run("produce", () => (parent ? api.social.regenerate(parent.id, hint) : api.social.produce(hint)), "Produktion gestartet – siehe Übersicht")
+      .run("produce", () => (parent ? api.social.regenerate(parent.id, hint) : api.social.produce(hint, target || undefined)), "Produktion gestartet – siehe Übersicht")
       .then((r) => r && onClose());
   return (
     <Dialog
@@ -91,7 +128,7 @@ function ProduceDialog({ onClose, parent }: { onClose: () => void; parent?: Soci
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>Abbrechen</Button>
-          <Button variant="primary" busy={act.busy === "produce"} onClick={go}>Starten</Button>
+          <Button variant="primary" busy={act.busy === "produce"} disabled={!!profile?.missing.length} onClick={go}>Starten</Button>
         </>
       }
     >
@@ -101,7 +138,19 @@ function ProduceDialog({ onClose, parent }: { onClose: () => void; parent?: Soci
             ? `Jarvis entwickelt eine neue Idee als Ersatz für „${parent.title}“. Das alte Video bleibt in der Bibliothek.`
             : "Jarvis entwickelt sofort eine neue Idee, rendert, prüft und speichert das Video. Dauert einige Minuten."}
         </p>
-        <Field label="Wunsch (optional)" hint="z. B. „etwas mit einem Countdown“ oder „Thema Festpreis“. Die Regeln gegen Wiederholung gelten trotzdem.">
+        {!parent && companies.length > 0 && (
+          <Field label="Unternehmen" hint={profile?.missing.length ? `Profil unvollständig – es fehlt: ${profile.missing.join(", ")} (Tab „Unternehmen“).` : undefined}>
+            {(id) => (
+              <select id={id} className="field" value={target} onChange={(e) => setTarget(e.target.value)}>
+                {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            )}
+          </Field>
+        )}
+        <Field
+          label="Vorgabe (optional)"
+          hint="z. B. „Angebot für 299 €“, „Thema Onboarding“ oder „etwas mit einem Countdown“. Hat Vorrang vor den Standardwerten des Profils (Preis, Angebot, Thema); die Regeln gegen Wiederholung gelten trotzdem."
+        >
           {(id) => <textarea id={id} className="field min-h-20" maxLength={500} value={hint} onChange={(e) => setHint(e.target.value)} />}
         </Field>
       </div>
@@ -110,8 +159,8 @@ function ProduceDialog({ onClose, parent }: { onClose: () => void; parent?: Soci
 }
 
 // ------------------------------------------------------------------ overview
-function Overview({ onOpen }: { onOpen: (id: string) => void }) {
-  const q = useQuery(() => api.social.status(), "social-overview", { topics: ["social", "task", "schedule"], pollMs: 5_000 });
+function Overview({ company, onOpen, onEdit }: { company: string; onOpen: (id: string) => void; onEdit: () => void }) {
+  const q = useQuery(() => api.social.status(company), `social-overview-${company}`, { topics: ["social", "task", "schedule"], pollMs: 5_000 });
   const act = useAction();
   const last = q.data?.last_video;
   const detail = useQuery(() => (last ? api.social.video(last.id) : Promise.resolve(null)), `social-last-${last?.id ?? "none"}`, { topics: ["social"] });
@@ -121,6 +170,14 @@ function Overview({ onOpen }: { onOpen: (id: string) => void }) {
   return (
     <div className="mx-auto grid max-w-[68rem] grid-cols-1 gap-4 px-6 py-5 lg:grid-cols-[1fr_22rem]">
       <div className="flex min-w-0 flex-col gap-4">
+        {st.company.missing.length > 0 && (
+          <div role="status" className="plate flex items-start gap-3 border-ember/40 p-4 text-sm">
+            <p className="flex-1 text-ink">
+              Profil „{st.company.name}“ ist unvollständig – es fehlt: {st.company.missing.join(", ")}. Erst danach entstehen Videos.
+            </p>
+            <Button size="sm" variant="ghost" onClick={onEdit}>Profil bearbeiten</Button>
+          </div>
+        )}
         {!st.dependencies.ok && st.dependencies.ok !== null && (
           <div role="alert" className="plate border-alarm/40 p-4">
             <div className="flex items-start gap-3">
@@ -149,7 +206,7 @@ function Overview({ onOpen }: { onOpen: (id: string) => void }) {
                  actions={last && <Button size="sm" variant="ghost" onClick={() => onOpen(last.id)}>In der Bibliothek</Button>}>
           {!last && (
             <EmptyState icon={<Clapperboard className="size-6" />} title="Noch kein Video.">
-              Das erste Video entsteht zur geplanten Zeit – oder sofort mit „Jetzt produzieren“.
+              Das erste Video von {st.company.name} entsteht zur geplanten Zeit – oder sofort mit „Jetzt produzieren“.
             </EmptyState>
           )}
           {last && (
@@ -178,7 +235,7 @@ function Overview({ onOpen }: { onOpen: (id: string) => void }) {
         </Section>
       </div>
       <div className="flex flex-col gap-4">
-        <Section title="Aufgabe" meta="PJE Systems Daily Social Video">
+        <Section title="Aufgabe" meta={`${st.company.name} Daily Social Video`}>
           <div className="p-4">
             <KeyValue
               rows={[
@@ -187,8 +244,8 @@ function Overview({ onOpen }: { onOpen: (id: string) => void }) {
                 ["Nächstes Video", sched.enabled ? formatDateTime(sched.next_run_at) : "–"],
                 ["Letzter Lauf", sched.last_run_at ? `${formatRelative(sched.last_run_at)}${sched.last_status ? ` · ${sched.last_status}` : ""}` : "nie"],
                 ["Abhängigkeiten", <StatusText key="d" tone={dependencyTone(st.dependencies)}>{st.dependencies.ok ? "bereit" : st.dependencies.ok === null ? "wird geprüft" : "fehlen"}</StatusText>],
-                ["E-Mail", st.settings.email_enabled ? `an ${st.settings.email_recipient}` : "aus"],
-                ["Autopost", st.settings.autopost_enabled ? "an (nur verbundene Plattformen)" : "aus"],
+                ["E-Mail", st.settings.email_enabled ? (st.settings.recipients.length ? `an ${st.settings.recipients.join(", ")}` : "keine Empfänger") : "aus"],
+                ["Autopost", st.settings.autopost_enabled ? "an (nur Konten des Unternehmens)" : "aus"],
               ]}
             />
           </div>
@@ -253,8 +310,8 @@ function Player({ video }: { video: Pick<SocialVideo, "id" | "status" | "file_na
 }
 
 // ------------------------------------------------------------------ library
-function Library({ selected, onSelect }: { selected: string | null; onSelect: (id: string) => void }) {
-  const list = useQuery(() => api.social.videos(), "social-videos", { topics: ["social"] });
+function Library({ company, selected, onSelect }: { company: string; selected: string | null; onSelect: (id: string) => void }) {
+  const list = useQuery(() => api.social.videos(60, company), `social-videos-${company}`, { topics: ["social"] });
   const videos = useMemo(() => list.data?.videos ?? [], [list.data]);
   const current = selected ?? videos[0]?.id ?? null;
   if (list.loading) return <div className="p-8"><Skeleton rows={6} /></div>;
@@ -295,7 +352,7 @@ function Library({ selected, onSelect }: { selected: string | null; onSelect: (i
 
 function VideoDetail({ id, onSelect }: { id: string; onSelect: (id: string) => void }) {
   const q = useQuery(() => api.social.video(id), `social-video-${id}`, { topics: ["social"] });
-  const platforms = useQuery(() => api.social.platforms(), "social-platforms", { topics: ["connector", "social"] });
+  const platforms = useQuery(() => api.social.platforms(), "social-platforms-video", { topics: ["connector", "social"] });
   const act = useAction();
   const pushToast = useApp((s) => s.pushToast);
   const [regen, setRegen] = useState(false);
@@ -323,7 +380,7 @@ function VideoDetail({ id, onSelect }: { id: string; onSelect: (id: string) => v
             <Button size="sm" icon={<Download className="size-3.5" />} busy={act.busy === "dl"} onClick={download}>MP4</Button>
             <Button size="sm" icon={<RefreshCw className="size-3.5" />} onClick={() => setRegen(true)}>Neu generieren</Button>
             <Button size="sm" icon={<Mail className="size-3.5" />} busy={act.busy === "mail"}
-                    onClick={() => void act.run("mail", () => api.social.email(v.id), "E-Mail an Sir und Bagy gesendet").then(q.refetch)}>E-Mail</Button>
+                    onClick={() => void act.run("mail", () => api.social.email(v.id), "E-Mail an die Empfängerliste gesendet").then(q.refetch)}>E-Mail</Button>
             <Button size="sm" icon={<Link2 className="size-3.5" />} busy={act.busy === "link"}
                     onClick={() => void act.run("link", () => api.social.link(v.id, 24)).then((r) => r && (r.url ? copy(r.url, "Download-Link (24 h)") : pushToast({ tone: "warn", title: "Kein öffentlicher Link", body: "server.public_base_url bzw. social_media.public_base_url ist nicht gesetzt." })))}>
               Link
@@ -333,6 +390,7 @@ function VideoDetail({ id, onSelect }: { id: string; onSelect: (id: string) => v
         <KeyValue
           rows={[
             ["Status", <StatusText key="s" tone={videoTone(v)}>{videoStatusLabel(v)}</StatusText>],
+            ["Unternehmen", v.company_name ?? v.company_id],
             ["Erstellt", formatDateTime(v.created_at)],
             ["Kategorie", `${v.category} · ${CATEGORY_LABEL[v.category] ?? ""}`],
             ["Ton / Farbe", `${v.tone} · ${v.palette}`],
@@ -345,6 +403,7 @@ function VideoDetail({ id, onSelect }: { id: string; onSelect: (id: string) => v
         <div>
           <h2 className="type-title text-[1.05rem] text-ink">{v.title || "Ohne Titel"}</h2>
           {v.hook && <p className="mt-1 text-sm text-ink-dim">Hook: „{v.hook}“</p>}
+          {typeof v.concept.hint === "string" && v.concept.hint && <p className="mt-1 text-sm text-ink-dim">Vorgabe: „{v.concept.hint}“</p>}
           {v.concept.summary && <p className="mt-2 text-sm text-ink">{v.concept.summary}</p>}
           {v.error && <p className="mt-2 text-sm text-alarm">{v.error}</p>}
           {v.parent_id && <button className="mt-1 text-xs text-arc hover:underline" onClick={() => onSelect(v.parent_id!)}>Ersetzt ein früheres Video</button>}
@@ -478,13 +537,13 @@ function ManualDialog({ video, platform, onClose, onDone }: { video: SocialVideo
 }
 
 // ------------------------------------------------------------------ automation
-function Automation() {
-  const q = useQuery(() => api.social.settings(), "social-settings", { topics: ["social", "schedule"] });
+function Automation({ company }: { company: string }) {
+  const q = useQuery(() => api.social.settings(company), `social-settings-${company}`, { topics: ["social", "schedule"] });
   const s = q.data;
   if (q.loading) return <div className="p-8"><Skeleton rows={6} /></div>;
   if (q.error || !s) return <div className="p-8"><ErrorState message={q.error ?? "Fehler"} onRetry={q.refetch} /></div>;
   // the form starts from the saved values; a change on the Core (another device) remounts it
-  const key = [s.schedule.time, s.publish_time, s.email_recipient, s.hint].join("|");
+  const key = [s.company_id, s.schedule.time, s.publish_time, s.recipients.join(","), s.hint].join("|");
   return <AutomationForm key={key} s={s} onSaved={(r) => q.setData(() => r)} />;
 }
 
@@ -492,15 +551,17 @@ function AutomationForm({ s, onSaved }: { s: SocialSettings; onSaved: (s: Social
   const act = useAction();
   const [time, setTime] = useState(s.schedule.time);
   const [publishTime, setPublishTime] = useState(s.publish_time ?? "");
-  const [recipient, setRecipient] = useState(s.email_recipient);
+  const [recipients, setRecipients] = useState(s.recipients.join(", "));
   const [hint, setHint] = useState(s.hint);
   const save = (body: Parameters<typeof api.social.saveSettings>[0], msg = "Gespeichert") =>
-    void act.run("save", () => api.social.saveSettings(body), msg).then((r) => r && onSaved(r));
-  const thirdParty = recipient.trim().toLowerCase() !== s.owner_email.toLowerCase();
+    void act.run("save", () => api.social.saveSettings({ ...body, company: s.company_id }), msg).then((r) => r && onSaved(r));
+  const list = splitList(recipients);
+  const invalid = list.filter((r) => !validEmail(r));
+  const thirdParty = list.filter((r) => r.toLowerCase() !== s.owner_email.toLowerCase());
 
   return (
     <div className="mx-auto flex max-w-[44rem] flex-col gap-4 px-6 py-5">
-      <Section title="Tägliche Produktion" meta="Zeitplan „PJE Systems Daily Social Video“">
+      <Section title="Tägliche Produktion" meta={`Zeitplan dieses Unternehmens`}>
         <div className="flex flex-col gap-4 p-4 text-sm">
           <Row label="Täglich automatisch produzieren" hint="Ein Video pro Tag. Verpasste Läufe holt Jarvis nach, aber nur am selben Tag.">
             <Toggle label="Tägliche Produktion" checked={s.schedule.enabled} onChange={(v) => save({ daily_enabled: v }, v ? "Tägliche Produktion an" : "Tägliche Produktion pausiert")} />
@@ -511,10 +572,10 @@ function AutomationForm({ s, onSaved }: { s: SocialSettings; onSaved: (s: Social
               <Button size="sm" disabled={!validTime(time) || time === s.schedule.time} onClick={() => save({ production_time: time })}>Übernehmen</Button>
             </div>
           </Row>
-          <Row label="Voiceover (lokale Jarvis-Stimme)" hint="Standard aus. Nutzt die vorhandene Sprachausgabe von Jarvis.">
+          <Row label="Voiceover (lokale Jarvis-Stimme)" hint="Gilt für alle Unternehmen. Standard aus. Nutzt die vorhandene Sprachausgabe von Jarvis.">
             <Toggle label="Voiceover" checked={s.voiceover} onChange={(v) => save({ voiceover: v })} />
           </Row>
-          <Field label="Kreativer Wunsch für die nächsten Videos (optional)" hint="Wird als Hinweis an die Ideenfindung gegeben; Regeln gegen Wiederholung gelten weiter.">
+          <Field label="Kreativer Wunsch für die nächsten Videos (optional)" hint="Gilt für die täglichen Videos dieses Unternehmens, solange beim Produzieren nichts anderes eingetragen wird; hat Vorrang vor den Standardwerten des Profils. Regeln gegen Wiederholung gelten weiter.">
             {(id) => (
               <div className="flex gap-1.5">
                 <input id={id} className="field flex-1" maxLength={500} value={hint} onChange={(e) => setHint(e.target.value)} placeholder="z. B. mehr Formate mit echtem Ablauf" />
@@ -526,14 +587,23 @@ function AutomationForm({ s, onSaved }: { s: SocialSettings; onSaved: (s: Social
       </Section>
       <Section title="E-Mail">
         <div className="flex flex-col gap-4 p-4 text-sm">
-          <Row label="Video täglich per E-Mail schicken" hint="Über die Gmail-Anbindung (Connectoren › Google). MP4 im Anhang, sonst ein Download-Link.">
+          <Row label="Video täglich per E-Mail schicken" hint="Gilt für alle Unternehmen. Über die Gmail-Anbindung (Connectoren › Google). MP4 im Anhang, sonst ein Download-Link.">
             <Toggle label="E-Mail-Versand" checked={s.email_enabled} onChange={(v) => save({ email_enabled: v })} />
           </Row>
-          <Field label="Empfänger" hint={thirdParty ? "Nicht Sirs Adresse: jeder Versand braucht dann eine Freigabe." : "Sirs eigene Adresse – Versand ohne tägliche Freigabe."}>
+          <Field
+            label="Empfängerliste dieses Unternehmens"
+            hint={
+              invalid.length
+                ? `Ungültig: ${invalid.join(", ")}`
+                : thirdParty.length
+                  ? "Je Empfänger eine eigene Mail. Adressen außer Sirs eigener und der freigegebenen Liste (config: social_media.video_recipients) brauchen je Versand eine Freigabe."
+                  : "Sirs eigene Adresse – Versand ohne tägliche Freigabe."
+            }
+          >
             {(id) => (
               <div className="flex gap-1.5">
-                <input id={id} type="email" className="field flex-1" value={recipient} onChange={(e) => setRecipient(e.target.value)} />
-                <Button size="sm" disabled={recipient === s.email_recipient} onClick={() => save({ email_recipient: recipient })}>Speichern</Button>
+                <input id={id} className="field flex-1" value={recipients} placeholder="sir@example.com, partner@example.com" onChange={(e) => setRecipients(e.target.value)} />
+                <Button size="sm" disabled={!!invalid.length || list.join(",") === s.recipients.join(",")} onClick={() => save({ recipients: list })}>Speichern</Button>
               </div>
             )}
           </Field>
@@ -541,10 +611,10 @@ function AutomationForm({ s, onSaved }: { s: SocialSettings; onSaved: (s: Social
       </Section>
       <Section title="Veröffentlichung">
         <div className="flex flex-col gap-4 p-4 text-sm">
-          <Row label="Autopost" hint="Standard aus. Veröffentlicht wird nur auf verbundenen und einzeln aktivierten Plattformen – und jede Veröffentlichung läuft über die Freigaben.">
+          <Row label="Autopost für dieses Unternehmen" hint="Standard aus. Veröffentlicht wird nur über die Konten dieses Unternehmens, die verbunden und einzeln aktiviert sind – und jede Veröffentlichung läuft über die Freigaben.">
             <Toggle label="Autopost" checked={s.autopost_enabled} onChange={(v) => save({ autopost_enabled: v })} />
           </Row>
-          <Row label="Veröffentlichungszeit (optional)" hint="Leer = direkt nach der Produktion.">
+          <Row label="Veröffentlichungszeit (optional)" hint="Gilt für alle Unternehmen. Leer = direkt nach der Produktion.">
             <div className="flex gap-1.5">
               <input type="time" aria-label="Veröffentlichungszeit" className="field w-28 type-data" value={publishTime} onChange={(e) => setPublishTime(e.target.value)} />
               <Button size="sm" disabled={(publishTime || null) === s.publish_time || (!!publishTime && !validTime(publishTime))} onClick={() => save({ publish_time: publishTime })}>Übernehmen</Button>
@@ -568,17 +638,249 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
   );
 }
 
+// ------------------------------------------------------------------ companies
+const COLOR_FIELDS: { key: ColorKey; label: string; fallback: string }[] = [
+  { key: "accent", label: "Akzent", fallback: "#2651f0" },
+  { key: "ink", label: "Dunkel", fallback: "#0b0c0e" },
+  { key: "canvas", label: "Hell", fallback: "#e3e5e8" },
+];
+
+function Companies({ current, companies, onPick, onChanged }: { current: string; companies: Company[]; onPick: (id: string) => void; onChanged: () => void }) {
+  const [editing, setEditing] = useState<string | "new">(current);
+  const [deleting, setDeleting] = useState<Company | null>(null);
+  const act = useAction();
+  const company = editing === "new" ? null : companies.find((c) => c.id === editing) ?? null;
+  return (
+    <div className="grid h-full grid-cols-[16rem_1fr]">
+      <div className="flex flex-col gap-2 overflow-y-auto border-r border-seam p-2">
+        <ul className="flex flex-col gap-px" aria-label="Unternehmen">
+          {companies.map((c) => (
+            <li key={c.id}>
+              <button
+                onClick={() => setEditing(c.id)}
+                aria-current={c.id === editing}
+                className={`flex w-full flex-col gap-0.5 rounded-md px-3 py-2 text-left transition-colors ${c.id === editing ? "bg-plate-hi" : "hover:bg-plate"}`}
+              >
+                <span className="flex items-center gap-2 text-sm text-ink">
+                  <span className="size-2.5 shrink-0 rounded-full" style={{ background: c.colors.accent ?? "#2651f0" }} aria-hidden />
+                  {c.name}
+                </span>
+                <span className="text-2xs text-ink-faint">
+                  {c.id === current ? "aktiv · " : ""}
+                  {c.missing.length ? `unvollständig (${c.missing.length})` : c.schedule?.enabled ? `täglich ${c.schedule.time}` : "täglich pausiert"}
+                  {c.autopost ? " · Autopost" : ""}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+        <Button size="sm" variant="ghost" icon={<Plus className="size-3.5" />} onClick={() => setEditing("new")}>Unternehmen hinzufügen</Button>
+      </div>
+      <div className="min-w-0 overflow-y-auto">
+        <CompanyForm
+          key={company ? `${company.id}-${company.updated_at ?? ""}` : "new"}
+          company={company}
+          active={company?.id === current}
+          onActivate={company ? () => onPick(company.id) : undefined}
+          onDelete={company && companies.length > 1 ? () => setDeleting(company) : undefined}
+          onSaved={(c) => {
+            onChanged();
+            setEditing(c.id);
+          }}
+        />
+      </div>
+      {deleting && (
+        <Dialog
+          open
+          tone="danger"
+          onClose={() => setDeleting(null)}
+          title={`„${deleting.name}“ löschen?`}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setDeleting(null)}>Abbrechen</Button>
+              <Button
+                variant="danger"
+                busy={act.busy === "del"}
+                onClick={() =>
+                  void act.run("del", () => api.social.deleteCompany(deleting.id), "Unternehmen gelöscht").then((r) => {
+                    if (!r) return;
+                    setDeleting(null);
+                    setEditing(r.active);
+                    onChanged();
+                  })
+                }
+              >
+                Löschen
+              </Button>
+            </>
+          }
+        >
+          <p>Das Profil und sein täglicher Zeitplan werden gelöscht. Bereits produzierte Videos bleiben in der Bibliothek.</p>
+        </Dialog>
+      )}
+    </div>
+  );
+}
+
+function CompanyForm({
+  company,
+  active,
+  onActivate,
+  onDelete,
+  onSaved,
+}: {
+  company: Company | null;
+  active: boolean;
+  onActivate?: () => void;
+  onDelete?: () => void;
+  onSaved: (c: Company) => void;
+}) {
+  const act = useAction();
+  const uptik = useQuery(() => api.uptik.accounts(), "social-uptik-accounts", { topics: ["connector"] });
+  const [f, setF] = useState(() => ({
+    name: company?.name ?? "",
+    description: company?.description ?? "",
+    audience: company?.audience ?? "",
+    website: company?.website ?? "",
+    cta_button: company?.cta_button ?? "",
+    offer: company?.offer ?? "",
+    price: company?.price ?? "",
+    tone: company?.tone ?? "",
+    hint: company?.hint ?? "",
+    hashtags: (company?.hashtags ?? []).join(" "),
+    recipients: (company?.recipients ?? []).join(", "),
+    colors: { ...company?.colors } as Partial<Record<ColorKey, string>>,
+    accounts: { instagram: "", facebook: "", tiktok: "", youtube: "", ...company?.accounts } as Record<Platform, string>,
+    uptik_accounts: company?.uptik_accounts ?? [],
+    autopost: company?.autopost ?? false,
+    official_api: company?.official_api ?? false,
+  }));
+  const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((x) => ({ ...x, [k]: v }));
+  const recipients = splitList(f.recipients);
+  const badMail = recipients.filter((r) => !validEmail(r));
+  const badColor = COLOR_FIELDS.filter(({ key }) => f.colors[key] && !validHex(f.colors[key]!));
+  const body: CompanyInput = {
+    ...f,
+    hashtags: f.hashtags.split(/[\s,]+/).filter(Boolean),
+    recipients,
+    colors: Object.fromEntries(COLOR_FIELDS.map(({ key }) => [key, f.colors[key] ?? ""])),
+  };
+  const save = () =>
+    void act
+      .run("save", () => (company ? api.social.updateCompany(company.id, body) : api.social.createCompany(body)), company ? "Gespeichert" : "Unternehmen angelegt")
+      .then((r) => r && onSaved(r));
+  const text = (k: "name" | "description" | "audience" | "website" | "cta_button" | "offer" | "price" | "tone" | "hint", label: string, hint?: string, area = false, max = 200) => (
+    <Field label={label} hint={hint}>
+      {(id) =>
+        area ? (
+          <textarea id={id} className="field min-h-16" maxLength={max} value={f[k]} onChange={(e) => set(k, e.target.value)} />
+        ) : (
+          <input id={id} className="field" maxLength={max} value={f[k]} onChange={(e) => set(k, e.target.value)} />
+        )
+      }
+    </Field>
+  );
+
+  return (
+    <div className="mx-auto flex max-w-[46rem] flex-col gap-4 px-6 py-5">
+      <div className="flex items-center gap-2">
+        <h2 className="type-title flex-1 text-[1.05rem] text-ink">{company ? company.name : "Neues Unternehmen"}</h2>
+        {company && !active && onActivate && <Button size="sm" variant="ghost" onClick={onActivate}>Als aktiv wählen</Button>}
+        {company && active && <Tag tone="ok">aktiv</Tag>}
+        {onDelete && <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} onClick={onDelete}>Löschen</Button>}
+      </div>
+      {company?.missing.length ? <p className="text-sm text-ember">Für Videos fehlt noch: {company.missing.join(", ")}.</p> : null}
+      {company?.brand_file && <p className="text-xs text-ink-faint">Belegte Fakten, Claims und Referenzen kommen zusätzlich aus config/social/{company.brand_file}.</p>}
+      <Section title="Marke">
+        <div className="flex flex-col gap-3 p-4 text-sm">
+          {text("name", "Name", undefined, false, 60)}
+          {text("description", "Beschreibung / Positionierung", "Was das Unternehmen ist und wofür es steht – nur Belegtes.", true, 400)}
+          {text("audience", "Zielgruppe", undefined, false, 300)}
+          <div className="grid grid-cols-2 gap-3">
+            {text("website", "Website", "Steht auf der Endkarte, z. B. pje-systems.de", false, 60)}
+            {text("cta_button", "CTA-Button", "z. B. „Projekt anfragen“", false, 22)}
+          </div>
+          <div className="grid grid-cols-[1fr_10rem] gap-3">
+            {text("offer", "Standard-Angebot", "Nur Fallback: eine Vorgabe beim Produzieren hat Vorrang.")}
+            {text("price", "Standardpreis", "z. B. 499 €", false, 40)}
+          </div>
+          <div className="flex flex-wrap gap-4">
+            {COLOR_FIELDS.map(({ key, label, fallback }) => (
+              <label key={key} className="flex items-center gap-2 text-xs text-ink-dim">
+                <input type="color" aria-label={`Farbe ${label}`} className="h-8 w-10 cursor-pointer rounded border border-seam bg-transparent" value={validHex(f.colors[key] ?? "") ? f.colors[key] : fallback} onChange={(e) => set("colors", { ...f.colors, [key]: e.target.value })} />
+                <input className="field w-24 type-data" value={f.colors[key] ?? ""} placeholder={fallback} onChange={(e) => set("colors", { ...f.colors, [key]: e.target.value.trim() })} />
+                {label}
+              </label>
+            ))}
+          </div>
+          {badColor.length > 0 && <p className="text-xs text-alarm">Farben als Hex-Wert angeben, z. B. #2651f0.</p>}
+          {text("tone", "Tonalität", "Wie das Unternehmen spricht (Du/Sie, Stil, Tabus).", true, 400)}
+          <Field label="Hashtags" hint="Leerzeichen- oder kommagetrennt; Vorschläge für die Captions.">
+            {(id) => <input id={id} className="field" value={f.hashtags} placeholder="#Webdesign #Wolnzach" onChange={(e) => set("hashtags", e.target.value)} />}
+          </Field>
+          {text("hint", "Ständiger Themenwunsch (optional)", "Gilt für die täglichen Videos, solange beim Produzieren nichts eingetragen wird.", false, 500)}
+        </div>
+      </Section>
+      <Section title="Konten & Veröffentlichung">
+        <div className="flex flex-col gap-3 p-4 text-sm">
+          <div className="grid grid-cols-2 gap-3">
+            {PLATFORMS.map((pf) => (
+              <Field key={pf} label={`Ziel-Konto ${PLATFORM_LABEL[pf]}`}>
+                {(id) => <input id={id} className="field" maxLength={80} placeholder="@konto" value={f.accounts[pf]} onChange={(e) => set("accounts", { ...f.accounts, [pf]: e.target.value })} />}
+              </Field>
+            ))}
+          </div>
+          <div>
+            <p className="text-ink">UpTik-Konten dieses Unternehmens</p>
+            <p className="mt-0.5 text-xs text-ink-faint">Nur diese Konten posten seine Videos automatisch (mit Freigabe). Ein Konto gehört zu genau einem Unternehmen.</p>
+            {uptik.error && <p className="mt-1 text-xs text-ink-faint">UpTik ist nicht verfügbar ({uptik.error}).</p>}
+            <ul className="mt-2 flex flex-col gap-1">
+              {(uptik.data ?? []).map((a) => (
+                <li key={a.id}>
+                  <label className="flex items-center gap-2 text-xs text-ink-dim">
+                    <input
+                      type="checkbox"
+                      checked={f.uptik_accounts.includes(a.id) || f.uptik_accounts.includes(a.label)}
+                      onChange={(e) => set("uptik_accounts", e.target.checked ? [...f.uptik_accounts, a.id] : f.uptik_accounts.filter((x) => x !== a.id && x !== a.label))}
+                    />
+                    {a.platform_label} · {a.label}{a.handle ? ` (${a.handle})` : ""}
+                  </label>
+                </li>
+              ))}
+              {uptik.data?.length === 0 && <li className="text-xs text-ink-faint">Noch keine UpTik-Konten (Connector › UpTik).</li>}
+            </ul>
+          </div>
+          <Row label="Offizielle Plattform-Konten (Connector-Tab) gehören diesem Unternehmen" hint="Nur dann veröffentlicht Jarvis seine Videos über Instagram/Facebook/TikTok/YouTube-APIs.">
+            <Toggle label="Offizielle Plattform-Konten" checked={f.official_api} onChange={(v) => set("official_api", v)} />
+          </Row>
+          <Row label="Autopost" hint="Standard aus. Jede Veröffentlichung läuft über die Freigaben.">
+            <Toggle label="Autopost" checked={f.autopost} onChange={(v) => set("autopost", v)} />
+          </Row>
+          <Field label="Empfängerliste für fertige Videos" hint={badMail.length ? `Ungültig: ${badMail.join(", ")}` : "Kommagetrennt. Adressen außer Sirs eigener und der freigegebenen Liste brauchen je Versand eine Freigabe."}>
+            {(id) => <input id={id} className="field" value={f.recipients} onChange={(e) => set("recipients", e.target.value)} />}
+          </Field>
+        </div>
+      </Section>
+      <div className="flex justify-end gap-2">
+        <Button variant="primary" busy={act.busy === "save"} disabled={!f.name.trim() || badMail.length > 0 || badColor.length > 0} onClick={save}>
+          {company ? "Speichern" : "Anlegen"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ connector
 const PLATFORM_NOTE: Record<Platform, string> = {
   instagram: "Instagram-Business- oder Creator-Konto, verknüpft mit einer Facebook-Seite; Meta-App mit instagram_content_publish (App-Review für den Livebetrieb).",
-  facebook: "Facebook-Seite von PJE Systems; dieselbe Meta-App und Anmeldung wie Instagram (pages_manage_posts).",
+  facebook: "Facebook-Seite des Unternehmens; dieselbe Meta-App und Anmeldung wie Instagram (pages_manage_posts).",
   tiktok: "TikTok-Developer-App mit Content Posting API. Ohne Audit durch TikTok nur private Posts (SELF_ONLY).",
   youtube: "YouTube Data API v3 im Google-Cloud-Projekt aktivieren. Ungeprüfte Projekte laden nur privat hoch; 1 600 Quota-Einheiten je Upload.",
 };
 
-function Connector() {
-  const q = useQuery(() => api.social.platforms(), "social-platforms", { topics: ["connector", "social"] });
-  const settings = useQuery(() => api.social.settings(), "social-settings", { topics: ["social"] });
+function Connector({ company }: { company: string }) {
+  const q = useQuery(() => api.social.platforms(company), `social-platforms-${company}`, { topics: ["connector", "social"] });
+  const settings = useQuery(() => api.social.settings(company), `social-settings-${company}`, { topics: ["social"] });
   const act = useAction();
   const setView = useApp((s) => s.setView);
   if (q.loading || settings.loading) return <div className="p-8"><Skeleton rows={6} /></div>;
@@ -588,10 +890,10 @@ function Connector() {
     <div className="mx-auto flex max-w-[48rem] flex-col gap-4 px-6 py-5">
       <div className="plate flex items-start gap-4 p-4 text-sm">
         <div className="min-w-0 flex-1">
-          <p className="text-ink">Autopost global</p>
-          <p className="mt-0.5 text-xs text-ink-faint">Aus: Videos werden nur gespeichert und gemailt. An: nur Plattformen, die verbunden UND einzeln aktiviert sind; jede Veröffentlichung braucht eine Freigabe (oder eine eigene Regel unter Freigaben).</p>
+          <p className="text-ink">Autopost dieses Unternehmens</p>
+          <p className="mt-0.5 text-xs text-ink-faint">Aus: Videos werden nur gespeichert und gemailt. An: nur Plattformen, die verbunden UND einzeln aktiviert sind; jede Veröffentlichung braucht eine Freigabe (oder eine eigene Regel unter Freigaben). Die hier verbundenen Konten gehören den Unternehmen mit „offizielle Plattform-Konten“ im Profil; andere posten über ihre UpTik-Konten.</p>
         </div>
-        {s && <Toggle label="Autopost global" checked={s.autopost_enabled} onChange={(v) => void act.run("auto", () => api.social.saveSettings({ autopost_enabled: v })).then(() => { void settings.refetch(); void q.refetch(); })} />}
+        {s && <Toggle label="Autopost dieses Unternehmens" checked={s.autopost_enabled} onChange={(v) => void act.run("auto", () => api.social.saveSettings({ autopost_enabled: v, company })).then(() => { void settings.refetch(); void q.refetch(); })} />}
       </div>
       {q.data?.map((p) => (
         <article key={p.platform} className="plate flex flex-col gap-3 p-4 text-sm">

@@ -1,6 +1,7 @@
-# PJE Systems – Markenbasis für die täglichen Social-Media-Videos (jarvis.social).
+# PJE Systems – Faktenbasis des Unternehmensprofils „PJE Systems“ für die Social-Media-Videos (jarvis.social).
 # Quelle: https://pje-systems.de (Startseite, CSS-Tokens, Logo, icon.svg), gelesen am 2026-10-28.
-# Nur was hier steht, darf ein Video behaupten. Neue Fakten/Angebote/Referenzen nur mit Quelle eintragen.
+# Nur was hier, im Profil (App › Social Media › Unternehmen) oder in Sirs Vorgabe beim Produzieren steht, darf ein
+# Video behaupten. Neue Fakten/Angebote/Referenzen nur mit Quelle eintragen.
 company: PJE Systems
 owner: Paul Höflich
 location: Wolnzach
@@ -50,7 +51,8 @@ facts:
     kind: claim
     source: pje-systems.de, „Ihre Website gehört Ihnen“ (2026-10-28)
 # Angebote: nur Einträge mit active: true dürfen in Videos/Captions genannt werden (Kategorie E).
-# Aktionen wie „299 €“ hier mit Zeitraum eintragen – sonst nennt Jarvis sie nicht.
+# Dauerhafte Aktionen wie „299 €“ hier mit Zeitraum eintragen; für ein einzelnes Video reicht die Vorgabe beim
+# Produzieren („Angebot für 299 €“) – sie hat Vorrang vor diesen Standardwerten.
 offers:
   - id: website_fixed_price
     text: "Websites zum Festpreis ab 499 €, einmalig, kein Abo"

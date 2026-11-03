@@ -1,17 +1,17 @@
 // Shared building parts of the scenes: stage with safe area, headline with the brand dot, device frames, cursor.
 import type { CSSProperties, ReactNode } from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
-import { C, FONT, MONO, SAFE, useTheme } from "./brand";
+import { C, FONT, MONO, SAFE, accentRgba, useTheme } from "./brand";
 import { EASE_IN_OUT } from "./motion";
 
-/** Atmosphere behind every scene: a slow brand-blue light drifting across the frame plus fine grain, so no frame
+/** Atmosphere behind every scene: a slow light in the brand accent drifting across the frame plus fine grain, so no frame
  * is a flat fill. Subtle on purpose – it must never compete with the text. */
 function Ambient() {
   const frame = useCurrentFrame();
   const { durationInFrames } = useVideoConfig();
   const t = useTheme();
   const k = interpolate(frame, [0, durationInFrames], [0, 1], { easing: EASE_IN_OUT });
-  const glow = t.surface === "dark" ? "rgba(38,81,240,0.30)" : t.surface === "accent" ? "rgba(255,255,255,0.16)" : "rgba(38,81,240,0.10)";
+  const glow = t.surface === "dark" ? accentRgba(0.3) : t.surface === "accent" ? "rgba(255,255,255,0.16)" : accentRgba(0.1);
   const x = 20 + 60 * k;
   const y = 18 + 14 * Math.sin(k * Math.PI);
   return (
@@ -64,7 +64,7 @@ export function Stage({ children, style, center = true }: { children?: ReactNode
   );
 }
 
-/** Text with the accent full stop of pje-systems.de: a trailing "." is drawn in the accent colour. */
+/** Text with the accent full stop (motif of pje-systems.de): a trailing "." is drawn in the accent colour. */
 export function Dotted({ text, color }: { text: string; color?: string }) {
   const t = useTheme();
   if (!text.endsWith(".") || text.endsWith("..")) return <>{text}</>;

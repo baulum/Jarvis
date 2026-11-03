@@ -14,18 +14,20 @@ from sqlalchemy.exc import IntegrityError
 
 from jarvis.db import session_scope
 from jarvis.db.models import SocialPublication, SocialVideo
+from jarvis.social.companies import DEFAULT_ID
 from jarvis.social.variety import Past
 
 LOG_MAX = 80
 
 
 class AlreadyProduced(Exception):
-    """There already is an automatic video for this day (unique ``auto_date``)."""
+    """There already is an automatic video of this company for this day (unique ``company_id, auto_date``)."""
 
 
 def video_dict(v: SocialVideo, *, full: bool = True) -> dict[str, Any]:
     out: dict[str, Any] = {
         "id": str(v.id),
+        "company_id": v.company_id,
         "status": v.status,
         "stage": v.stage,
         "trigger": v.trigger,
@@ -106,9 +108,13 @@ class SocialRepo:
         async with session_scope() as s:
             return await s.get(SocialVideo, vid)
 
-    async def by_auto_date(self, day: str) -> SocialVideo | None:
+    async def by_auto_date(self, day: str, company_id: str = DEFAULT_ID) -> SocialVideo | None:
         async with session_scope() as s:
-            return (await s.execute(select(SocialVideo).where(SocialVideo.auto_date == day))).scalar_one_or_none()
+            return (
+                await s.execute(
+                    select(SocialVideo).where(SocialVideo.auto_date == day, SocialVideo.company_id == company_id)
+                )
+            ).scalar_one_or_none()
 
     async def update(self, vid: uuid.UUID, **fields: Any) -> None:
         async with session_scope() as s:
@@ -128,26 +134,40 @@ class SocialRepo:
             v.log = [*(v.log or []), entry][-LOG_MAX:]
             v.updated_at = datetime.now(UTC)
 
-    async def list_videos(self, limit: int = 50, offset: int = 0, status: str | None = None) -> list[SocialVideo]:
+    async def list_videos(
+        self, limit: int = 50, offset: int = 0, status: str | None = None, company_id: str | None = None
+    ) -> list[SocialVideo]:
         q = select(SocialVideo).order_by(SocialVideo.created_at.desc()).limit(limit).offset(offset)
         if status:
             q = q.where(SocialVideo.status == status)
+        if company_id:
+            q = q.where(SocialVideo.company_id == company_id)
         async with session_scope() as s:
             return list((await s.execute(q)).scalars())
 
-    async def count(self) -> dict[str, int]:
+    async def count(self, company_id: str | None = None) -> dict[str, int]:
+        q = select(SocialVideo.status, func.count()).group_by(SocialVideo.status)
+        if company_id:
+            q = q.where(SocialVideo.company_id == company_id)
         async with session_scope() as s:
-            rows = (await s.execute(select(SocialVideo.status, func.count()).group_by(SocialVideo.status))).all()
+            rows = (await s.execute(q)).all()
         return {str(k): int(n) for k, n in rows}
 
-    async def history(self, days: int = 45, now: datetime | None = None) -> list[Past]:
-        """Creative memory: every finished video of the last ``days`` days (newest first)."""
+    async def history(
+        self, days: int = 45, now: datetime | None = None, company_id: str = DEFAULT_ID
+    ) -> list[Past]:
+        """Creative memory of one company: its finished videos of the last ``days`` days (newest first). Every new
+        video has to differ from these – another company's videos do not count."""
         since = (now or datetime.now(UTC)) - timedelta(days=days)
         async with session_scope() as s:
             rows = (
                 await s.execute(
                     select(SocialVideo)
-                    .where(SocialVideo.status == "ready", SocialVideo.created_at >= since)
+                    .where(
+                        SocialVideo.status == "ready",
+                        SocialVideo.created_at >= since,
+                        SocialVideo.company_id == company_id,
+                    )
                     .order_by(SocialVideo.created_at.desc())
                 )
             ).scalars()
@@ -172,10 +192,16 @@ class SocialRepo:
             return out
 
     # ------------------------------------------------------------------ publications
-    async def publications(self, vid: uuid.UUID | None = None, limit: int = 50) -> list[SocialPublication]:
+    async def publications(
+        self, vid: uuid.UUID | None = None, limit: int = 50, company_id: str | None = None
+    ) -> list[SocialPublication]:
         q = select(SocialPublication).order_by(SocialPublication.updated_at.desc()).limit(limit)
         if vid is not None:
             q = q.where(SocialPublication.video_id == vid)
+        if company_id:
+            q = q.join(SocialVideo, SocialVideo.id == SocialPublication.video_id).where(
+                SocialVideo.company_id == company_id
+            )
         async with session_scope() as s:
             return list((await s.execute(q)).scalars())
 

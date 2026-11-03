@@ -127,5 +127,7 @@ async def test_manual_production_and_regenerate_start_tasks(social: SimpleNamesp
     await social.svc.produce(SYSTEM, hint="Etwas mit Countdown")
     parent = uuid.uuid4()
     await social.svc.produce(SYSTEM, parent_id=parent)
-    assert tasks.created[0]["params"] == {"trigger": "manual", "hint": "Etwas mit Countdown"}
+    assert tasks.created[0]["params"] == {
+        "trigger": "manual", "hint": "Etwas mit Countdown", "company": "pje-systems", "company_name": "PJE Systems",
+    }  # fmt: skip
     assert tasks.created[1]["params"]["trigger"] == "regenerate" and tasks.created[1]["params"]["parent_id"] == str(parent)

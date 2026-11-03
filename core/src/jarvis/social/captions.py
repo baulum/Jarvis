@@ -7,7 +7,8 @@ Limits (checked 2026-10-28, sources in docs/SOCIAL_MEDIA.md):
 * YouTube Shorts: title ≤ 100 characters, description ≤ 5 000 bytes, no ``<`` or ``>`` (rejected by the API);
   more than 60 hashtags make YouTube ignore all of them
 
-Our own rules on top: 3–5 hashtags (YouTube 2–5), a CTA in every caption, prices only from the brand file.
+Our own rules on top: 3–5 hashtags (YouTube 2–5), a CTA in every caption, prices only as allowed – Sir's input in
+the "Produzieren" field first (its price must then appear in every caption), else the company profile's offers.
 """
 
 from __future__ import annotations
@@ -15,6 +16,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Any
+
+from jarvis.social.prices import PRICE_RE, amount, prices_in
+
+__all__ = ["PRICE_RE", "prices_in"]
 
 PLATFORMS = ("instagram", "tiktok", "facebook", "youtube")
 LIMITS = {
@@ -24,9 +29,8 @@ LIMITS = {
     "youtube": {"title": 100, "description_bytes": 5000, "hashtags_max": 5},
 }
 HASHTAG_RE = re.compile(r"^#[0-9A-Za-zÄÖÜäöüß_]{2,40}$")
-PRICE_RE = re.compile(r"\d[\d.,]*\s?(?:€|euro\b|eur\b)", re.IGNORECASE)
-CTA_WORDS = ("anfrag", "pje-systems.de", "link", "schreib", "meld", "kontakt", "projekt", "termin", "dm", "nachricht")
-# promises nobody can check in a caption: never written by Jarvis on PJE's behalf
+CTA_WORDS = ("anfrag", "link", "schreib", "meld", "kontakt", "projekt", "termin", "dm", "nachricht", "demo")
+# promises nobody can check in a caption: never written by Jarvis on a company's behalf
 FORBIDDEN = ("garantiert", "100 % mehr", "platz 1", "nummer 1", "bestbewertet", "testsieger", "kostenlos", "gratis")
 
 CAPTIONS_SCHEMA: dict[str, Any] = {
@@ -69,17 +73,6 @@ def full_text(platform: str, entry: dict[str, Any]) -> str:
     return f"{body}\n\n{tags}".strip() if tags else body
 
 
-def _amount(price: str) -> str:
-    """ "1.499 €" → "1499", "499,00 €" → "499": compare amounts, not spellings."""
-    num = re.sub(r"[^\d.,]", "", price)
-    num = re.sub(r"[.,]00$", "", num)
-    return re.sub(r"\D", "", num)
-
-
-def prices_in(text: str) -> set[str]:
-    return set(PRICE_RE.findall(text))
-
-
 def utf16_len(text: str) -> int:
     return len(text.encode("utf-16-le")) // 2
 
@@ -102,9 +95,16 @@ def clean(captions: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def validate(captions: dict[str, Any], allowed_prices: set[str] | None = None) -> CaptionCheck:
+def validate(
+    captions: dict[str, Any],
+    allowed_prices: set[str] | None = None,
+    required_prices: list[str] | None = None,
+    website: str = "pje-systems.de",
+) -> CaptionCheck:
+    """``required_prices``: Sir's prices from the "Produzieren" field – every caption must name them."""
     problems: list[str] = []
-    allowed = {_amount(p) for p in (allowed_prices or set())}
+    allowed = {amount(p) for p in (allowed_prices or set())} | {amount(p) for p in required_prices or []}
+    cta_words = (*CTA_WORDS, website.lower()) if website else CTA_WORDS
     for platform in PLATFORMS:
         entry = captions.get(platform)
         if not isinstance(entry, dict):
@@ -135,36 +135,51 @@ def validate(captions: dict[str, Any], allowed_prices: set[str] | None = None) -
             if utf16_len(text) > lim["caption"]:
                 problems.append(f"{platform}: {utf16_len(text)} Zeichen – max. {lim['caption']}")
         body = (entry.get("text") or entry.get("description") or "").lower()
-        if not any(w in body for w in CTA_WORDS):
-            problems.append(f"{platform}: kein klarer CTA (z. B. „Projekt anfragen auf pje-systems.de“)")
+        if not any(w in body for w in cta_words):
+            problems.append(f"{platform}: kein klarer CTA (z. B. „Link im Profil“ oder die Website {website})")
         whole = (text + " " + entry.get("title", "")).lower()
         for word in FORBIDDEN:
             if word in whole:
                 problems.append(f"{platform}: „{word}“ ist ein unbelegtes Versprechen")
-        for price in PRICE_RE.findall(whole):
-            if _amount(price) not in allowed:
-                problems.append(f"{platform}: Preis „{price}“ steht nicht als gültiges Angebot in der Konfiguration")
+        shown = {amount(p) for p in prices_in(whole)}
+        for price in sorted(prices_in(whole)):
+            if amount(price) not in allowed:
+                hint = " – Sirs Vorgabe hat Vorrang" if required_prices else ""
+                problems.append(f"{platform}: Preis „{price}“ steht nicht als gültiges Angebot in der Konfiguration{hint}")
+        for price in required_prices or []:
+            if amount(price) not in shown:
+                problems.append(f"{platform}: Sirs Vorgabe {price} fehlt im Text – Preis aus der Vorgabe nennen")
     return CaptionCheck(not problems, problems)
 
 
-def prompt(
-    concept: dict[str, Any], script: str, brand: dict[str, Any], offers: list[str], problems: list[str] | None = None
-) -> str:
-    lines = [
-        "Schreibe Social-Media-Captions für ein 8–15-Sekunden-Werbevideo von PJE Systems (Webdesign aus Wolnzach).",
+def prompt(concept: dict[str, Any], script: str, brand: Any, today: Any = None, problems: list[str] | None = None) -> str:
+    """``brand``: ``jarvis.social.brand.Brand`` of the company, with Sir's input for this video (``with_hint``)."""
+    who = f"{brand.company} ({brand.description})" if brand.description else brand.company
+    tags = " ".join(brand.hashtags[:5]) or "#Webdesign #Wolnzach #Handwerk"
+    required = brand.required_prices()
+    lines = []
+    if brand.priority_block():
+        lines += [brand.priority_block(), ""]
+    lines += [
+        f"Schreibe Social-Media-Captions für ein 8–15-Sekunden-Werbevideo von {who}.",
         f"Video: {concept.get('title')} – {concept.get('summary')}",
         f"Hook: {concept.get('hook')}",
         f"Skript: {script}",
         f"Tonalität: {concept.get('tone')}",
-        f"Website/CTA: {brand.get('cta', {}).get('default_button', 'Projekt anfragen')} auf {brand.get('website', 'pje-systems.de')}",
-        "Gültige Angebote (nur diese Preise/Angebote nennen, sonst keine): " + ("; ".join(offers) or "keine"),
+        f"Website/CTA: {brand.cta_button} auf {brand.website}",
+        "Gültige Angebote (nur diese Preise/Angebote nennen, sonst keine): "
+        + ("; ".join(brand.active_offers(today)) or "keine"),
+    ]
+    if required:
+        lines.append(f"Preis dieses Videos (Vorgabe von Sir, in jeder Caption nennen): {' / '.join(required)}")
+    lines += [
         "Regeln:",
         "- Deutsch, du-Form, kurz und natürlich, wie ein Mensch schreibt; 1–3 passende Emojis, nicht mehr.",
         "- Jede Plattform eigener Text: Instagram (1–3 kurze Zeilen + CTA), TikTok (sehr kurz, locker),",
         "  Facebook (etwas erklärender, 2–3 Sätze), YouTube Shorts (Titel ≤ 70 Zeichen ohne Hashtags, Beschreibung 1–2 Sätze).",
-        "- 3–5 Hashtags je Plattform (YouTube 2–5), spezifisch statt generisch (z. B. #Webdesign #Wolnzach #Handwerk),",
+        f"- 3–5 Hashtags je Plattform (YouTube 2–5), spezifisch statt generisch (z. B. {tags}),",
         "  keine Hashtag-Wand, keine Hashtags im Fließtext.",
-        "- Klarer CTA in jedem Text (z. B. „Projekt anfragen auf pje-systems.de“ oder „Link im Profil“).",
+        f"- Klarer CTA in jedem Text (z. B. „{brand.cta_button} auf {brand.website}“ oder „Link im Profil“).",
         "- Keine erfundenen Zahlen, Kunden, Bewertungen, Referenzen, Ergebnisse oder Leistungsversprechen;",
         "  nicht „kostenlos/gratis/garantiert/Nummer 1“. Satire bleibt als Satire erkennbar.",
         "- Keine < oder > Zeichen.",

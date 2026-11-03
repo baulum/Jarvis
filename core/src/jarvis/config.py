@@ -417,11 +417,11 @@ class WhatsAppCfg(_Strict):
 
 
 class SocialMediaCfg(_Strict):
-    """Daily PJE Systems social video (jarvis.social): Remotion project, FFmpeg, library, e-mail.
+    """Daily social videos per company profile (jarvis.social): Remotion project, FFmpeg, library, e-mail.
 
-    Host-level options. What Sir switches in the app (daily production, time, e-mail, autopost …) lives in
-    ``<data_dir>/social-media.json``; the production time is the cron of the schedule "PJE Systems Daily Social
-    Video" in the normal scheduler."""
+    Host-level options. What Sir switches in the app lives in ``<data_dir>/social-media.json`` (global) and
+    ``<data_dir>/social-companies.json`` (profiles: brand, autopost, recipients …); the production time is the cron
+    of each company's schedule ("<Name> Daily Social Video") in the normal scheduler."""
 
     enabled: bool = True
     node_binary: str = "node"  # Node.js ≥ 20

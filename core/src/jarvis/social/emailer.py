@@ -1,4 +1,4 @@
-"""The daily e-mail to Sir: subject, branded HTML (inline CSS, table layout – renders in Gmail and Apple Mail,
+"""The daily e-mail to Sir and the company's recipients: subject, HTML in the company's look (inline CSS, table layout – renders in Gmail and Apple Mail,
 no remote images) and a plain-text fallback with the same content."""
 
 from __future__ import annotations
@@ -49,6 +49,12 @@ def _e(s: Any) -> str:
     return html.escape(str(s or ""))
 
 
+def short_name(company: str) -> str:
+    """ "PJE Systems" → "PJE" (an acronym first word stands for the company), "Apo HR" → "Apo HR"."""
+    words = company.split()
+    return words[0] if len(words) > 1 and words[0].isupper() and len(words[0]) >= 2 else company
+
+
 def build(
     video: dict[str, Any],
     *,
@@ -58,12 +64,16 @@ def build(
     link_hours: int,
     publications: list[dict[str, Any]],
     autopost_enabled: bool,
+    company: str = "PJE Systems",
+    accent: str = ACCENT,
 ) -> Mail:
     title = video.get("title") or "Social-Video"
     concept = video.get("concept") or {}
     captions = video.get("captions") or {}
     date_s = day.strftime("%d.%m.%Y")
-    subject = f"PJE Social · {date_s} · {title}"[:180]
+    subject = f"{short_name(company)} Social · {date_s} · {title}"[:180]
+    brand_accent = accent if len(accent) == 7 and accent.startswith("#") else ACCENT
+    mark, rest = [*company.split(" ", 1), ""][:2]
     probe = (video.get("qa") or {}).get("probe") or {}
     meta = f"{probe.get('width', 1080)}×{probe.get('height', 1920)} · {float(video.get('duration_s') or 0):.1f} s · {int(video.get('size') or 0) / 1048576:.1f} MB"
 
@@ -91,7 +101,7 @@ def build(
 
     # ------------------------------------------------------------------ text
     t = [
-        f"PJE Systems · Tagesvideo {date_s}",
+        f"{company} · Tagesvideo {date_s}",
         "",
         title,
         f"Kategorie {video.get('category', '')} ({CATEGORY_LABEL.get(video.get('category', ''), '')}) · Ton: {video.get('tone', '')}",
@@ -127,7 +137,7 @@ def build(
         return (
             f'<tr><td style="padding:18px 0;border-top:1px solid {LINE}">{head}{yt_title}'
             f'<div style="font:15px/1.5 {FONT};color:#2b2d33">{body}</div>'
-            f'<div style="font:14px/1.5 {MONO};color:{ACCENT};margin-top:8px">{tags}</div></td></tr>'
+            f'<div style="font:14px/1.5 {MONO};color:{brand_accent};margin-top:8px">{tags}</div></td></tr>'
         )
 
     status_rows = "".join(
@@ -136,7 +146,7 @@ def build(
         for name, st in status_lines
     )
     button = (
-        f'<a href="{_e(download_url)}" style="display:inline-block;background:{ACCENT};color:#fff;text-decoration:none;'
+        f'<a href="{_e(download_url)}" style="display:inline-block;background:{brand_accent};color:#fff;text-decoration:none;'
         f'font:600 15px/1 {FONT};padding:14px 22px;border-radius:999px">MP4 herunterladen →</a>'
         f'<div style="font:12px/1.5 {FONT};color:{SLATE};margin-top:8px">Link gültig {link_hours} Stunden.</div>'
         if download_url
@@ -148,12 +158,12 @@ def build(
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{CANVAS}"><tr><td align="center" style="padding:28px 12px">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:18px;overflow:hidden">
 <tr><td style="background:{INK};padding:26px 32px">
-<div style="font:800 26px/1 {FONT};letter-spacing:6px;color:#ffffff">PJE</div>
-<div style="font:500 10px/1 {FONT};letter-spacing:7px;color:#ffffff;margin-top:6px">SYSTEMS</div>
+<div style="font:800 26px/1 {FONT};letter-spacing:6px;color:#ffffff">{_e(mark.upper())}</div>
+<div style="font:500 10px/1 {FONT};letter-spacing:7px;color:#ffffff;margin-top:6px">{_e(rest.upper())}</div>
 <div style="font:12px/1.4 {MONO};color:#8fa6ff;margin-top:18px;letter-spacing:1px">TAGESVIDEO · {_e(date_s)}</div>
 </td></tr>
 <tr><td style="padding:30px 32px 6px">
-<div style="font:700 30px/1.1 {FONT};color:{INK};letter-spacing:-0.5px">{_e(title.rstrip("."))}<span style="color:{ACCENT}">.</span></div>
+<div style="font:700 30px/1.1 {FONT};color:{INK};letter-spacing:-0.5px">{_e(title.rstrip("."))}<span style="color:{brand_accent}">.</span></div>
 <div style="font:13px/1.5 {MONO};color:{SLATE};margin-top:10px">Kategorie {_e(video.get("category"))} · {_e(CATEGORY_LABEL.get(video.get("category", ""), ""))} · {_e(video.get("tone"))} · {_e(meta)}</div>
 <p style="font:16px/1.55 {FONT};color:#2b2d33;margin:18px 0 6px">{_e(concept.get("summary"))}</p>
 <p style="font:15px/1.5 {FONT};color:{SLATE};margin:0 0 18px">Hook: „{_e(concept.get("hook"))}“</p>

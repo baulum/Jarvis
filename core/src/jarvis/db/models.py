@@ -570,17 +570,20 @@ WHATSAPP_TABLES = [
 
 # --------------------------------------------------------------------------- social media (jarvis.social)
 class SocialVideo(Base):
-    """One produced (or failed) social video with its creative memory: concept, script, storyboard, components,
-    captions, QA report. ``auto_date`` (Europe/Berlin day) is unique: at most one automatic video per day, even
-    with two Core processes racing (the second INSERT fails)."""
+    """One produced (or failed) social video of one company profile (``company_id``, jarvis.social.companies) with
+    its creative memory: concept, script, storyboard, components, captions, QA report. ``(company_id, auto_date)``
+    (Europe/Berlin day) is unique: at most one automatic video per company and day, even with two Core processes
+    racing (the second INSERT fails)."""
 
     __tablename__ = "social_videos"
+    __table_args__ = (UniqueConstraint("company_id", "auto_date", name="uq_social_videos_company_auto_date"),)
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(String(60), default="pje-systems", index=True)
     status: Mapped[str] = mapped_column(String(20), default="producing", index=True)
     # producing | ready | failed
     stage: Mapped[str] = mapped_column(String(30), default="concept")  # concept|render|qa|captions|email|done
     trigger: Mapped[str] = mapped_column(String(20), default="manual")  # schedule | manual | regenerate
-    auto_date: Mapped[str | None] = mapped_column(String(10), unique=True)
+    auto_date: Mapped[str | None] = mapped_column(String(10))
     parent_id: Mapped[uuid.UUID | None] = mapped_column()  # regenerated from
     task_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
     title: Mapped[str] = mapped_column(String(200), default="")

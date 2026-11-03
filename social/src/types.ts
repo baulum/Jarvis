@@ -63,6 +63,13 @@ export interface Fact {
   label: string;
 }
 
+/** The company the video is for (Jarvis company profile): name, colours, optional logo files in public/. */
+export interface BrandInfo {
+  name?: string;
+  colors?: Partial<Record<"accent" | "ink" | "canvas" | "accent_deep" | "accent_on_dark" | "graphite", string>>;
+  logo?: { on_dark?: string; on_light?: string };
+}
+
 export interface Storyboard {
   version: 1;
   title: string;
@@ -71,8 +78,11 @@ export interface Storyboard {
   palette: Palette;
   satire?: boolean;
   scenes: Scene[];
-  /** Brand facts the `fact` component may show (filled in by the Core from config/social/brand.yaml). */
+  /** Brand facts the `fact` component may show (filled in by the Core from the company profile – Sir's price from
+   * the "Produzieren" field first, then config/social/brand.yaml). */
   facts?: Fact[];
+  /** Company of the video; missing = PJE Systems. */
+  brand?: BrandInfo;
 }
 
 export const FPS = 30;

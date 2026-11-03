@@ -2,7 +2,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'providers.dart';
 
-/// Social Media (daily PJE Systems video): data of /api/social and the pure helpers the screen uses.
+/// Social Media (daily video per company profile – PJE Systems, Apo HR …): data of /api/social and the pure helpers
+/// the screen uses.
 const socialPlatforms = ['instagram', 'facebook', 'tiktok', 'youtube'];
 
 const platformLabel = {
@@ -57,6 +58,20 @@ String captionText(String platform, Map<String, dynamic>? c) {
 
 bool validTime(String t) => RegExp(r'^([01]\d|2[0-3]):[0-5]\d$').hasMatch(t);
 
+bool validEmail(String a) => RegExp(r'^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$').hasMatch(a);
+
+bool validHex(String c) => RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(c);
+
+/// Comma/semicolon/line separated input → trimmed, non-empty entries.
+List<String> splitList(String raw) => raw.split(RegExp(r'[,;\n]')).map((x) => x.trim()).where((x) => x.isNotEmpty).toList();
+
+/// Labels of the profile fields a production still needs (the Core sends them as `missing`).
+List<String> missingFields(Map<String, dynamic> company) => ((company['missing'] as List?) ?? const []).map((e) => '$e').toList();
+
+/// Query string for one company (empty = the active profile on the Core).
+String companyQuery(String? company, {String sep = '?'}) =>
+    company == null || company.isEmpty ? '' : '${sep}company=${Uri.encodeQueryComponent(company)}';
+
 /// A bare, safe file name for the downloaded MP4 (the Core's name when it is one).
 String safeVideoName(Map<String, dynamic> v) {
   final name = v['file_name'];
@@ -67,12 +82,22 @@ String safeVideoName(Map<String, dynamic> v) {
 
 Map<String, dynamic> _map(Object? o) => (o as Map).cast<String, dynamic>();
 
+/// Company profiles and the active one (the default of Jarvis' tools and of this screen).
+final socialCompaniesProvider = FutureProvider.autoDispose<Map<String, dynamic>>((ref) async {
+  return _map(await ref.read(apiProvider).get('/api/social/companies'));
+});
+
+/// The company shown in the screen; null = the active profile on the Core.
+final socialCompanyProvider = StateProvider<String?>((ref) => null);
+
 final socialStatusProvider = FutureProvider.autoDispose<Map<String, dynamic>>((ref) async {
-  return _map(await ref.read(apiProvider).get('/api/social/status'));
+  final company = ref.watch(socialCompanyProvider);
+  return _map(await ref.read(apiProvider).get('/api/social/status${companyQuery(company)}'));
 });
 
 final socialVideosProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
-  final res = _map(await ref.read(apiProvider).get('/api/social/videos?limit=60'));
+  final company = ref.watch(socialCompanyProvider);
+  final res = _map(await ref.read(apiProvider).get('/api/social/videos?limit=60${companyQuery(company, sep: '&')}'));
   return ((res['videos'] as List?) ?? const []).map(_map).toList();
 });
 
@@ -81,5 +106,6 @@ final socialVideoProvider = FutureProvider.autoDispose.family<Map<String, dynami
 });
 
 final socialSettingsProvider = FutureProvider.autoDispose<Map<String, dynamic>>((ref) async {
-  return _map(await ref.read(apiProvider).get('/api/social/settings'));
+  final company = ref.watch(socialCompanyProvider);
+  return _map(await ref.read(apiProvider).get('/api/social/settings${companyQuery(company)}'));
 });

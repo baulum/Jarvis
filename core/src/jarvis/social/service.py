@@ -1,7 +1,10 @@
-"""Social media service: settings, the daily schedule, the production pipeline (as playbook steps), e-mail and
-publishing. Everything runs on the existing building blocks: the scheduler starts the playbook
-``social_daily_video`` (task engine: persisted steps, leases, resume after restarts), e-mail and publishing go
-through the ToolExecutor (policy, approvals, idempotency ledger, audit)."""
+"""Social media service: company profiles, settings, the daily schedule per company, the production pipeline (as
+playbook steps), e-mail and publishing. Everything runs on the existing building blocks: the scheduler starts the
+playbook ``social_daily_video`` (one schedule per company; task engine: persisted steps, leases, resume after
+restarts), e-mail and publishing go through the ToolExecutor (policy, approvals, idempotency ledger, audit).
+
+Per company: brand and defaults (``companies.py``), creative memory (every video differs from the company's earlier
+ones), library, recipients and target accounts. Sir's input for one production wins over the profile defaults."""
 
 from __future__ import annotations
 
@@ -26,8 +29,9 @@ from jarvis.security.audit import audit
 from jarvis.social import captions as cap
 from jarvis.social import emailer, links, qa
 from jarvis.social import storyboard as sb
-from jarvis.social.brand import load_brand, load_inspiration
-from jarvis.social.concept import ConceptRejected, generate, revise_storyboard
+from jarvis.social.brand import Brand, brand_for, load_brand, load_inspiration
+from jarvis.social.companies import DEFAULT_ID, CompanyError, CompanyStore, apo_hr_example, missing, pje_seed, public
+from jarvis.social.concept import ConceptRejected, generate, revise_storyboard, validate_for
 from jarvis.social.media import MediaError, loudness, probe
 from jarvis.social.platforms import CONNECTOR_ID, PLATFORMS, PlatformConnector
 from jarvis.social.render import RenderError, Tools, check_dependencies, render_video
@@ -41,6 +45,19 @@ logger = logging.getLogger(__name__)
 PLAYBOOK = "social_daily_video"
 SCHEDULE_NAME = "PJE Systems Daily Social Video"
 DAILY_KEY = "social-daily"
+
+
+def schedule_name(profile: dict[str, Any]) -> str:
+    return f"{profile.get('name') or 'Social'} Daily Social Video"
+
+
+def daily_key(company_id: str) -> str:
+    """PJE Systems keeps the key of the single-brand days; every other company gets its own per day."""
+    return DAILY_KEY if company_id == DEFAULT_ID else f"{DAILY_KEY}:{company_id}"
+
+
+def schedule_company(sched: Schedule) -> str:
+    return str(((sched.action or {}).get("params") or {}).get("company") or DEFAULT_ID)
 
 
 def cron_for(hhmm: str) -> str:
@@ -57,7 +74,9 @@ def time_of(cron: str) -> str:
 
 
 class SocialSettings:
-    """Sir's switches (``<data_dir>/social-media.json``). Daily on/off and time live in the schedule itself."""
+    """Sir's switches for all companies (``<data_dir>/social-media.json``). Daily on/off and time live in each
+    company's schedule; autopost and the standing topic wish (``autopost_enabled``, ``hint``) moved into the company
+    profiles – the values here only seed the PJE Systems profile on its first start."""
 
     DEFAULTS: ClassVar[dict[str, Any]] = {
         "email_enabled": True,
@@ -110,21 +129,98 @@ class SocialMediaService:
         self.tz = ZoneInfo(self.cfg.timezone)
         self.repo = repo or SocialRepo(self.cfg.timezone)
         self.settings = SocialSettings(state.settings.paths.data_dir / "social-media.json", self.cfg.owner_email)
+        self.companies = CompanyStore(state.settings.paths.data_dir / "social-companies.json", self._seed_companies)
         self.library_dir = self.cfg.library_dir or (state.settings.paths.data_dir / "social-videos")
         self.work_root = state.settings.paths.data_dir / "social-work"
         self.deps: dict[str, Any] = {"ok": None, "problems": [], "checked_at": None}
         self._ticker: asyncio.Task[None] | None = None
-        self.progress: dict[str, Any] = {}
+        self._progress: dict[str, dict[str, Any]] = {}  # per video: two companies may render at the same time
+
+    @property
+    def progress(self) -> dict[str, Any]:
+        return next(reversed(self._progress.values()), {}) if self._progress else {}
+
+    # ------------------------------------------------------------------ companies
+    def _seed_companies(self) -> list[dict[str, Any]]:
+        """First start with profiles: PJE Systems exactly as before (brand.yaml, Sir + video_recipients, autopost
+        as switched) and the empty example "Apo HR"."""
+        st = self.settings.load()
+        try:
+            raw = load_brand().raw
+        except Exception:
+            logger.exception("config/social/brand.yaml unreadable – PJE profile from defaults")
+            raw = {}
+        recipients: list[str] = []
+        for addr in [st["email_recipient"], *self.cfg.video_recipients]:
+            addr = str(addr).strip()
+            if addr and addr.lower() not in (r.lower() for r in recipients):
+                recipients.append(addr)
+        return [pje_seed(raw, st, recipients), apo_hr_example([st["email_recipient"]])]
+
+    def company(self, ref: str | None = None) -> dict[str, Any]:
+        """Profile by id or name; empty = the active profile. Unknown → ToolUserError (message for Sir)."""
+        try:
+            return self.companies.resolve(ref)
+        except CompanyError as e:
+            raise ToolUserError(str(e)) from None
+
+    def profile_of(self, v: Any) -> dict[str, Any]:
+        """The video's company; a deleted profile still has a name for mails and the library."""
+        cid = getattr(v, "company_id", None) or DEFAULT_ID
+        return self.companies.get(cid) or {"id": cid, "name": cid, "recipients": [], "colors": {}}
+
+    def brand_of(self, v: Any) -> Brand:
+        """Brand of the video's company with Sir's input of this production (stored with the concept)."""
+        return brand_for(self.profile_of(v), str((v.concept or {}).get("hint") or ""))
+
+    async def create_company(self, data: dict[str, Any], actor: str) -> dict[str, Any]:
+        profile = self.companies.create(data)
+        if self.cfg.enabled:
+            await self.ensure_schedule(profile["id"])
+        await audit(actor, "social.company.create", target=profile["id"], details={"name": profile["name"]})
+        await bus.publish("social.updated", company_id=profile["id"])
+        return public(profile)
+
+    async def update_company(self, cid: str, data: dict[str, Any], actor: str) -> dict[str, Any]:
+        profile = self.companies.update(cid, data)
+        sched = await self.schedule(cid)
+        if sched is not None and cid != DEFAULT_ID:
+            async with session_scope() as s:
+                row = await s.get(Schedule, sched.id)
+                if row is not None:
+                    row.name = schedule_name(profile)
+                    params = {**row.action.get("params", {}), "company_name": profile["name"]}
+                    row.action = {**row.action, "params": params}
+        await audit(actor, "social.company.update", target=cid, details={"keys": sorted(data)})
+        await bus.publish("social.updated", company_id=cid)
+        return public(profile)
+
+    async def delete_company(self, cid: str, actor: str) -> dict[str, Any]:
+        """Profile and its daily schedule go; its videos stay in the library."""
+        gone = self.companies.delete(cid)
+        sched = await self.schedule(cid)
+        if sched is not None:
+            await self.state.scheduler.delete(sched.id, actor)
+        await audit(actor, "social.company.delete", target=cid, details={"name": gone["name"]})
+        await bus.publish("social.updated", company_id=cid)
+        return {"deleted": cid, "active": self.companies.active_id()}
+
+    async def companies_info(self) -> dict[str, Any]:
+        out = []
+        for c in self.companies.all():
+            out.append({**public(c), "schedule": await self.schedule_info(c["id"])})
+        return {"active": self.companies.active_id(), "companies": out}
 
     # ------------------------------------------------------------------ lifecycle
     async def start(self) -> None:
         if not self.cfg.enabled:
             return
         self.library_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            await self.ensure_schedule()
-        except Exception:
-            logger.exception("Social schedule could not be ensured")
+        for c in self.companies.all():
+            try:
+                await self.ensure_schedule(c["id"])
+            except Exception:
+                logger.exception("Social schedule of %s could not be ensured", c["id"])
         spawn(self.refresh_dependencies(), name="social-deps")
         self._ticker = asyncio.create_task(self._tick_loop())
 
@@ -144,28 +240,46 @@ class SocialMediaService:
         return res
 
     # ------------------------------------------------------------------ schedule
-    async def schedule(self) -> Schedule | None:
+    async def schedule(self, company_id: str = DEFAULT_ID) -> Schedule | None:
         async with session_scope() as s:
             rows = (await s.execute(select(Schedule))).scalars().all()
-        return next((r for r in rows if (r.action or {}).get("playbook") == PLAYBOOK), None)
+        return next(
+            (r for r in rows if (r.action or {}).get("playbook") == PLAYBOOK and schedule_company(r) == company_id),
+            None,
+        )
 
-    async def ensure_schedule(self) -> Schedule:
-        sched = await self.schedule()
+    async def ensure_schedule(self, company_id: str = DEFAULT_ID) -> Schedule:
+        """One daily schedule per company. PJE Systems keeps its schedule as it was; a new company's schedule starts
+        paused – Sir switches it on once the profile is filled in."""
+        sched = await self.schedule(company_id)
         if sched is not None:
             return sched
+        params: dict[str, Any] = {"trigger": "schedule"}
+        name = SCHEDULE_NAME
+        if company_id != DEFAULT_ID:
+            profile = self.companies.get(company_id) or {"name": company_id}
+            params.update(company=company_id, company_name=profile["name"])
+            name = schedule_name(profile)
         action = {
             "type": "playbook",
             "playbook": PLAYBOOK,
-            "params": {"trigger": "schedule"},
-            "daily_key": DAILY_KEY,  # Scheduler: idempotency key per local day → one task per day
+            "params": params,
+            "daily_key": daily_key(company_id),  # Scheduler: idempotency key per local day → one task per day
             "catch_up": "same_day",  # Scheduler: a missed run is only made up on the same day
         }
-        return await self.state.scheduler.create(
-            SCHEDULE_NAME, cron_for(self.cfg.default_time), action, "social", tz=self.cfg.timezone
+        sched = await self.state.scheduler.create(
+            name, cron_for(self.cfg.default_time), action, "social", tz=self.cfg.timezone
         )
+        if company_id != DEFAULT_ID:
+            async with session_scope() as s:
+                row = await s.get(Schedule, sched.id)
+                if row is not None:
+                    row.enabled = False
+            sched.enabled = False
+        return sched
 
-    async def schedule_info(self) -> dict[str, Any]:
-        sched = await self.schedule()
+    async def schedule_info(self, company_id: str = DEFAULT_ID) -> dict[str, Any]:
+        sched = await self.schedule(company_id)
         if sched is None:
             return {"exists": False, "enabled": False, "time": self.cfg.default_time, "timezone": self.cfg.timezone}
         return {
@@ -182,11 +296,11 @@ class SocialMediaService:
         }
 
     async def set_production(
-        self, actor: str, *, enabled: bool | None = None, time: str | None = None
+        self, actor: str, *, enabled: bool | None = None, time: str | None = None, company_id: str = DEFAULT_ID
     ) -> dict[str, Any]:
         from jarvis.jobs.scheduler import next_run
 
-        sched = await self.ensure_schedule()
+        sched = await self.ensure_schedule(company_id)
         async with session_scope() as s:
             row = await s.get(Schedule, sched.id)
             assert row is not None
@@ -195,32 +309,68 @@ class SocialMediaService:
             if enabled is not None:
                 row.enabled = enabled
             row.next_run_at = next_run(row.cron, row.timezone)
-        await audit(actor, "social.schedule", target=str(sched.id), details={"enabled": enabled, "time": time})
+        await audit(
+            actor,
+            "social.schedule",
+            target=str(sched.id),
+            details={"enabled": enabled, "time": time, "company": company_id},
+        )
         await bus.publish("schedule.updated", id=str(sched.id))
-        return await self.schedule_info()
+        return await self.schedule_info(company_id)
 
     # ------------------------------------------------------------------ settings & status
-    def runtime_settings(self) -> dict[str, Any]:
-        return self.settings.load()
+    def runtime_settings(self, company: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Global switches plus the company's own (autopost, standing topic wish, recipients)."""
+        profile = company or self.company()
+        return {
+            **self.settings.load(),
+            "autopost_enabled": bool(profile.get("autopost")),
+            "hint": str(profile.get("hint") or ""),
+            "company_id": profile["id"],
+            "recipients": self.video_recipients(profile),
+        }
+
+    def save_settings(self, changes: dict[str, Any], company: dict[str, Any] | None = None) -> dict[str, Any]:
+        """``autopost_enabled`` and ``hint`` belong to the company, everything else is global."""
+        profile = company or self.company()
+        pairs = (("autopost", changes.get("autopost_enabled")), ("hint", changes.get("hint")))
+        own = {k: v for k, v in pairs if v is not None}
+        if "recipients" in changes:
+            own["recipients"] = changes["recipients"]
+        if own:
+            try:
+                profile = self.companies.update(profile["id"], own)
+            except CompanyError as e:
+                raise ToolUserError(str(e)) from None
+        rest = {k: v for k, v in changes.items() if k not in ("autopost_enabled", "hint", "recipients")}
+        if rest:
+            self.settings.save(rest)
+        return self.runtime_settings(profile)
 
     def platform(self, pf: str) -> PlatformConnector | None:
         conn = self.state.connectors.connectors.get(CONNECTOR_ID[pf])
         return conn if isinstance(conn, PlatformConnector) else None
 
-    def can_autopost(self, pf: str, settings: dict[str, Any] | None = None) -> bool:
-        """Autopost only if globally on AND on for this platform AND the connector is enabled AND connected."""
+    def can_autopost(
+        self, pf: str, settings: dict[str, Any] | None = None, company: dict[str, Any] | None = None
+    ) -> bool:
+        """Autopost only if on for the company AND the connected platform accounts are the company's (official API)
+        AND on for this platform AND the connector is enabled AND connected."""
         st = settings or self.settings.load()
+        profile = company or self.company()
         conn = self.platform(pf)
         return bool(
-            st.get("autopost_enabled")
+            profile.get("autopost")
+            and profile.get("official_api")
             and st.get("platforms", {}).get(pf, {}).get("autopost")
             and conn is not None
             and conn.enabled
             and conn.connected
         )
 
-    def platforms_status(self) -> list[dict[str, Any]]:
+    def platforms_status(self, company: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         st = self.settings.load()
+        profile = company or self.company()
         out = []
         for pf in PLATFORMS:
             conn = self.platform(pf)
@@ -230,22 +380,27 @@ class SocialMediaService:
                 {
                     **base,
                     "autopost": st["platforms"][pf]["autopost"],
-                    "will_autopost": self.can_autopost(pf, st),
+                    "will_autopost": self.can_autopost(pf, st, profile),
                     "health": h.to_dict() if h else None,
                 }
             )
         return out
 
-    async def status(self) -> dict[str, Any]:
-        latest = await self.repo.list_videos(limit=6)
+    async def status(self, company: str | None = None) -> dict[str, Any]:
+        profile = self.company(company)
+        cid = profile["id"]
+        latest = await self.repo.list_videos(limit=6, company_id=cid)
         last_ready = next((v for v in latest if v.status == "ready"), None)
         failed = [v for v in latest if v.status == "failed"][:3]
-        pubs = await self.repo.publications(limit=10)
+        pubs = await self.repo.publications(limit=10, company_id=cid)
         return {
             "enabled": self.cfg.enabled,
+            "company": public(profile),
+            "companies": [{"id": c["id"], "name": c["name"], "missing": missing(c)} for c in self.companies.all()],
+            "active_company": self.companies.active_id(),
             "dependencies": self.deps,
-            "schedule": await self.schedule_info(),
-            "settings": self.runtime_settings(),
+            "schedule": await self.schedule_info(cid),
+            "settings": self.runtime_settings(profile),
             "owner_email": self.cfg.owner_email,
             "producing": [video_dict(v, full=False) for v in latest if v.status == "producing"],
             "last_video": video_dict(last_ready, full=False) if last_ready else None,
@@ -253,7 +408,7 @@ class SocialMediaService:
                 {"id": str(v.id), "title": v.title, "error": v.error, "at": v.updated_at.isoformat()} for v in failed
             ],
             "recent_publications": [publication_dict(p) for p in pubs],
-            "counts": await self.repo.count(),
+            "counts": await self.repo.count(cid),
             "progress": self.progress,
         }
 
@@ -274,12 +429,35 @@ class SocialMediaService:
         return f"{base}/api/social/download/{token}"
 
     # ------------------------------------------------------------------ start a production
-    async def produce(self, principal: Any, *, hint: str = "", parent_id: uuid.UUID | None = None) -> dict[str, Any]:
-        params: dict[str, Any] = {"trigger": "regenerate" if parent_id else "manual", "hint": hint[:500]}
+    async def produce(
+        self,
+        principal: Any,
+        *,
+        hint: str = "",
+        parent_id: uuid.UUID | None = None,
+        company: str | None = None,
+    ) -> dict[str, Any]:
+        """``company``: id or name; default the regenerated video's company, else the active profile."""
+        if parent_id and not company:
+            parent = await self.repo.get(parent_id)
+            company = parent.company_id if parent is not None else None
+        profile = self.company(company)
+        gaps = missing(profile)
+        if gaps:
+            raise ToolUserError(
+                f"Profil „{profile['name']}“ ist unvollständig – es fehlt: {', '.join(gaps)} "
+                "(Social Media › Unternehmen)"
+            )
+        params: dict[str, Any] = {
+            "trigger": "regenerate" if parent_id else "manual",
+            "hint": hint[:500],
+            "company": profile["id"],
+            "company_name": profile["name"],
+        }
         if parent_id:
             params["parent_id"] = str(parent_id)
         task = await self.state.tasks.create(PLAYBOOK, params, principal)
-        return {"task_id": str(task.id), "title": task.title}
+        return {"task_id": str(task.id), "title": task.title, "company": profile["id"]}
 
     # ------------------------------------------------------------------ pipeline steps
     def _today(self) -> date:
@@ -307,7 +485,17 @@ class SocialMediaService:
             return {"video_id": ctx.context["video_id"]}
         trigger = str(ctx.params.get("trigger") or "manual")
         day = self._today().isoformat()
-        fields: dict[str, Any] = {"trigger": trigger, "task_id": ctx.task_id, "status": "producing", "stage": "concept"}
+        cid = str(ctx.params.get("company") or DEFAULT_ID)
+        profile = self.companies.get(cid)
+        if profile is None:
+            raise StepFail(f"Unternehmen „{cid}“ gibt es nicht mehr – nichts produziert")
+        fields: dict[str, Any] = {
+            "trigger": trigger,
+            "task_id": ctx.task_id,
+            "status": "producing",
+            "stage": "concept",
+            "company_id": cid,
+        }
         if ctx.params.get("parent_id"):
             fields["parent_id"] = uuid.UUID(str(ctx.params["parent_id"]))
         if trigger == "schedule":
@@ -315,10 +503,12 @@ class SocialMediaService:
         try:
             vid = await self.repo.create(**fields)
         except AlreadyProduced:
-            ctx.context["duplicate"] = f"Für {day} gibt es schon ein automatisches Video – nichts doppelt produziert"
+            ctx.context["duplicate"] = (
+                f"Für {day} gibt es schon ein automatisches Video von {profile['name']} – nichts doppelt produziert"
+            )
             raise StepSkip(ctx.context["duplicate"]) from None
         ctx.context["video_id"] = str(vid)
-        await self.repo.log(vid, f"Produktion gestartet ({trigger})")
+        await self.repo.log(vid, f"Produktion gestartet ({trigger}, {profile['name']})")
         await bus.publish("social.updated", video_id=str(vid), status="producing")
         if not self.deps.get("ok"):
             await self.refresh_dependencies()
@@ -326,17 +516,26 @@ class SocialMediaService:
             raise await self._fail(
                 vid, "concept", "Abhängigkeiten fehlen: " + "; ".join(self.deps.get("problems") or [])
             )
-        return {"video_id": str(vid), "day": day}
+        gaps = missing(profile)
+        if gaps:
+            raise await self._fail(
+                vid, "concept", f"Profil „{profile['name']}“ ist unvollständig – es fehlt: {', '.join(gaps)}"
+            )
+        return {"video_id": str(vid), "day": day, "company": cid}
 
     async def step_concept(self, ctx: StepContext) -> dict[str, Any]:
         vid = await self._video_id(ctx)
         v = await self.repo.get(vid)
         if v is not None and v.storyboard:
             return {"title": v.title, "category": v.category}
-        brand = load_brand()
-        history = await self.repo.history()
+        assert v is not None
+        profile = self.profile_of(v)
         st = self.settings.load()
-        hint = str(ctx.params.get("hint") or st.get("hint") or "")
+        # Sir's input of this production first, else the company's standing wish; the profile's defaults (offer,
+        # price, topic) are only the fallback (Brand.with_hint)
+        hint = str(ctx.params.get("hint") or profile.get("hint") or "").strip()
+        brand = brand_for(profile, hint)
+        history = await self.repo.history(company_id=v.company_id)
         try:
             res = await generate(
                 self._ask_concept,
@@ -344,7 +543,6 @@ class SocialMediaService:
                 load_inspiration(),
                 history,
                 self._today(),
-                hint=hint,
                 voiceover=bool(st.get("voiceover")),
             )
         except ConceptRejected as e:
@@ -354,6 +552,7 @@ class SocialMediaService:
         except Exception as e:
             raise await self._fail(vid, "concept", f"Konzept konnte nicht erstellt werden: {e}") from e
         c, board = res.concept, res.storyboard
+        c["hint"] = hint  # later steps (QA, captions, a resumed task) check against the same input
         summ = sb.summary(board)
         await self.repo.update(
             vid,
@@ -382,7 +581,7 @@ class SocialMediaService:
         vid = await self._video_id(ctx)
         v = await self.repo.get(vid)
         assert v is not None
-        check = sb.validate(v.storyboard, fact_ids=load_brand().fact_ids)
+        check = validate_for(v.storyboard, self.brand_of(v), self._today())
         if not check.ok:
             raise await self._fail(vid, "concept", "Storyboard ungültig: " + "; ".join(check.problems))
         out: dict[str, Any] = {"scenes": len(v.storyboard["scenes"]), "seconds": sb.total_seconds(v.storyboard)}
@@ -412,10 +611,11 @@ class SocialMediaService:
         # status back to "producing": a retried task (Aufgaben › Erneut versuchen) must not keep showing "failed"
         await self.repo.update(vid, status="producing", stage="render", attempts=attempt, error=None)
         await self.repo.log(vid, f"Rendern (Versuch {attempt})")
-        self.progress = {"video_id": str(vid), "stage": "render", "percent": 0}
+        key = str(vid)
+        self._progress[key] = {"video_id": key, "stage": "render", "percent": 0}
 
         def on_progress(pct: int) -> None:
-            self.progress = {"video_id": str(vid), "stage": "render", "percent": pct}
+            self._progress[key] = {"video_id": key, "stage": "render", "percent": pct}
 
         voice = work / "voiceover.wav"
         try:
@@ -431,7 +631,7 @@ class SocialMediaService:
         except (RenderError, MediaError) as e:
             raise await self._fail(vid, "render", str(e)) from e
         finally:
-            self.progress = {}
+            self._progress.pop(key, None)
         pr = res["probe"]
         await self.repo.log(
             vid,
@@ -448,12 +648,12 @@ class SocialMediaService:
         work = self.work_root / str(vid)
         video = work / "video.mp4"
         board = dict(v.storyboard)
-        brand = load_brand()
+        brand = self.brand_of(v)
         attempt = max(1, v.attempts)
         gain = 0.0
         while True:
             await self.repo.update(vid, stage="qa")
-            report = await self.run_qa(video, board, work / f"frames-{attempt}", brand.fact_ids)
+            report = await self.run_qa(video, board, work / f"frames-{attempt}", brand.fact_ids, brand)
             await self.repo.update(vid, qa=report.to_dict())
             failed = [c["label"] + (f" ({c['detail']})" if c["detail"] else "") for c in report.checks if not c["ok"]]
             if report.passed:
@@ -482,7 +682,7 @@ class SocialMediaService:
                     fixed = await revise_storyboard(self._ask_concept, brand, board, issues)
                 except Exception as e:
                     raise await self._fail(vid, "qa", f"Korrektur des Storyboards fehlgeschlagen: {e}") from e
-                check = sb.validate(fixed, fact_ids=brand.fact_ids)
+                check = validate_for(fixed, brand, self._today())
                 if check.ok:
                     board = fixed
                     await self.repo.log(vid, "Storyboard nach QA überarbeitet")
@@ -499,14 +699,19 @@ class SocialMediaService:
             attempt += 1
             await self._render(vid, board, work, video, attempt=attempt, gain=gain)
 
-    async def run_qa(self, video: Path, board: dict[str, Any], frames_dir: Path, fact_ids: set[str]) -> qa.QaReport:
+    async def run_qa(
+        self, video: Path, board: dict[str, Any], frames_dir: Path, fact_ids: set[str], brand: Brand | None = None
+    ) -> qa.QaReport:
+        """``brand``: the company's brand with Sir's input – prices are checked against it (input before defaults)."""
         tools = Tools.resolve(self.cfg)
         assert tools.ffmpeg and tools.ffprobe
         report = qa.QaReport()
         info = await probe(tools.ffprobe, video)
         loud = await loudness(tools.ffmpeg, video)
         qa.technical(report, info, loud, board, int(self.cfg.max_video_mb * 1024 * 1024))
-        qa.textual(report, board, fact_ids)
+        allowed = brand.allowed_prices(self._today()) if brand else None
+        required = brand.required_prices() if brand else None
+        qa.textual(report, board, fact_ids, allowed, required)
         await qa.visual(
             report,
             tools.ffmpeg,
@@ -514,6 +719,7 @@ class SocialMediaService:
             board,
             frames_dir,
             self._ask_vision if getattr(self.state, "agent", None) is not None else None,
+            required,
         )
         report.probe = {**info.to_dict(), "loudness": loud.to_dict()}
         return report
@@ -522,20 +728,21 @@ class SocialMediaService:
         vid = await self._video_id(ctx)
         v = await self.repo.get(vid)
         assert v is not None
-        if v.captions and cap.validate(v.captions, self._allowed_prices()).ok:
+        brand = self.brand_of(v)
+        if v.captions and self._check_captions(v.captions, brand).ok:
             return {"skipped": "schon erstellt"}
         await self.repo.update(vid, stage="captions")
-        brand = load_brand()
         concept = {**(v.concept or {}), "title": v.title, "tone": v.tone}
         problems: list[str] = []
         for _ in range(3):
             raw = await self._ask_concept(
-                "Du schreibst Social-Media-Captions für PJE Systems.",
-                cap.prompt(concept, v.script, brand.raw, brand.active_offers(self._today()), problems),
+                f"Du schreibst Social-Media-Captions für {brand.company}."
+                + (" Sirs Vorgabe zum Video hat Vorrang vor allen Standardwerten." if brand.hint else ""),
+                cap.prompt(concept, v.script, brand, self._today(), problems),
                 cap.CAPTIONS_SCHEMA,
             )
             result = cap.clean(raw if isinstance(raw, dict) else {})
-            check = cap.validate(result, self._allowed_prices())
+            check = self._check_captions(result, brand)
             if check.ok:
                 await self.repo.update(vid, captions=result)
                 await self.repo.log(vid, "Captions und Hashtags erstellt")
@@ -544,10 +751,8 @@ class SocialMediaService:
             await self.repo.log(vid, "Captions abgelehnt: " + "; ".join(problems)[:300], "warning")
         raise await self._fail(vid, "captions", "Captions verletzen Regeln: " + "; ".join(problems))
 
-    def _allowed_prices(self) -> set[str]:
-        brand = load_brand()
-        texts = brand.active_offers(self._today()) + [f["value"] + " " + f["label"] for f in brand.facts]
-        return {p for t in texts for p in cap.prices_in(t)}
+    def _check_captions(self, captions: dict[str, Any], brand: Brand) -> cap.CaptionCheck:
+        return cap.validate(captions, brand.allowed_prices(self._today()), brand.required_prices(), brand.website)
 
     async def step_library(self, ctx: StepContext) -> dict[str, Any]:
         vid = await self._video_id(ctx)
@@ -559,7 +764,8 @@ class SocialMediaService:
         src = work / "video.mp4"
         if not src.is_file():
             raise await self._fail(vid, "library", "Gerendertes Video fehlt im Arbeitsordner")
-        name = f"{self._today().isoformat()}_{(v.concept_key or 'video')[:40]}_{str(vid)[:8]}.mp4"
+        prefix = "" if v.company_id == DEFAULT_ID else f"{v.company_id[:30]}_"
+        name = f"{self._today().isoformat()}_{prefix}{(v.concept_key or 'video')[:40]}_{str(vid)[:8]}.mp4"
         self.library_dir.mkdir(parents=True, exist_ok=True)
         dst = self.library_dir / name
         shutil.copyfile(src, dst)
@@ -580,9 +786,10 @@ class SocialMediaService:
         await self.repo.log(vid, f"In der Bibliothek gespeichert: {name}")
         shutil.rmtree(work, ignore_errors=True)
         await bus.publish("social.updated", video_id=str(vid), status="ready")
+        company = "" if v.company_id == DEFAULT_ID else f" ({self.profile_of(v)['name']})"
         await self.state.notifier.notify(
             "social.ready",
-            f"Neues Social-Video: {v.title}",
+            f"Neues Social-Video{company}: {v.title}",
             (v.concept or {}).get("summary", "")[:300],
             data={"video_id": str(vid)},
         )
@@ -599,10 +806,12 @@ class SocialMediaService:
     async def step_publish(self, ctx: StepContext) -> dict[str, Any]:
         vid = await self._video_id(ctx)
         st = self.settings.load()
-        targets = [pf for pf in PLATFORMS if self.can_autopost(pf, st)]
+        v = await self.repo.get(vid)
+        profile = self.profile_of(v)
+        targets = [pf for pf in PLATFORMS if self.can_autopost(pf, st, profile)]
         if not targets:
             await self.repo.update(vid, stage="done")
-            raise StepSkip("Autopost aus oder keine Plattform verbunden und aktiviert")
+            raise StepSkip(f"Autopost für {profile['name']} aus oder keine Plattform verbunden und aktiviert")
         when = self._publish_at(st)
         out: dict[str, Any] = {}
         for pf in targets:
@@ -625,10 +834,12 @@ class SocialMediaService:
         return local.astimezone(UTC)
 
     # ------------------------------------------------------------------ e-mail & publishing (tool handlers)
-    def video_recipients(self) -> list[str]:
-        """Everyone who gets a finished video by default: Sir (his configured address) plus the configured list."""
+    def video_recipients(self, company: dict[str, Any] | None = None) -> list[str]:
+        """Everyone who gets a finished video of this company by default: the profile's recipient list (PJE Systems:
+        Sir and Bagy); an empty list falls back to Sir's address."""
+        profile = company or self.company()
         out: list[str] = []
-        for addr in [self.settings.load()["email_recipient"], *self.cfg.video_recipients]:
+        for addr in profile.get("recipients") or [self.settings.load()["email_recipient"]]:
             addr = str(addr).strip()
             if addr and addr.lower() not in (o.lower() for o in out):
                 out.append(addr)
@@ -646,8 +857,10 @@ class SocialMediaService:
                 failed[to] = str(e) or type(e).__name__
                 await self.repo.log(vid, f"E-Mail an {to} fehlgeschlagen: {failed[to]}")
         if not sent:
-            raise ToolUserError("E-Mail an keinen Empfänger gesendet: " + "; ".join(f"{k}: {v}" for k, v in failed.items()))
-        info = {**sent[-1], "to": ", ".join(s["to"] for s in sent), "recipients": [s["to"] for s in sent], "failed": failed}
+            errors = "; ".join(f"{k}: {v}" for k, v in failed.items())
+            raise ToolUserError("E-Mail an keinen Empfänger gesendet: " + errors)
+        done = [s["to"] for s in sent]
+        info = {**sent[-1], "to": ", ".join(done), "recipients": done, "failed": failed}
         await self.repo.update(vid, email=info)
         return info
 
@@ -687,6 +900,7 @@ class SocialMediaService:
         download_url: str | None,
         publications: list[dict[str, Any]] | None = None,
     ) -> emailer.Mail:
+        profile = self.profile_of(v)
         return emailer.build(
             video_dict(v),
             day=datetime.now(self.tz),
@@ -694,13 +908,21 @@ class SocialMediaService:
             download_url=download_url,
             link_hours=self.cfg.link_ttl_hours,
             publications=publications or [],
-            autopost_enabled=bool(self.settings.load().get("autopost_enabled")),
+            autopost_enabled=bool(profile.get("autopost")),
+            company=str(profile.get("name") or "PJE Systems"),
+            accent=str((profile.get("colors") or {}).get("accent") or emailer.ACCENT),
         )
 
     async def publish(self, vid: uuid.UUID, pf: str) -> dict[str, Any]:
         v = await self.repo.get(vid)
         if v is None or v.status != "ready":
             raise ToolUserError("Video nicht gefunden oder noch nicht fertig")
+        profile = self.profile_of(v)
+        if not profile.get("official_api"):
+            raise ToolUserError(
+                f"Die verbundenen Plattform-Konten gehören nicht zu {profile['name']} – über die UpTik-Konten des "
+                "Unternehmens posten oder im Profil „offizielle Plattform-Konten“ einschalten"
+            )
         conn = self.platform(pf)
         if conn is None or not conn.enabled or not conn.connected:
             raise ToolUserError(f"{pf} ist nicht verbunden oder deaktiviert (Social Media › Connector)")
@@ -728,6 +950,18 @@ class SocialMediaService:
         await self.repo.log(vid, f"Veröffentlicht auf {pf}" + (f": {res.get('url')}" if res.get("url") else ""))
         await bus.publish("social.updated", video_id=str(vid), status="published", platform=pf)
         return res
+
+    def uptik_scope(self, v: Any) -> dict[str, Any]:
+        """Which UpTik accounts may post this video automatically: only its company's (``uptik_accounts``) and only
+        with the company's autopost on. PJE Systems without an own list keeps every account no other company claims
+        (as before the profiles)."""
+        profile = self.profile_of(v)
+        own = list(profile.get("uptik_accounts") or [])
+        claimed = [a for c in self.companies.all() if c["id"] != profile["id"] for a in c.get("uptik_accounts") or []]
+        accounts: list[str] | None = own
+        if not own and profile["id"] == DEFAULT_ID:
+            accounts = None
+        return {"autopost": bool(profile.get("autopost")), "accounts": accounts, "exclude": claimed}
 
     async def mark_manual(self, vid: uuid.UUID, pf: str, post_url: str | None, actor: str) -> dict[str, Any]:
         p = await self.repo.upsert_publication(
@@ -832,17 +1066,19 @@ class SocialMediaService:
 def playbook(svc: SocialMediaService) -> Playbook:
     return Playbook(
         name=PLAYBOOK,
-        title="PJE Systems Daily Social Video",
-        title_template="PJE Systems Daily Social Video",
-        description="Entwickelt ein neues Kurzvideo für PJE Systems (Idee, Skript, Storyboard), rendert es mit "
-        "Remotion, prüft es, schreibt Captions, legt es in der Bibliothek ab, schickt es Sir per E-Mail und "
-        "veröffentlicht es optional.",
+        title="Daily Social Video",
+        title_template="{company_name} Daily Social Video",
+        description="Entwickelt ein neues Kurzvideo für ein Unternehmensprofil (Idee, Skript, Storyboard), rendert "
+        "es mit Remotion, prüft es, schreibt Captions, legt es in der Bibliothek ab, schickt es an die Empfängerliste "
+        "des Unternehmens und veröffentlicht es optional.",
         params_schema={
             "type": "object",
             "properties": {
                 "trigger": {"enum": ["schedule", "manual", "regenerate"], "default": "manual"},
                 "hint": {"type": "string", "maxLength": 500},
                 "parent_id": {"type": "string"},
+                "company": {"type": "string", "default": DEFAULT_ID},
+                "company_name": {"type": "string", "default": "PJE Systems"},
             },
         },
         steps=[
@@ -853,7 +1089,7 @@ def playbook(svc: SocialMediaService) -> Playbook:
             StepDef("Qualitätskontrolle", svc.step_qa),
             StepDef("Captions und Hashtags", svc.step_captions),
             StepDef("In Bibliothek speichern", svc.step_library),
-            StepDef("E-Mail an Sir und Bagy", svc.step_email),
+            StepDef("E-Mail an die Empfängerliste", svc.step_email),
             StepDef("Veröffentlichen (optional)", svc.step_publish),
         ],
     )

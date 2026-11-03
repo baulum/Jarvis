@@ -1,4 +1,5 @@
-// Social Media (daily PJE Systems video): types of /api/social and the small pure helpers the view uses.
+// Social Media (daily video per company profile – PJE Systems, Apo HR …): types of /api/social and the small pure
+// helpers the view uses.
 import type { Tone } from "./format";
 
 export type Platform = "instagram" | "facebook" | "tiktok" | "youtube";
@@ -25,8 +26,45 @@ export interface Publication {
   error: string | null;
 }
 
+export type ColorKey = "accent" | "ink" | "canvas" | "accent_deep" | "accent_on_dark" | "graphite";
+
+/** A company profile: brand, defaults (only a fallback – Sir's input when producing wins), accounts, recipients. */
+export interface Company {
+  id: string;
+  name: string;
+  description: string;
+  audience: string;
+  website: string;
+  cta_button: string;
+  offer: string;
+  price: string;
+  colors: Partial<Record<ColorKey, string>>;
+  tone: string;
+  hashtags: string[];
+  accounts: Record<Platform, string>;
+  uptik_accounts: string[];
+  recipients: string[];
+  autopost: boolean;
+  official_api: boolean;
+  hint: string;
+  brand_file: string | null;
+  updated_at?: string;
+  /** labels of the fields a production still needs */
+  missing: string[];
+  schedule?: SocialSchedule;
+}
+
+export type CompanyInput = Partial<Omit<Company, "id" | "missing" | "schedule" | "brand_file">>;
+
+export interface CompanyList {
+  active: string;
+  companies: Company[];
+}
+
 export interface SocialVideo {
   id: string;
+  company_id: string;
+  company_name?: string;
   status: "producing" | "ready" | "failed";
   stage: string;
   trigger: "schedule" | "manual" | "regenerate";
@@ -85,6 +123,9 @@ export interface SocialSchedule {
 }
 
 export interface SocialSettings {
+  company_id: string;
+  /** the company's recipient list of finished videos */
+  recipients: string[];
   email_enabled: boolean;
   email_recipient: string;
   publish_time: string | null;
@@ -110,6 +151,9 @@ export interface PlatformStatus {
 
 export interface SocialStatus {
   enabled: boolean;
+  company: Company;
+  companies: { id: string; name: string; missing: string[] }[];
+  active_company: string;
   dependencies: { ok: boolean | null; problems: string[]; checked_at?: string | null; browser?: string };
   schedule: SocialSchedule;
   settings: Omit<SocialSettings, "schedule" | "owner_email">;
@@ -201,6 +245,19 @@ export function dependencyTone(d: SocialStatus["dependencies"]): Tone {
 
 export function validTime(t: string): boolean {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(t);
+}
+
+/** Comma/line separated input → trimmed, non-empty entries. */
+export function splitList(raw: string): string[] {
+  return raw.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean);
+}
+
+export function validEmail(addr: string): boolean {
+  return /^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$/.test(addr);
+}
+
+export function validHex(c: string): boolean {
+  return /^#[0-9a-fA-F]{6}$/.test(c);
 }
 
 export function safeFileName(v: Pick<SocialVideo, "file_name" | "title">): string {

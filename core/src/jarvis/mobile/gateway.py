@@ -64,8 +64,12 @@ MOBILE_ROUTES: list[tuple[frozenset[str], re.Pattern[str]]] = [
     (frozenset({"GET"}), re.compile(r"^/api/commands$")),  # slash-command list, same source as the desktop
     (frozenset({"POST"}), re.compile(r"^/api/voice/stt$")),
     # Social Media: dashboard, library (MP4 streamed with Range), automation, platforms; signed download links
-    (frozenset({"GET"}), re.compile(r"^/api/social/(status|settings|platforms|videos)$")),
+    (frozenset({"GET"}), re.compile(r"^/api/social/(status|settings|platforms|videos|companies)$")),
     (frozenset({"PUT"}), re.compile(r"^/api/social/settings$")),
+    # company profiles: add, edit, delete, switch the active one
+    (frozenset({"POST"}), re.compile(r"^/api/social/companies$")),
+    (frozenset({"PUT", "DELETE"}), re.compile(r"^/api/social/companies/[a-z0-9-]{1,60}$")),
+    (frozenset({"POST"}), re.compile(r"^/api/social/companies/[a-z0-9-]{1,60}/activate$")),
     (frozenset({"POST"}), re.compile(r"^/api/social/(produce|dependencies/check)$")),
     (frozenset({"GET"}), re.compile(r"^/api/social/videos/[0-9a-f-]{36}(/file)?$")),
     (frozenset({"POST"}), re.compile(r"^/api/social/videos/[0-9a-f-]{36}/(link|regenerate|email|publish)$")),

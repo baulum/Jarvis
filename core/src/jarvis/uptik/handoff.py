@@ -3,10 +3,12 @@
 Any producer hands over a finished clip with ``UptikService.on_video_ready(VideoClip(...))``. The connector decides
 the rest (off by default: ``handoff_enabled``; per account ``autopost``; approval always) and never raises back.
 
-``SocialBridge`` connects the existing daily PJE video (``jarvis.social``) without changing it: it listens to the
+``SocialBridge`` connects the daily company videos (``jarvis.social``) without changing them: it listens to the
 ``social.updated`` event (status ``ready``), reads the video and its per-platform captions and calls
-``on_video_ready``. It is the only place of the connector that knows the social module; the work runs in a background
-task, so a slow or failing hand-over never holds up the production step that published the event.
+``on_video_ready`` – limited to the UpTik accounts of the video's company and to its autopost switch
+(``SocialMediaService.uptik_scope``), so one brand never posts on another brand's account. It is the only place of
+the connector that knows the social module; the work runs in a background task, so a slow or failing hand-over never
+holds up the production step that published the event.
 """
 
 from __future__ import annotations
@@ -36,6 +38,9 @@ class VideoClip:
     captions: dict[str, dict[str, Any]] = field(default_factory=dict)
     duration_s: float | None = None
     platforms: list[str] = field(default_factory=list)  # empty = every platform with autopost
+    autopost: bool = True  # False: only into the inbox (the producer's own autopost switch is off)
+    accounts: list[str] | None = None  # account ids/labels that may post it; None = any account …
+    exclude_accounts: list[str] = field(default_factory=list)  # … except these (claimed by another producer/brand)
 
 
 _SOCIAL_MAP = {"tiktok": "tiktok", "instagram": "instagram_reels", "youtube": "youtube_shorts"}
@@ -104,7 +109,14 @@ class SocialBridge:
             path = social.file_path(v.file_name)
             if path is None:
                 return None
-            return await self.svc.on_video_ready(clip_from_social(v, str(path)))
+            clip = clip_from_social(v, str(path))
+            scope_of = getattr(social, "uptik_scope", None)  # company profiles (jarvis.social.companies)
+            if scope_of is not None:
+                scope = scope_of(v)
+                clip.autopost = bool(scope["autopost"])
+                clip.accounts = scope["accounts"]
+                clip.exclude_accounts = list(scope["exclude"])
+            return await self.svc.on_video_ready(clip)
         except Exception:
             logger.exception("Social → UpTik hand-over failed (production unaffected)")
             return None

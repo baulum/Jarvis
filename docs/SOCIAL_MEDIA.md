@@ -1,7 +1,8 @@
-# Social Media – tägliches PJE-Systems-Video
+# Social Media – tägliche Videos je Unternehmen
 
-Jarvis produziert jeden Tag ein neues 9:16-Kurzvideo für PJE Systems: Idee → Skript/Storyboard → Remotion-Render →
-Sounddesign (FFmpeg) → Qualitätskontrolle → Captions/Hashtags → Videobibliothek → E-Mail an Sir → optional Autopost.
+Jarvis produziert täglich neue 9:16-Kurzvideos – je **Unternehmensprofil** (PJE Systems, Apo HR …): Idee →
+Skript/Storyboard → Remotion-Render → Sounddesign (FFmpeg) → Qualitätskontrolle → Captions/Hashtags →
+Videobibliothek → E-Mail an die Empfängerliste → optional Autopost.
 Keine eigene Marketing-Engine: Der Ablauf ist ein normales Jarvis-Playbook (`social_daily_video`), gestartet vom
 normalen Zeitplaner, sichtbar in **Aufgaben** und **Zeitpläne**, gesteuert in der App unter **Social Media**.
 
@@ -19,6 +20,46 @@ normalen Zeitplaner, sichtbar in **Aufgaben** und **Zeitpläne**, gesteuert in d
                                          9 Veröffentlichen       (Tool social_publish_video, nur wenn aktiviert)
 ```
 
+## Unternehmensprofile (seit 2026-11-03)
+
+Jedes Profil (`core/src/jarvis/social/companies.py`, gespeichert in `<data_dir>/social-companies.json`) hat Name,
+Beschreibung/Positionierung, Zielgruppe, Website + CTA-Button (Endkarte), Standard-Angebot und -Preis, Farben
+(Akzent, Dunkel, Hell – Remotion leitet fehlende Töne ab und wählt Textfarben nach Kontrast), Tonalität, Hashtags,
+Ziel-Konten je Plattform, UpTik-Konten, Empfängerliste, Autopost an/aus und einen ständigen Themenwunsch.
+In App und Desktop unter **Social Media › Unternehmen** (Desktop) bzw. **Firmen** (Handy): hinzufügen, bearbeiten,
+löschen, aktiv wählen; beim Produzieren wird das Unternehmen ausgewählt.
+
+* **Migration:** Beim ersten Start wird PJE Systems das erste Profil – mit `config/social/brand.yaml` als
+  Faktenbasis (Claims, Fakten, Referenzen), Empfänger Sir + `social_media.video_recipients`, Autopost wie bisher
+  (Standard aus), offizielle Plattform-Konten. Zusätzlich entsteht das leere Beispielprofil **Apo HR**
+  (HR-Software, Multi-Tenant-SaaS) – Inhalte pflegt Sir selbst; ohne Website/CTA produziert es nichts.
+* **Getrennt je Unternehmen:** Zeitplan (`<Name> Daily Social Video`, neue Profile starten pausiert; PJE behält
+  seinen Zeitplan), Idempotenz (`social-daily[:<id>]:<Datum>`, eindeutig `company_id + auto_date`), kreatives
+  Gedächtnis (jedes Video unterscheidet sich von den früheren **desselben** Unternehmens), Bibliothek, Empfänger,
+  Konten. Offizielle Plattform-APIs nur für Profile mit „offizielle Plattform-Konten“; UpTik postet ein Video nur
+  über die UpTik-Konten seines Unternehmens (PJE ohne eigene Liste: alle Konten, die kein anderes Profil beansprucht)
+  und nur, wenn dessen Autopost an ist.
+* **Aktives Profil:** Die Auswahl in der App setzt es im Core; die Werkzeuge `social_produce_video`,
+  `social_list_videos`, `social_email_video`, `social_publish_video` nehmen ein optionales `company` (Name oder ID),
+  Standard ist das aktive Profil. Bei E-Mail/Veröffentlichen prüft es, dass das Video zu diesem Unternehmen gehört.
+* **Freigaben:** Empfänger, die Sir nur im Profil einträgt, brauchen je Versand weiter eine Freigabe – ohne Freigabe
+  gehen Mails nur an Sirs Adresse und `social_media.video_recipients`.
+
+## Vorrang der Eingabe beim Produzieren
+
+Was Sir im Feld „Vorgabe“ beim Produzieren einträgt (z. B. „Angebot für 299 €“), gilt vor allen Standardwerten des
+Profils. Früher wurde stattdessen immer der hinterlegte Preis (499 €) verwendet: Der Prompt stellte den Wunsch ans
+Ende und verbot zugleich „Preise außer den gültigen Angeboten“, die Szene `fact` kannte nur `price_from = 499 €`,
+und Captions sowie QA ließen nur Preise aus `brand.yaml` zu. Jetzt (`Brand.with_hint` in `brand.py`):
+
+* Die Vorgabe steht als **VORRANG** am Anfang von Konzept-, Korrektur- und Caption-Prompt.
+* Preise aus der Vorgabe werden zum einzigen gültigen Preis: eigener Fakt `hint_price` für die Szene `fact`,
+  abweichende Standardpreise fallen aus Fakten und Angeboten.
+* Storyboard-Prüfung, QA (Prüfung „Preise laut Vorgabe/Angebot“) und Captions lehnen andere Preise ab und verlangen,
+  dass der Preis der Vorgabe im Video bzw. in jeder Caption steht.
+* Die Vorgabe wird mit dem Konzept gespeichert (`concept.hint`), damit QA, Captions und ein fortgesetzter Lauf
+  dieselbe Grundlage haben. Ohne Vorgabe gelten die Profilwerte als Fallback.
+
 ## Bausteine
 
 | Teil | Wo |
@@ -30,10 +71,11 @@ normalen Zeitplaner, sichtbar in **Aufgaben** und **Zeitpläne**, gesteuert in d
 | Render | `render.py` → `social/render.mjs` (Remotion 4, Chrome Headless Shell) |
 | Sounddesign | `sfx.py` – Effekte und Musikbett werden mit FFmpeg synthetisiert (keine Samples, keine Lizenzfragen) |
 | Qualitätskontrolle | `qa.py` – Auflösung, Länge, Codec, Lautheit (Mix auf −14 LUFS, Prüfung −20…−9 LUFS), Lesezeit, Rechtschreibung, Frames per Vision; Fehler → automatische Korrektur und Neu-Render (max. 3) |
-| Captions | `captions.py` – je Plattform, Zeichenlimits, 3–5 Hashtags, keine Preise außer aus `brand.yaml` |
-| E-Mail | `emailer.py` – HTML im PJE-Look, MP4 als Anhang (≤ 18 MB) oder signierter Download-Link |
+| Profile | `companies.py` (Profile, Migration), `brand.py` (Marke je Profil + Vorrang der Vorgabe), `prices.py` |
+| Captions | `captions.py` – je Plattform, Zeichenlimits, 3–5 Hashtags, Preise nur aus Vorgabe bzw. Profil |
+| E-Mail | `emailer.py` – HTML mit Name und Akzentfarbe des Unternehmens, MP4 als Anhang (≤ 18 MB) oder signierter Download-Link |
 | Plattformen | `platforms.py` – Instagram, Facebook, TikTok, YouTube (offizielle APIs, OAuth, Keychain) |
-| Markenfakten | `config/social/brand.yaml` – **nur was hier steht, darf ein Video behaupten** |
+| Markenfakten | Profil + (PJE) `config/social/brand.yaml` – **nur was dort oder in Sirs Vorgabe steht, darf ein Video behaupten** |
 | Inspiration | `config/social/inspiration.yaml` – 60 Formate, nur Anregung, keine Rotationsliste |
 | UI | Desktop `desktop/src/views/SocialView.tsx`, Handy `apps/jarvis_mobile/lib/ui/screens/social_screen.dart` |
 
@@ -56,10 +98,11 @@ nur dieser Node, FFmpeg und das Remotion-Projekt; App und Desktop zeigen Status 
 E-Mail nutzt den Google-Connector (Gmail, `send_mail`). Mails an `social_media.owner_email` laufen ohne
 Einzelfreigabe (Sirs Freigabe vom 2026-10-28), jeder andere Empfänger braucht eine Freigabe.
 
-Fertige Videos gehen standardmäßig an Sir **und** die Liste `social_media.video_recipients` (`config/jarvis.yaml`,
-Standard: `bagy2014@gmail.com` – Bagy / Blagoja Ljubeski). Je Empfänger eine eigene Mail; schlägt eine fehl, werden die
-anderen trotzdem gesendet (Fehler im Log und im Video-Protokoll). Adressen der Liste gelten als freigegeben.
-Weiteren Empfänger ergänzen: Adresse unter `video_recipients` eintragen und den Core neu starten.
+Fertige Videos gehen an die Empfängerliste ihres Unternehmens (PJE Systems: Sir und Bagy / Blagoja Ljubeski,
+übernommen aus `social_media.video_recipients`). Je Empfänger eine eigene Mail; schlägt eine fehl, werden die
+anderen trotzdem gesendet (Fehler im Log und im Video-Protokoll). Ohne Freigabe je Versand gehen Mails nur an Sirs
+Adresse und die Liste `social_media.video_recipients` (`config/jarvis.yaml`); weitere Adressen im Profil lösen je
+Versand eine Freigabe aus. Dauerhaft freigeben: Adresse unter `video_recipients` eintragen und den Core neu starten.
 
 ## Bedienung
 
@@ -67,9 +110,10 @@ Weiteren Empfänger ergänzen: Adresse unter `video_recipients` eintragen und de
   letzte Veröffentlichungen, Fehler und Protokoll.
 * **Bibliothek** – alle Videos mit Player (Range-Streaming), MP4-Download, Captions/Hashtags kopieren,
   neu generieren (gleicher Auftrag, neue Idee), per Mail senden, manuell veröffentlichen oder als manuell gepostet markieren.
-* **Automatisierung** – täglich an/aus, Uhrzeit, E-Mail an/aus, Voiceover, Themenwunsch, Veröffentlichungszeit,
-  „Jetzt produzieren“.
-* **Connector** – Plattformen verbinden, Autopost global und je Plattform. **Autopost ist standardmäßig aus.**
+* **Automatisierung** – je Unternehmen: täglich an/aus, Uhrzeit, Themenwunsch, Autopost, Empfängerliste; für alle:
+  E-Mail an/aus, Voiceover, Veröffentlichungszeit.
+* **Unternehmen** – Profile anlegen, bearbeiten, löschen, aktiv wählen.
+* **Connector** – Plattformen verbinden, Autopost des Unternehmens und je Plattform. **Autopost ist standardmäßig aus.**
 
 Agent-Werkzeuge: `social_produce_video`, `social_list_videos`, `social_email_video`, `social_publish_video`
 (Risiko *high* → Freigabe, außer Sir erlaubt es ausdrücklich).
@@ -116,7 +160,8 @@ Statistiken: Alle 6 h holt der Core über dieselben APIs Kennzahlen der Beiträg
 ## Grenzen
 
 * Echte Kundenprojekte erscheinen erst, wenn in `brand.yaml` `allowed: true` gesetzt ist (Zustimmung des Kunden).
-* Aktionspreise (z. B. 299 €) nur als aktives Angebot mit Zeitraum in `brand.yaml`.
+* Aktionspreise (z. B. 299 €) kommen aus Sirs Vorgabe beim Produzieren oder als Standard-Angebot/-Preis des Profils
+  (PJE zusätzlich als aktives Angebot mit Zeitraum in `brand.yaml`); Jarvis erfindet keine Preise.
 * Voiceover nutzt die lokale Jarvis-TTS; standardmäßig aus.
 * `npm run browser` lädt den Browser für Remotion: unter macOS **Chrome for Testing** (ein echtes `.app`-Bundle),
   unter Linux/Windows die Chrome Headless Shell. Grund: Vom Core gestartet bricht der GPU-Prozess der Headless Shell

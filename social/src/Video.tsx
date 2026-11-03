@@ -2,7 +2,7 @@
 import type { ComponentType, ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { AbsoluteFill, Sequence, continueRender, delayRender, useCurrentFrame } from "remotion";
-import { C, ThemeContext, loadBrandFonts, themeFor } from "./brand";
+import { C, ThemeContext, applyBrand, loadBrandFonts, themeFor } from "./brand";
 import { EASE_OUT, prog, rnd } from "./motion";
 import { Chat, Notification } from "./scenes/phone";
 import { Dating, EndCard, FactScene, Review, Weather } from "./scenes/story";
@@ -118,6 +118,7 @@ function SceneView({ scene, board }: { scene: Scene; board: Storyboard }) {
 }
 
 export function SocialVideo(board: Storyboard) {
+  applyBrand(board.brand); // the company's colours before any scene reads them
   const [handle] = useState(() => delayRender("Loading brand fonts"));
   useEffect(() => {
     loadBrandFonts().then(

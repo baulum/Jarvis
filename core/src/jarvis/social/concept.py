@@ -42,11 +42,20 @@ CONCEPT_SCHEMA: dict[str, Any] = {
     "required": ["concept", "script", "storyboard"],
 }
 
-SYSTEM = (
-    "Du bist Creative Director und Motion Designer für PJE Systems, eine kleine Webdesign-Agentur aus Wolnzach. "
-    "Du entwickelst täglich ein eigenes, überraschendes 9:16-Kurzvideo (8–12 s) und lieferst es als exakt "
-    "strukturiertes Storyboard. Du erfindest nie Fakten, Kunden, Bewertungen, Zahlen, Preise oder Ergebnisse."
-)
+
+
+def system_prompt(brand: Brand) -> str:
+    who = f"{brand.company}, {brand.description}" if brand.description else brand.company
+    text = (
+        f"Du bist Creative Director und Motion Designer für {who}. "
+        "Du entwickelst täglich ein eigenes, überraschendes 9:16-Kurzvideo (8–12 s) und lieferst es als exakt "
+        "strukturiertes Storyboard. Du erfindest nie Fakten, Kunden, Bewertungen, Zahlen, Preise oder Ergebnisse."
+    )
+    if brand.hint:
+        text += " Vorgaben von Sir zum einzelnen Video gelten als belegt und haben Vorrang vor allen Standardwerten."
+    return text
+
+
 
 Ask = Callable[[str, str, dict[str, Any]], Awaitable[Any]]
 
@@ -89,8 +98,10 @@ def build_prompt(
         f"- {f['id']} [{f['category']}] {f['title']}: {f.get('idea', '')} (Bausteine: {', '.join(f.get('components') or [])})"
         for f in inspiration.get("formats") or []
     )
-    rules = [
-        "AUFGABE: Entwickle für heute EIN neues Video. Die Formate unten sind nur Inspiration – kombiniere, verdrehe, "
+    priority = brand.priority_block()
+    rules = [*([priority, ""] if priority else [])]
+    rules += [
+        f"AUFGABE: Entwickle für heute EIN neues Video für {brand.company}. Die Formate unten sind nur Inspiration – kombiniere, verdrehe, "
         "übertrage sie zu einer eigenen Idee. Kein Template mit ausgetauschtem Text.",
         f"Kategorien: {json.dumps(cats, ensure_ascii=False)}",
         f"PFLICHT – heute verboten (gestern gelaufen): {c['forbidden_categories'] or 'keine'}; bevorzugt in dieser "
@@ -127,19 +138,22 @@ def build_prompt(
         f"sie dauert höchstens {sb.HOOK_SCENE_MAX_S:g} s, ihr Kern muss in 2 s erfasst sein.",
         f"- Lesezeit: pro Szene ≥ {sb.READ_BASE_S} s + Wörter / {sb.WORDS_PER_SECOND}; lieber weniger Text, größer.",
         f"- Letzte Szene ist end_card mit button „{brand.cta_button}“ und url „{brand.website}“, mindestens 2 s lang.",
-        "- Szene fact nur mit einer fact_id aus der Faktenliste. Preise/Angebote nur aus „Gültige Angebote“.",
+        "- Szene fact nur mit einer fact_id aus der Faktenliste. Preise/Angebote nur aus „Gültige Angebote“"
+        + (f"; Preis dieses Videos: {' / '.join(brand.required_prices())} (Vorgabe von Sir) – sichtbar zeigen." if brand.required_prices() else "."),
         "- Keine echten Kunden, Marken oder Personen; Chats/Bewertungen/Parodien sind fiktiv (satire: true setzen, wenn "
         "review, dating oder weather vorkommen). Keine Ranking- oder Ergebnisversprechen.",
         "- Texte auf Deutsch, kurz, konkret, mit Witz oder Haltung; kein Marketing-Sprech („innovativ“, „nächstes Level“).",
-        "- Headlines dürfen mit Punkt enden (Markenmotiv: der Punkt wird blau).",
+        "- Headlines dürfen mit Punkt enden (Markenmotiv: der Punkt erscheint in der Akzentfarbe).",
         "- concept.key: kurzer, sprechender Slug des Grundkonzepts (z. B. „captcha-kein-kunde-von-2011“).",
         "- concept.summary: 1–2 Sätze für Sir; concept.inspiration: IDs der Formate, die dich inspiriert haben.",
         "- script: das Skript Szene für Szene in Prosa (was man sieht, liest, hört).",
     ]
     if voiceover:
         rules.append("- Zusätzlich storyboard.voiceover: ein gesprochener Satz (≤ 200 Zeichen), der zum Timing passt.")
-    if hint:
-        rules += ["", f"WUNSCH VON SIR für dieses Video: {hint}"]
+    if hint and not brand.hint:  # a caller that passed the hint only here: it still leads the prompt
+        return build_prompt(brand.with_hint(hint), inspiration, history, today, voiceover=voiceover)
+    if brand.hint:
+        rules += ["", f"ERINNERUNG – Vorgabe von Sir (Vorrang vor allen Standardwerten): {brand.hint}"]
     return "\n".join(rules)
 
 
@@ -173,8 +187,9 @@ def check(raw: dict[str, Any], brand: Brand, history: list[Past], today: date) -
     )
     used = {s.get("props", {}).get("fact_id") for s in board.get("scenes", []) if s.get("component") == "fact"}
     board["facts"] = [f for f in brand.facts if f["id"] in used]
+    board["brand"] = brand.render_info()
     sb.fit_durations(board)
-    problems = list(sb.validate(board, fact_ids=brand.fact_ids).problems)
+    problems = list(validate_for(board, brand, today).problems)
     end = board["scenes"][-1] if board.get("scenes") else {}
     if end.get("component") == "end_card" and str(end.get("props", {}).get("url", "")).strip() != brand.website:
         problems.append(f"end_card.url muss „{brand.website}“ sein")
@@ -185,6 +200,16 @@ def check(raw: dict[str, Any], brand: Brand, history: list[Past], today: date) -
     raw["concept"] = concept
     raw["storyboard"] = board
     return raw, problems
+
+
+def validate_for(board: dict[str, Any], brand: Brand, today: date | None = None) -> sb.Check:
+    """Storyboard check with the brand's facts and prices (Sir's input first, profile defaults as fallback)."""
+    return sb.validate(
+        board,
+        fact_ids=brand.fact_ids,
+        allowed_prices=brand.allowed_prices(today),
+        required_prices=brand.required_prices(),
+    )
 
 
 async def generate(
@@ -198,14 +223,17 @@ async def generate(
     voiceover: bool = False,
     attempts: int = MAX_ATTEMPTS,
 ) -> ConceptResult:
-    base = build_prompt(brand, inspiration, history, today, hint=hint, voiceover=voiceover)
+    if hint and not brand.hint:
+        brand = brand.with_hint(hint)
+    base = build_prompt(brand, inspiration, history, today, voiceover=voiceover)
+    system = system_prompt(brand)
     prompt = base
     notes: list[str] = []
     problems: list[str] = []
     seen: list[str] = []
     raw: dict[str, Any] = {}
     for attempt in range(1, attempts + 1):
-        out = await ask(SYSTEM, prompt, CONCEPT_SCHEMA)
+        out = await ask(system, prompt, CONCEPT_SCHEMA)
         if not isinstance(out, dict):
             problems = ["Antwort war kein JSON-Objekt"]
             prompt = base + "\n\nAntworte ausschließlich im vorgegebenen JSON-Format."
@@ -230,20 +258,26 @@ class ConceptRejected(RuntimeError):
 
 async def revise_storyboard(ask: Ask, brand: Brand, board: dict[str, Any], issues: list[str]) -> dict[str, Any]:
     """After a failed QA: same idea, fixed storyboard (shorter texts, longer scenes …). Checked again by the caller."""
+    priority = brand.priority_block()
     prompt = (
-        "Dieses Storyboard eines PJE-Systems-Videos hat in der Qualitätskontrolle Probleme. Korrigiere NUR, was nötig "
-        "ist (Texte kürzen/korrigieren, Szenen verlängern, Komponenten tauschen, wenn ein Text nicht passt). Idee, "
-        "Kategorie und Tonalität bleiben.\n\nPROBLEME:\n"
+        (priority + "\n\n" if priority else "")
+        + f"Dieses Storyboard eines {brand.company}-Videos hat in der Qualitätskontrolle Probleme. Korrigiere NUR, "
+        "was nötig ist (Texte kürzen/korrigieren, Szenen verlängern, Komponenten tauschen, wenn ein Text nicht passt). "
+        "Idee, Kategorie, Tonalität, Angebot und Preis bleiben.\n\nPROBLEME:\n"
         + "\n".join(f"- {i}" for i in issues)
         + "\n\nBAUKASTEN:\n"
         + sb.component_catalog()
+        + "\n\nFAKTEN für die Szene fact (nur diese IDs): "
+        + "; ".join(f"{f['id']} = {f['value']}" for f in brand.facts)
         + "\n\nSTORYBOARD:\n"
-        + json.dumps({k: v for k, v in board.items() if k != "facts"}, ensure_ascii=False)
+        + json.dumps({k: v for k, v in board.items() if k not in ("facts", "brand")}, ensure_ascii=False)
     )
-    out = await ask(SYSTEM, prompt, sb.LLM_STORYBOARD_SCHEMA)
+    out = await ask(system_prompt(brand), prompt, sb.LLM_STORYBOARD_SCHEMA)
     if not isinstance(out, dict):
         raise ConceptRejected(["Korrektur war kein JSON"], [])
     fixed = sb.normalize(out, title=board.get("title", ""), category=board["category"], tone=board["tone"])
-    fixed["facts"] = board.get("facts", [])
+    used = {s.get("props", {}).get("fact_id") for s in fixed.get("scenes", []) if s.get("component") == "fact"}
+    fixed["facts"] = [f for f in brand.facts if f["id"] in used] or board.get("facts", [])
+    fixed["brand"] = board.get("brand") or brand.render_info()
     sb.fit_durations(fixed)
     return fixed

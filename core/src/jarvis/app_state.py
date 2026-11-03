@@ -184,7 +184,7 @@ class AppState:
         self.device_pairing = PairingService(settings.devices.pairing_ttl_s)
         # WhatsApp: one central connection on this server (Node sidecar, supervised), shared by every client
         self.whatsapp = WhatsAppService(self)
-        # Daily PJE Systems social video (jarvis.social): schedule → playbook → Remotion/FFmpeg → library → e-mail
+        # Social videos per company profile (jarvis.social): schedule → playbook → Remotion/FFmpeg → library → e-mail
         self.social = SocialMediaService(self)
         # UpTik: publishing over the platforms' web pages in a real browser (jarvis.uptik), off until Sir enables it
         self.uptik = UptikService(self)

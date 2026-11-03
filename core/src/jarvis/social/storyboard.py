@@ -2,7 +2,8 @@
 
 ``validate`` checks a storyboard against the JSON schema (per component its own props schema) and the rules the
 schema cannot express: total length, end card last, facts only from the brand file, satire marking, readable text
-(reading time per scene). It returns human-readable problems – the concept step feeds them back to the LLM.
+(reading time per scene), prices only as allowed (and Sir's price from the "Produzieren" field actually shown). It
+returns human-readable problems – the concept step feeds them back to the LLM.
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import jsonschema
+
+from jarvis.social.prices import amount, prices_in
 
 FPS = 30
 WIDTH, HEIGHT = 1080, 1920
@@ -267,6 +270,7 @@ STORYBOARD_SCHEMA: dict[str, Any] = {
         "voiceover": _s(220),
         "scenes": _arr(_scene_schema(), 3, 8),
         "facts": {"type": "array"},
+        "brand": {"type": "object"},  # name, colours and logo of the company (filled in by the Core)
     },
     "required": ["version", "title", "category", "tone", "palette", "scenes"],
     "additionalProperties": False,
@@ -401,7 +405,40 @@ def total_seconds(board: dict[str, Any]) -> float:
     return sum(round(float(s.get("duration", 0)) * FPS) for s in board.get("scenes", [])) / FPS
 
 
-def validate(board: dict[str, Any], *, fact_ids: set[str] | None = None) -> Check:
+def board_texts(board: dict[str, Any]) -> list[str]:
+    """Every text the video shows (fact scenes with their value and label)."""
+    facts = _fact_text(board)
+    return [t for s in board.get("scenes") or [] if isinstance(s, dict) for t in scene_texts(s, facts)]
+
+
+def price_problems(
+    board: dict[str, Any], allowed: set[str] | None = None, required: list[str] | None = None
+) -> list[str]:
+    """Prices in the video only from ``allowed`` (Sir's input, else the profile's offers/facts); every price of
+    ``required`` (Sir's input) must be visible somewhere."""
+    shown = {amount(p): p for t in board_texts(board) for p in prices_in(t)}
+    out: list[str] = []
+    if allowed is not None:
+        ok = {amount(p) for p in allowed}
+        for a, p in shown.items():
+            if a not in ok:
+                out.append(
+                    f"Preis „{p}“ ist nicht erlaubt – erlaubt: {', '.join(sorted(allowed)) or 'keine Preise'}"
+                    + (" (Vorgabe von Sir hat Vorrang)" if required else "")
+                )
+    for p in required or []:
+        if amount(p) not in shown:
+            out.append(f"Sirs Vorgabe {p} kommt im Video nicht vor – den Preis sichtbar zeigen (Text oder Szene fact)")
+    return out
+
+
+def validate(
+    board: dict[str, Any],
+    *,
+    fact_ids: set[str] | None = None,
+    allowed_prices: set[str] | None = None,
+    required_prices: list[str] | None = None,
+) -> Check:
     problems: list[str] = []
     try:
         jsonschema.validate(board, STORYBOARD_SCHEMA)
@@ -447,6 +484,7 @@ def validate(board: dict[str, Any], *, fact_ids: set[str] | None = None) -> Chec
                 problems.append(f"Szene {s['id']}: Sound bei {cue['at']} s liegt hinter dem Szenenende")
     if any(s["component"] in ("review", "dating", "weather") for s in scenes) and not board.get("satire", False):
         problems.append("Parodie-Szenen (review/dating/weather) brauchen satire: true")
+    problems += price_problems(board, allowed_prices, required_prices)
     return Check(not problems, problems)
 
 

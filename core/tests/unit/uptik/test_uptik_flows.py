@@ -278,6 +278,32 @@ async def test_video_handoff_off_inbox_and_autopost(uptik: SimpleNamespace) -> N
     assert posts["tiktok"]["approval_id"] == out["approval_id"]
 
 
+async def test_handoff_posts_only_on_the_companys_accounts(uptik: SimpleNamespace) -> None:
+    """Company profiles (jarvis.social.companies): a brand's video never reaches another brand's account."""
+    uptik.conn.settings["handoff_enabled"] = True
+    pje = await connected(uptik, "tiktok", "PJE")
+    apo = await connected(uptik, "tiktok", "Apo HR")
+    for a in (pje, apo):
+        await uptik.svc.update_account(a["id"], "desktop:sir", autopost=True)
+
+    off = clip(uptik, "vid-off")
+    off.autopost = False  # the company's autopost switch is off: inbox only
+    assert (await uptik.svc.on_video_ready(off))["queued"] is False
+
+    own = clip(uptik, "vid-apo")
+    own.accounts = ["Apo HR"]  # by label or id
+    out = await uptik.svc.on_video_ready(own)
+    await uptik.executor.decide(uuid.UUID(out["approval_id"]), True, OWNER)
+    assert {p["account_id"] for p in await uptik.svc.store.posts()} == {apo["id"]}
+
+    legacy = clip(uptik, "vid-pje")
+    legacy.exclude_accounts = [apo["id"]]  # PJE without own list: every account except the claimed ones
+    out = await uptik.svc.on_video_ready(legacy)
+    await uptik.executor.decide(uuid.UUID(out["approval_id"]), True, OWNER)
+    posts = [p for p in await uptik.svc.store.posts() if p["source_ref"] == "vid-pje"]
+    assert [p["account_id"] for p in posts] == [pje["id"]]
+
+
 async def test_handoff_scheduled_time_and_never_raises(uptik: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     uptik.conn.settings.update(handoff_enabled=True, handoff_publish_time="18:00")
     tt = await connected(uptik, "tiktok", "PJE")

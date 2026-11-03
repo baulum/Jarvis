@@ -204,7 +204,8 @@ async def test_email_to_someone_else_needs_approval(social: SimpleNamespace, tin
     vid = await ready_video(social, tiny_video)
     res = await social.executor.execute("social_email_video", {"video_id": str(vid), "to": "kunde@example.com"}, ToolContext(principal=OWNER))
     assert res.status == "approval_required" and social.google.sent == []
-    social.svc.settings.save({"email_recipient": "bagy@example.com"})  # a configured third-party recipient, too
+    # a third-party recipient Sir put into the profile in the app still needs an approval per mail
+    social.svc.companies.update("pje-systems", {"recipients": ["bagy@example.com"]})
     res = await social.executor.execute("social_email_video", {"video_id": str(vid)}, ToolContext(principal=SYSTEM))
     assert res.status == "approval_required" and social.google.sent == []
 
@@ -239,21 +240,25 @@ async def test_autopost_is_off_by_default_and_needs_connection_and_switches(soci
     svc = social.svc
     assert not any(svc.can_autopost(pf) for pf in ("instagram", "facebook", "tiktok", "youtube"))
     vid = await svc.repo.create(status="ready")
-    with pytest.raises(StepSkip, match="Autopost aus"):
+    with pytest.raises(StepSkip, match="Autopost für PJE Systems aus"):
         await svc.step_publish(ctx_for(social, {}, {"video_id": str(vid)}))
 
     ig = InstagramConnector(social.state)
     social.state.connectors.connectors["social_instagram"] = ig
-    svc.settings.save({"autopost_enabled": True, "platforms": {"instagram": {"autopost": True}}})
+    svc.save_settings({"autopost_enabled": True, "platforms": {"instagram": {"autopost": True}}})
     assert not svc.can_autopost("instagram")  # switched on, but connector disabled and not connected
     ig.enabled = True
     assert not svc.can_autopost("instagram")  # still not connected
     social.secrets["meta-oauth-token"] = '{"page_token": "x", "page_id": "1", "ig_user_id": "2"}'
     assert svc.can_autopost("instagram")
-    svc.settings.save({"autopost_enabled": False})
-    assert not svc.can_autopost("instagram")  # global switch wins
-    svc.settings.save({"autopost_enabled": True, "platforms": {"instagram": {"autopost": False}}})
+    svc.save_settings({"autopost_enabled": False})
+    assert not svc.can_autopost("instagram")  # the company's switch wins
+    svc.save_settings({"autopost_enabled": True, "platforms": {"instagram": {"autopost": False}}})
     assert not svc.can_autopost("instagram")  # per-platform switch wins
+    svc.save_settings({"platforms": {"instagram": {"autopost": True}}})
+    apo = svc.company("Apo HR")
+    svc.companies.update(apo["id"], {"autopost": True})
+    assert not svc.can_autopost("instagram", company=svc.company("Apo HR"))  # PJE's connected accounts, not Apo's
 
 
 async def test_publishing_always_needs_an_approval(social: SimpleNamespace, tiny_video: Path) -> None:

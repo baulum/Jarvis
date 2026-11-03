@@ -17,6 +17,7 @@ from typing import Any
 
 from jarvis.social import storyboard as sb
 from jarvis.social.media import Loudness, MediaError, Probe, extract_frames, frame_stats
+from jarvis.social.prices import prices_in
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +27,56 @@ MAX_TRUE_PEAK = -0.5
 SILENT_BELOW_DB = -40.0
 MIN_TEXT_PX = 40
 
-# Text/background pairs the compositions use per surface (social/src/brand.ts) – checked like WCAG AA.
-SURFACE_COLORS: dict[str, list[tuple[str, str]]] = {
-    "dark": [("#ffffff", "#0b0c0e"), ("#8fa6ff", "#0b0c0e"), ("#ffffff", "#2651f0"), ("#ffffff", "#1c1e22")],
-    "light": [
-        ("#0b0c0e", "#e3e5e8"), ("#2651f0", "#e3e5e8"), ("#50545b", "#e3e5e8"), ("#ffffff", "#2651f0"),
-        ("#0b0c0e", "#ffffff"),
-    ],
-    "accent": [("#ffffff", "#2651f0"), ("#ffffff", "#0b0c0e"), ("#0b0c0e", "#ffffff")],
-}  # fmt: skip
+PJE_COLORS = {
+    "ink": "#0b0c0e",
+    "graphite": "#1c1e22",
+    "canvas": "#e3e5e8",
+    "accent": "#2651f0",
+    "accent_on_dark": "#8fa6ff",
+}
+WHITE, SLATE = "#ffffff", "#50545b"
+
+
+def mix(a: str, b: str, t: float) -> str:
+    """``a`` moved towards ``b`` by ``t`` (0…1) – same formula as ``mix`` in social/src/brand.ts."""
+    ca = [int(a.lstrip("#")[i : i + 2], 16) for i in (0, 2, 4)]
+    cb = [int(b.lstrip("#")[i : i + 2], 16) for i in (0, 2, 4)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(ca, cb, strict=True))
+
+
+def brand_palette(colors: dict[str, str] | None = None) -> dict[str, str]:
+    """The colours a video is drawn with: the company's, missing ones derived like ``applyBrand`` in brand.ts.
+    Text colours that would fall under the contrast minimum switch to the surface's foreground (as in themeFor)."""
+    given = {k: v.lower() for k, v in (colors or {}).items() if isinstance(v, str) and v.startswith("#")}
+    c = {**PJE_COLORS, **given}
+    if c["accent"] != PJE_COLORS["accent"] and "accent_on_dark" not in given:
+        c["accent_on_dark"] = mix(c["accent"], WHITE, 0.45)
+    if c["ink"] != PJE_COLORS["ink"] and "graphite" not in given:
+        c["graphite"] = mix(c["ink"], WHITE, 0.08)
+    on_accent = WHITE if contrast(WHITE, c["accent"]) >= contrast(c["ink"], c["accent"]) else c["ink"]
+    return {
+        **c,
+        "on_accent": on_accent,
+        "accent_text_dark": c["accent_on_dark"] if contrast(c["accent_on_dark"], c["ink"]) >= MIN_CONTRAST else WHITE,
+        "accent_text_light": c["accent"] if contrast(c["accent"], c["canvas"]) >= MIN_CONTRAST else c["ink"],
+    }
+
+
+def surface_colors(colors: dict[str, str] | None = None) -> dict[str, list[tuple[str, str]]]:
+    """Text/background pairs the compositions use per surface (social/src/brand.ts) – checked like WCAG AA."""
+    p = brand_palette(colors)
+    return {
+        "dark": [
+            (WHITE, p["ink"]), (p["accent_text_dark"], p["ink"]), (p["on_accent"], p["accent"]), (WHITE, p["graphite"]),
+        ],
+        "light": [
+            (p["ink"], p["canvas"]), (p["accent_text_light"], p["canvas"]), (SLATE, p["canvas"]),
+            (p["on_accent"], p["accent"]), (p["ink"], WHITE),
+        ],
+        "accent": [(p["on_accent"], p["accent"]), (WHITE, p["ink"]), (p["ink"], WHITE)],
+    }  # fmt: skip
+
+
 PALETTE_SURFACE = {"ink": "dark", "graphite": "dark", "canvas": "light", "paper": "light", "electric": "accent"}
 
 VISION_SCHEMA: dict[str, Any] = {
@@ -77,6 +119,9 @@ def _lum(hex_color: str) -> float:
 def contrast(fg: str, bg: str) -> float:
     a, b = sorted((_lum(fg), _lum(bg)), reverse=True)
     return (a + 0.05) / (b + 0.05)
+
+
+SURFACE_COLORS = surface_colors()  # PJE Systems
 
 
 @dataclass(slots=True)
@@ -154,7 +199,14 @@ def technical(report: QaReport, info: Probe, loud: Loudness, board: dict[str, An
     )
 
 
-def textual(report: QaReport, board: dict[str, Any], fact_ids: set[str]) -> None:
+def textual(
+    report: QaReport,
+    board: dict[str, Any],
+    fact_ids: set[str],
+    allowed_prices: set[str] | None = None,
+    required_prices: list[str] | None = None,
+) -> None:
+    """``allowed_prices``/``required_prices``: Sir's input first, the profile's offers as fallback (Brand)."""
     check = sb.validate(board, fact_ids=fact_ids)
     reading = [p for p in check.problems if "zu kurz zum Lesen" in p]
     report.add(
@@ -174,10 +226,20 @@ def textual(report: QaReport, board: dict[str, Any], fact_ids: set[str]) -> None
         True,
         "Komponenten setzen Text ≥ 40 px; Längen per Schema begrenzt",
     )
+    prices = sb.price_problems(board, allowed_prices, required_prices)
+    report.add(
+        "prices",
+        "Preise laut Vorgabe/Angebot",
+        not prices,
+        "; ".join(prices)[:400] or ", ".join(sorted({x for t in sb.board_texts(board) for x in prices_in(t)}))
+        or "keine",
+        "storyboard",
+    )
     pairs: list[tuple[str, str]] = []
+    colors = surface_colors((board.get("brand") or {}).get("colors"))
     for s in board.get("scenes", []):
         surface = s.get("surface") or PALETTE_SURFACE.get(board.get("palette", "ink"), "dark")
-        pairs += SURFACE_COLORS.get(surface, [])
+        pairs += colors.get(surface, [])
     worst = min((contrast(fg, bg), fg, bg) for fg, bg in pairs) if pairs else (21.0, "", "")
     report.add(
         "contrast",
@@ -219,7 +281,9 @@ async def visual(
     board: dict[str, Any],
     frames_dir: Path,
     ask: Callable[[str, Path], Awaitable[Any]] | None,
+    required_prices: list[str] | None = None,
 ) -> None:
+    company = (board.get("brand") or {}).get("name") or "PJE Systems"
     times = frame_times(board)
     try:
         frames = await extract_frames(ffmpeg, video, [t for _, t in times], frames_dir)
@@ -247,14 +311,19 @@ async def visual(
         for (sid, _), f in zip(times, frames, strict=True)
     )
     prompt = (
-        "Du bist die Qualitätskontrolle für ein 9:16-Werbevideo von PJE Systems (Webdesign). Lies jede PNG-Datei in "
+        f"Du bist die Qualitätskontrolle für ein 9:16-Werbevideo von {company}. Lies jede PNG-Datei in "
         "diesem Ordner mit dem Read-Werkzeug und prüfe sie. Die Bilder sind auf 540 px Breite verkleinert.\n"
         f"Frames und die Texte, die darin stehen sollen:\n{listing}\n\n"
         "Prüfe: 1) Rechtschreibung und Grammatik (Deutsch) aller sichtbaren Texte; 2) Lesbarkeit (Größe, Kontrast); "
         "3) abgeschnittene, überlappende oder aus dem Bild laufende Texte; 4) Texte im unteren Fünftel oder am rechten "
-        "Rand, wo Plattform-Buttons liegen; 5) der letzte Frame zeigt Logo, CTA-Button und URL; 6) etwas wirkt kaputt, "
-        "leer oder unfertig; 7) Parodien sind als „Satire · fiktiv“ markiert.\n"
-        "Bewerte nur echte Fehler als blocker. Normale Animationszwischenstände sind kein Fehler. Rechtschreibfehler "
+        "Rand, wo Plattform-Buttons liegen; 5) der letzte Frame zeigt Logo bzw. Firmenname, CTA-Button und URL; "
+        "6) etwas wirkt kaputt, leer oder unfertig; 7) Parodien sind als „Satire · fiktiv“ markiert.\n"
+        + (
+            f"Preise im Video müssen genau so stehen: {', '.join(required_prices)} (Vorgabe von Sir).\n"
+            if required_prices
+            else ""
+        )
+        + "Bewerte nur echte Fehler als blocker. Normale Animationszwischenstände sind kein Fehler. Rechtschreibfehler "
         "gib zusätzlich als spelling_fixes (alter Text → korrigierter Text, exakt wie im Storyboard) an."
     )
     try:

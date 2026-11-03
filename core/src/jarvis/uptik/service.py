@@ -813,14 +813,20 @@ class UptikService:
                 captions=clip.captions,
             )
             await self._changed()
+            def named(a: dict[str, Any], refs: list[str]) -> bool:
+                return a["id"] in refs or a["label"].lower() in {r.lower() for r in refs}
+
             targets = [
                 a
                 for a in await self.store.accounts()
-                if a["autopost"]
+                if clip.autopost
+                and a["autopost"]
                 and a["status"] == "connected"
                 and a["circuit_state"] == "ok"
                 and a["platform"] in self.platforms()
                 and (not clip.platforms or a["platform"] in clip.platforms)
+                and (clip.accounts is None or named(a, clip.accounts))
+                and not named(a, clip.exclude_accounts)
             ]
             if not targets:
                 return {"inbox_id": item["id"], "queued": False}

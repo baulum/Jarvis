@@ -1,6 +1,6 @@
 // Satire formats (always marked "Satire · fiktiv"), brand facts and the end card.
 import { AbsoluteFill, Img, interpolate, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
-import { C, FONT, MONO, SAFE, SAFE_W, fit, useTheme } from "../brand";
+import { C, FONT, MONO, SAFE, SAFE_W, accentRgba, brandName, fit, useTheme } from "../brand";
 import { EASE_IN_OUT, EASE_OUT, pop, prog, rnd } from "../motion";
 import type { Fact } from "../types";
 import { Button, Dotted, Headline, Label, SatireTag, Stage } from "../ui";
@@ -178,13 +178,18 @@ export function EndCard({ headline, button, url, subline }: { headline: string; 
   const dotX = interpolate(frame, [0, 16], [700, 0], { extrapolateRight: "clamp", easing: EASE_OUT });
   return (
     <Stage style={{ gap: 44 }}>
-      <Img src={staticFile(t.logo)} style={{ width: 420, alignSelf: "flex-start", opacity: logoP, translate: `0 ${(1 - logoP) * 30}px` }} />
+      {t.logo ? (
+        <Img src={staticFile(t.logo)} style={{ width: 420, alignSelf: "flex-start", opacity: logoP, translate: `0 ${(1 - logoP) * 30}px` }} />
+      ) : (
+        // company without a logo file: its name as a wordmark
+        <div style={{ fontSize: fit(brandName(), SAFE_W, 88, 52), fontWeight: 800, letterSpacing: "-0.04em", lineHeight: 1, color: t.fg, alignSelf: "flex-start", opacity: logoP, translate: `0 ${(1 - logoP) * 30}px` }}>{brandName()}</div>
+      )}
       <div style={{ fontSize: fit(headline, SAFE_W * 2, 104, 62), fontWeight: 700, letterSpacing: "-0.045em", lineHeight: 1.0, textWrap: "balance" }}>
         {headline.replace(/\.$/, "")}
         <span style={{ display: "inline-block", color: t.surface === "accent" ? C.ink : C.accent, translate: `${dotX}px 0` }}>.</span>
       </div>
       {subline ? <div style={{ fontSize: 46, color: t.muted, lineHeight: 1.2 }}>{subline}</div> : null}
-      <Button text={button} style={{ scale: String(0.85 + 0.15 * btnP), opacity: Math.min(1, btnP * 1.5), boxShadow: frame > durationInFrames - 30 ? `0 0 0 ${((frame % 30) / 30) * 26}px rgba(38,81,240,${0.35 * (1 - (frame % 30) / 30)})` : "none" }} />
+      <Button text={button} style={{ scale: String(0.85 + 0.15 * btnP), opacity: Math.min(1, btnP * 1.5), boxShadow: frame > durationInFrames - 30 ? `0 0 0 ${((frame % 30) / 30) * 26}px ${accentRgba(0.35 * (1 - (frame % 30) / 30))}` : "none" }} />
       <div style={{ fontFamily: MONO, fontSize: 46, color: t.fg, letterSpacing: "0.02em", opacity: prog(frame, 16, 10) }}>{url}</div>
     </Stage>
   );

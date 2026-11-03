@@ -56,7 +56,18 @@ import type {
   WaStatus,
   WaSuggestion,
 } from "./whatsapp";
-import type { Platform, PlatformStatus, Publication, SocialSettings, SocialStatus, SocialVideo, SocialVideoDetail } from "./social";
+import type {
+  Company,
+  CompanyInput,
+  CompanyList,
+  Platform,
+  PlatformStatus,
+  Publication,
+  SocialSettings,
+  SocialStatus,
+  SocialVideo,
+  SocialVideoDetail,
+} from "./social";
 import type { UptikAccount, UptikInboxItem, UptikPlatform, UptikPost, UptikPostBody, UptikSettings, UptikStatus, UptikUpload } from "./uptik";
 import type { DesktopBuild } from "./build";
 import type { SlashCommand } from "./slash";
@@ -356,33 +367,41 @@ export function createApi(opts: ApiOptions) {
       post<AgentMessageResult>(`/tasks/${id(tid)}/message`, { text, immediate }),
     commands: () => get<{ version: number; commands: SlashCommand[] }>("/commands"),
 
-    // social media (daily PJE Systems video; the library lives on the Core, the MP4 comes over the API)
+    // social media (daily video per company profile; the library lives on the Core, the MP4 comes over the API).
+    // `company` = profile id; omitted = the active profile on the Core.
     social: {
-      status: () => get<SocialStatus>("/social/status"),
+      status: (company?: string) => get<SocialStatus>("/social/status", company ? { company } : undefined),
       checkDependencies: () => post<SocialStatus["dependencies"]>("/social/dependencies/check"),
-      videos: (limit = 60) => get<{ videos: SocialVideo[]; has_more: boolean }>("/social/videos", { limit }),
+      videos: (limit = 60, company?: string) =>
+        get<{ videos: SocialVideo[]; has_more: boolean }>("/social/videos", company ? { limit, company } : { limit }),
+      companies: () => get<CompanyList>("/social/companies"),
+      createCompany: (body: CompanyInput) => post<Company>("/social/companies", body),
+      updateCompany: (cid: string, body: CompanyInput) => put<Company>(`/social/companies/${id(cid)}`, body),
+      deleteCompany: (cid: string) => del<{ deleted: string; active: string }>(`/social/companies/${id(cid)}`),
+      activateCompany: (cid: string) => post<CompanyList>(`/social/companies/${id(cid)}/activate`),
       video: (vid: string) => get<SocialVideoDetail>(`/social/videos/${id(vid)}`),
       /** The MP4 as a Blob (authenticated; the webview only plays blob: URLs). */
       file: async (vid: string, download = false) =>
         (await raw("GET", `/social/videos/${id(vid)}/file`, undefined, download ? { download: true } : undefined, 300_000)).blob(),
       link: (vid: string, hours = 24) => post<{ path: string; url: string | null; hours: number }>(`/social/videos/${id(vid)}/link`, { hours }),
-      produce: (hint = "") => post<{ task_id: string; title: string }>("/social/produce", { hint }),
+      produce: (hint = "", company?: string) => post<{ task_id: string; title: string }>("/social/produce", { hint, company }),
       regenerate: (vid: string, hint = "") => post<{ task_id: string }>(`/social/videos/${id(vid)}/regenerate`, { hint }),
       email: (vid: string, to?: string) => post<{ status: string; summary?: string }>(`/social/videos/${id(vid)}/email`, to ? { to } : {}),
       publish: (vid: string, platform: Platform) =>
         post<{ status: string; summary?: string; data?: { url?: string } }>(`/social/videos/${id(vid)}/publish`, { platform }),
       markManual: (vid: string, platform: Platform, postUrl: string | null) =>
         post<Publication>(`/social/videos/${id(vid)}/publications/${platform}/manual`, { post_url: postUrl }),
-      settings: () => get<SocialSettings>("/social/settings"),
+      settings: (company?: string) => get<SocialSettings>("/social/settings", company ? { company } : undefined),
       saveSettings: (
-        body: Partial<Omit<SocialSettings, "schedule" | "owner_email" | "platforms">> & {
+        body: Partial<Omit<SocialSettings, "schedule" | "owner_email" | "platforms" | "company_id">> & {
+          company?: string;
           platforms?: Partial<Record<Platform, { autopost: boolean }>>;
           daily_enabled?: boolean;
           production_time?: string;
         },
       ) =>
         put<SocialSettings>("/social/settings", body),
-      platforms: () => get<PlatformStatus[]>("/social/platforms"),
+      platforms: (company?: string) => get<PlatformStatus[]>("/social/platforms", company ? { company } : undefined),
       oauthStart: (platform: Platform) => post<{ auth_url: string }>(`/social/oauth/${platform}/start`),
       disconnect: (platform: Platform) => post<{ ok: boolean }>(`/social/platforms/${platform}/disconnect`, { confirm: true }),
     },
