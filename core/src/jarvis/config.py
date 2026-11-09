@@ -261,7 +261,7 @@ class BrowserCfg(_Strict):
     antibrow_profile: str = "jarvis"
     headless: bool = False  # only used for "chromium"; Edge always runs as a normal window
     search_engines: list[str] = Field(default_factory=lambda: ["google", "bing", "duckduckgo"])
-    chrome_timeout_s: int = 300
+    chrome_timeout_s: int = 600
     default_timeout_ms: int = 20000
     max_content_chars: int = 12000
 
