@@ -305,7 +305,22 @@ def turn_instructions(
 ) -> str:
     now = now or datetime.now(TZ)
     parts = [f"Aktuelle Zeit: {now.strftime('%A, %d.%m.%Y %H:%M')} (Europe/Berlin). Kanal: {channel}."]
-    if channel in ("voice", "phone"):
+    if channel == "phone":
+        parts.append(
+            "Die Antwort wird vorgelesen, während du sie schreibst: beginne direkt (kurzer erster Satz), insgesamt "
+            "maximal ein bis drei kurze Sätze, keine Listen, keine Markdown-Formatierung, Zahlen ausschreiben wo "
+            "sinnvoll. Der Anruf muss sich live anfühlen, Sir darf nie still warten: Bevor du ein Werkzeug aufrufst, "
+            "sprichst du zuerst einen sehr kurzen Satz in der Gegenwart, was du jetzt tust (z. B. „Ich beauftrage "
+            "Claude Code damit, Sir.“ oder „Ich schaue in den Kalender.“), und rufst dann sofort das Werkzeug auf. "
+            "Rufst du direkt danach weitere Werkzeuge auf, kündige nur an, wenn sich die Tätigkeit ändert. Der Satz "
+            "sagt nur, was du gerade tust – nie, dass etwas schon gestartet oder erledigt ist; das sagst du erst, "
+            "wenn das Werkzeug es angenommen hat. Nach dem Ergebnis nennst du es in ein bis zwei Sätzen "
+            f"(z. B. „{confirm_example}“). Sir wird benachrichtigt, sobald eine Hintergrundaufgabe fertig ist. "
+            "Du sprichst bereits mit Sir: Die Begrüßung ist schon gesprochen, wiederhole sie und die Anrufnachricht "
+            "nie, rufe Sir nicht erneut an (kein mobile_call_owner) und antworte nur auf das, was Sir gerade gesagt "
+            "hat."
+        )
+    elif channel == "voice":
         parts.append(
             "Die Antwort wird vorgelesen, während du sie schreibst: beginne direkt mit der Antwort "
             "(kurzer erster Satz), insgesamt maximal zwei bis drei kurze Sätze, keine Listen, keine "

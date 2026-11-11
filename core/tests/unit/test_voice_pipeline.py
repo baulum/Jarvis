@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from jarvis.voice.pipeline import CommitmentGuard, SpeechTurn, TextChunker, claims_action
+from jarvis.voice.pipeline import CommitmentGuard, SpeechTurn, TextChunker, claims_action, claims_completion
 
 
 def test_chunker_cuts_first_clause_early_and_respects_ordinals() -> None:
@@ -249,3 +249,68 @@ async def test_a_persona_switch_never_changes_the_voice_in_the_middle_of_a_reply
     nxt.tool_started()
     await nxt.finish()
     assert tts.voices[-1] == "rene_redo" and tts.http[-1] == "Moment, Alter!"
+
+
+def test_guard_releases_an_announcement_when_the_tool_starts_but_not_a_completion_claim() -> None:
+    g = CommitmentGuard()
+    assert g.admit("Ich starte den Job jetzt.") == []  # held: nothing has backed it yet
+    assert g.on_tool_start() == ["Ich starte den Job jetzt."]  # the tool call is being made: this is true now
+    g.admit("Der Job ist gestartet.")
+    g.admit("Bis gleich.")
+    assert g.on_tool_start() == []  # a completion claim and what follows it wait for the tool result
+    assert g.on_tool(True) == ["Der Job ist gestartet.", "Bis gleich."]
+
+
+def test_claims_completion_only_for_done_or_running() -> None:
+    assert claims_completion("Die Rechnung ist angelegt.") and claims_completion("Das läuft jetzt im Hintergrund.")
+    assert not claims_completion("Ich starte den Job jetzt.") and not claims_completion("Ich kümmere mich darum.")
+
+
+async def test_sentence_before_the_tool_call_is_spoken_before_the_tool_runs() -> None:
+    out: list[bytes] = []
+
+    async def sink(b: bytes) -> None:
+        out.append(b)
+
+    turn = SpeechTurn(FakeTTS(), sink, transport="http")  # type: ignore[arg-type]
+    await turn.prepare()
+    turn.text("Ich beauftrage Claude Code damit, Sir.")  # no trailing space: the chunker alone would keep it back
+    turn.tool_started()
+    await asyncio.sleep(0.05)  # the tool is still running: nothing finished, nothing else said
+    assert b"".join(out) == b"H:Ich beauftrage Claude Code damit, Sir.|"
+    turn.tool_finished(True)
+    turn.text("Der Job läuft. ")
+    await turn.finish()
+    assert b"".join(out) == b"H:Ich beauftrage Claude Code damit, Sir.|H:Der Job l\xc3\xa4uft.|"
+    assert "acknowledged" not in turn.metrics  # something was said: no extra "Einen Moment"
+
+
+async def test_an_announcement_the_guard_holds_is_spoken_before_the_tool_too() -> None:
+    out: list[bytes] = []
+
+    async def sink(b: bytes) -> None:
+        out.append(b)
+
+    turn = SpeechTurn(FakeTTS(), sink, transport="http")  # type: ignore[arg-type]
+    await turn.prepare()
+    turn.text("Ich starte den Coding-Job jetzt. ")
+    turn.tool_started()
+    await asyncio.sleep(0.05)
+    assert b"".join(out) == b"H:Ich starte den Coding-Job jetzt.|"
+    await turn.finish()
+
+
+async def test_filler_is_queued_in_order_without_touching_the_streamed_text() -> None:
+    out: list[bytes] = []
+
+    async def sink(b: bytes) -> None:
+        out.append(b)
+
+    turn = SpeechTurn(FakeTTS(), sink, transport="http")  # type: ignore[arg-type]
+    await turn.prepare()
+    turn.tool_started()
+    turn.filler("Ich bin noch dran, Sir.")
+    turn.tool_finished(True)
+    turn.text("Fertig. ")
+    await turn.finish()
+    assert b"".join(out) == b"H:Einen Moment, Sir.|H:Ich bin noch dran, Sir.|H:Fertig.|"

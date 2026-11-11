@@ -91,17 +91,26 @@ class TextChunker:
         return []
 
 
-_COMMIT = re.compile(
-    r"\b(?:ich\s+kümmere\s+mich|kümmere\s+mich\s+darum|(?:ich\s+)?(?:starte|beginne|lege|erstelle|schicke|sende|"
-    r"verschicke|buche|trage|richte|baue|hau|haue|jag|jage)\s+(?:\w+\s+){0,4}?(?:jetzt|sofort|gleich|an|ein|los|auf)\b|"
-    r"(?:wird|wurde|ist|sind|habe|hab)\s+(?:\w+\s+){0,4}?(?:erledigt|gestartet|angelegt|erstellt|gesendet|"
-    r"verschickt|eingetragen|gebucht|eingerichtet)\b|läuft\s+(?:jetzt\s+)?im\s+hintergrund)",
-    re.I,
+_ANNOUNCE = (
+    r"ich\s+kümmere\s+mich|kümmere\s+mich\s+darum|(?:ich\s+)?(?:starte|beginne|lege|erstelle|schicke|sende|"
+    r"verschicke|buche|trage|richte|baue|hau|haue|jag|jage)\s+(?:\w+\s+){0,4}?(?:jetzt|sofort|gleich|an|ein|los|auf)"
 )
+# "ist erledigt", "läuft im Hintergrund": something is claimed to be done / running – only a tool result can back it
+_DONE = (
+    r"(?:wird|wurde|ist|sind|habe|hab)\s+(?:\w+\s+){0,4}?(?:erledigt|gestartet|angelegt|erstellt|gesendet|"
+    r"verschickt|eingetragen|gebucht|eingerichtet)|läuft\s+(?:jetzt\s+)?im\s+hintergrund"
+)
+_COMMIT = re.compile(rf"\b(?:{_ANNOUNCE}\b|{_DONE})\b", re.I)
+_COMPLETED = re.compile(rf"\b(?:{_DONE})\b", re.I)
 
 
 def claims_action(sentence: str) -> bool:
     return bool(_COMMIT.search(sentence))
+
+
+def claims_completion(sentence: str) -> bool:
+    """The sentence says something is already done or running ("ist angelegt"), not merely that Jarvis is on it."""
+    return bool(_COMPLETED.search(sentence))
 
 
 @dataclass
@@ -116,6 +125,14 @@ class CommitmentGuard:
             return [sentence]
         self.held.append((sentence, claim))  # keep order behind a held claim
         return []
+
+    def on_tool_start(self) -> list[str]:
+        """A tool call is being made right now: "Ich starte das jetzt." is true at this moment and goes out before the
+        tool runs. Claims of completion stay held (and everything behind them) until a tool has succeeded."""
+        out: list[str] = []
+        while self.held and not claims_completion(self.held[0][0]):
+            out.append(self.held.pop(0)[0])
+        return out
 
     def on_tool(self, ok: bool) -> list[str]:
         if not ok:
@@ -231,7 +248,15 @@ class SpeechTurn:
                 self._enqueue(s)
 
     def tool_started(self) -> None:
-        """Tools can take many seconds before the first word: acknowledge once – without claiming anything."""
+        """A tool call begins. What Jarvis said just before it ("Ich beauftrage Claude Code damit, Sir.") is spoken NOW,
+        not after the tool: the sentence still sitting in the chunker (it only cuts at a following space) and an
+        announcement the commitment guard holds both go out first. Tools can take many seconds before the first word:
+        if nothing was said at all, acknowledge once – without claiming anything."""
+        for piece in self.chunker.finish():
+            for s in self.guard.admit(piece):
+                self._enqueue(s)
+        for s in self.guard.on_tool_start():
+            self._enqueue(s)
         if not self._acked and self.metrics["pieces"] == 0 and not self.chunker.buf.strip() and not self.guard.held:
             self._acked = True
             self._enqueue(self.ack_phrase)
@@ -240,6 +265,11 @@ class SpeechTurn:
     def tool_finished(self, ok: bool) -> None:
         for s in self.guard.on_tool(ok):
             self._enqueue(s)
+
+    def filler(self, text: str) -> None:
+        """A short status line while a tool runs. Queued behind what is already being said; the text the model is
+        still streaming (chunker) and the commitment guard are left alone."""
+        self._enqueue(text)
 
     def say(self, text: str) -> None:
         """Speak a fixed text (notifications, confirmations) – no commitment guard."""

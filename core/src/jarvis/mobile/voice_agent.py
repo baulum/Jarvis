@@ -67,6 +67,14 @@ _TOOL_LABELS: list[tuple[str, str]] = [
 ]
 
 
+# Spoken while a tool runs and nothing else is being said, so a long job leaves no silence. They claim nothing.
+_FILLERS = (
+    "Einen Moment, ich arbeite noch daran.",
+    "Ich bin noch dran, Sir.",
+    "Das dauert noch einen Augenblick.",
+)
+
+
 def tool_label(name: str) -> str:
     short = name.rsplit("__", 1)[-1]
     for prefix, label in _TOOL_LABELS:
@@ -78,6 +86,10 @@ def tool_label(name: str) -> str:
 class CallVoiceAgent:
     barge_in = True  # app setting, sent when the call is placed / answered; off → only the Stopp button interrupts
     phone_audio_wait_s = 5.0  # the greeting waits this long for the phone's microphone (its audio is up by then)
+    # Silence while a tool runs: first status line after this long without audio, then after the next delays, finally
+    # every ``filler_repeat_s`` (long jobs must not get chatty)
+    filler_delays_s: tuple[float, ...] = (8.0, 20.0, 30.0)
+    filler_repeat_s = 45.0
 
     def __init__(
         self,
@@ -115,6 +127,7 @@ class CallVoiceAgent:
         self._end_reason = "ended"
         self._ending = False
         self._started = time.monotonic()
+        self._last_audio = 0.0  # monotonic time of the last audio chunk handed to the phone
         self._greeting_pcm: asyncio.Future[bytes] | None = None
         self._owner_track = asyncio.Event()
         self._prepared: SpeechTurn | None = None
@@ -435,6 +448,13 @@ class CallVoiceAgent:
             if text:
                 speech.text(text)
 
+        running: set[str] = set()  # tools of this turn that have started and not finished
+        watch: list[asyncio.Task[None]] = []  # the one status-line task, alive while a tool runs
+
+        def stop_watch() -> None:
+            while watch:
+                watch.pop().cancel()
+
         async def on_event(ev: AgentEvent) -> None:
             if ev.type == "delta" and ev.text:
                 reply_parts.append(ev.text)
@@ -443,7 +463,10 @@ class CallVoiceAgent:
                 name = str(ev.data.get("name", ""))
                 if greet:
                     say(greet.flush())  # keep the order of text and tool start (commitment guard)
-                speech.tool_started()
+                speech.tool_started()  # what was said before the call is spoken now, not after the tool
+                running.add(str(ev.data.get("tool_use_id") or name))
+                if not watch:
+                    watch.append(asyncio.create_task(self._tool_status_lines(speech), name="call-tool-status"))
                 await self.set_state("tool", tool_label(name))
                 await self.send(
                     {
@@ -457,6 +480,9 @@ class CallVoiceAgent:
                 )
             elif ev.type in ("tool_completed", "tool_failed"):
                 ok = ev.type == "tool_completed"
+                running.discard(str(ev.data.get("tool_use_id") or ev.data.get("name") or ""))
+                if not running:
+                    stop_watch()  # the result is coming: no more status lines
                 speech.tool_finished(ok)
                 await self.send(
                     {
@@ -481,6 +507,7 @@ class CallVoiceAgent:
                 say(greet.flush())
             if result.error and not reply_parts:
                 speech.say(error_phrase(getattr(self.state, "personality", None)))
+            stop_watch()
             metrics = await speech.finish()
             await self._drain()
             final = result.text or "".join(reply_parts)
@@ -495,8 +522,26 @@ class CallVoiceAgent:
             await speech.cancel()
             raise
         finally:
+            stop_watch()
             self._speech = None
         await self.set_state("listening")
+
+    async def _tool_status_lines(self, speech: SpeechTurn) -> None:
+        """While a tool runs: when nothing has been heard for a while, say a short status line (never in the middle
+        of speech – the clock restarts with every audio chunk). Cancelled when the tools are done or the turn ends."""
+        waited = 0
+        said = 0
+        self._last_audio = time.monotonic()  # silence is counted from the tool start
+        while True:
+            delay = self.filler_delays_s[waited] if waited < len(self.filler_delays_s) else self.filler_repeat_s
+            await asyncio.sleep(max(0.05, self._last_audio + delay - time.monotonic()))
+            if time.monotonic() - self._last_audio < delay:
+                continue  # something was said meanwhile
+            speech.filler(_FILLERS[said % len(_FILLERS)])
+            self._last_audio = time.monotonic()  # counts as speech: the next line comes after the next delay
+            said += 1
+            waited += 1
+            self.metrics["status_lines"] = self.metrics.get("status_lines", 0) + 1
 
     # ------------------------------------------------------------------ speech output
     def _make_speech(self) -> SpeechTurn:
@@ -568,6 +613,7 @@ class CallVoiceAgent:
     async def _on_audio(self, pcm: bytes) -> None:
         from livekit import rtc
 
+        self._last_audio = time.monotonic()
         if not self._speaking:
             self._speaking = True
             await self.set_state("speaking")

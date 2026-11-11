@@ -1,5 +1,7 @@
 """The question a call is about: its block for the agent, vague confirmations, and no action on a bare "ja"."""
 
+import asyncio
+import time
 import uuid
 from types import SimpleNamespace
 from typing import Any
@@ -155,3 +157,41 @@ async def test_concrete_request_without_open_question_still_reaches_the_agent() 
     await agent._turn(np.zeros(1, dtype=np.int16), "Schick die Antwort an Westside Taxi")
     assert len(orch.handled) == 1
     assert "keine offene Rückfrage" in orch.handled[0]["call_context"]  # honest about the missing context
+
+
+async def test_status_lines_fill_the_silence_while_a_tool_runs() -> None:
+    agent: Any = CallVoiceAgent.__new__(CallVoiceAgent)
+    agent.filler_delays_s = (0.05, 0.05)
+    agent.filler_repeat_s = 0.05
+    agent.metrics = {}
+    agent._last_audio = 0.0
+    lines: list[str] = []
+    speech = SimpleNamespace(filler=lines.append)
+    task = asyncio.create_task(agent._tool_status_lines(speech))
+    await asyncio.sleep(0.18)
+    task.cancel()
+    assert len(lines) >= 2 and lines[0] != lines[1]  # spoken at intervals, varied
+    assert agent.metrics["status_lines"] == len(lines)
+
+
+async def test_no_status_line_while_audio_is_playing() -> None:
+    agent: Any = CallVoiceAgent.__new__(CallVoiceAgent)
+    agent.filler_delays_s = (0.1,)
+    agent.filler_repeat_s = 0.1
+    agent.metrics = {}
+    agent._last_audio = 0.0
+    lines: list[str] = []
+    task = asyncio.create_task(agent._tool_status_lines(SimpleNamespace(filler=lines.append)))
+    for _ in range(6):  # Jarvis keeps talking: the silence clock restarts with every chunk
+        await asyncio.sleep(0.04)
+        agent._last_audio = time.monotonic()
+    task.cancel()
+    assert lines == []
+
+
+def test_phone_instructions_have_the_sentence_before_the_tool_call() -> None:
+    phone = turn_instructions("phone")
+    assert "Bevor du ein Werkzeug aufrufst" in phone and "Ich beauftrage Claude Code damit, Sir." in phone
+    assert "ZUERST mit dem passenden Werkzeug" not in phone  # the old "tool first, confirm afterwards" rule is gone
+    assert "keine Markdown-Formatierung" in phone and "ein bis drei kurze Sätze" in phone
+    assert "Bevor du ein Werkzeug aufrufst" not in turn_instructions("voice")
