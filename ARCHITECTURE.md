@@ -247,6 +247,46 @@ unverändert; Coding-Jobs wählen ihr Modell am Job (Standard Sonnet 5.5 High); 
 übernimmt davon nichts. Nicht betroffen sind außerdem
 Hintergrundaufrufe ohne Anruf (Wissensextraktion, Kontingent-Ping).
 
+**Anrufstil.** Anrufe sollen wie ein natürliches Gespräch klingen. Die Regeln stehen an einer Stelle,
+`mobile/call_style.py` (Bewegungslogik: `mobile/motion.py`), und gelten nur für Anrufe in der App (Kanal `phone`:
+`mobile_call_owner`, `mobile_call_when`, von Sir gestartete Anrufe). Chat, Mac-Sprachdaemon, Coding-Jobs und Modellwahl
+bleiben unberührt (Test: `test_call_style.py`).
+1. *Keine Technik am Telefon:* keine IDs, Hashes, Modellnamen, Pfade, Dateinamen, Befehle, Fehlercodes, Abkürzungen,
+   Zeitstempel im Maschinenformat. „Job 1963367e ist fertig“ wird zu „Der Auftrag ist fertig.“
+2. *Kurz und ohne Formatierung:* höchstens 3 Sätze (`MAX_SENTENCES`), keine Listen, kein Markdown, keine Emojis.
+3. *Bewegungscheck vor jedem Anruf* (siehe unten).
+4. *Unterwegs (Bewegung = ja):* genau ein Satz (`MAX_SENTENCES_DRIVING`), Kernaussage zuerst, keine Rückfragenkette;
+   Details werden als Nachricht angeboten, nicht vorgelesen.
+5. *Stillstand oder unbekannt:* normale Länge, ein bis drei Sätze. Nur ein sicheres „ja“ schaltet auf den Ein-Satz-Modus.
+6. *Umgangssprache,* Sie-Anrede im Jarvis-Stil, Alltagswörter statt Fachbegriffen.
+7. *Fehler:* am Telefon nur eine kurze, verständliche Aussage (Persona-Fehlerphrase), Technik nur im Log.
+
+Umsetzung in zwei Schichten, weil ein Prompt nur eine Bitte ist: (a) `call_style_block(motion)` hängt die Regeln an den
+Call-Kontext jedes Anruf-Zugs (`CallVoiceAgent._turn`); (b) `CallReplyFilter` steht zwischen Modell und Sprachausgabe
+und bereinigt jeden fertigen Satz (`clean_call_text`: IDs, UUIDs, Hashes, Pfade, Dateinamen → „eine Datei“, Modellnamen,
+Befehle, Fehlercodes, ISO-Zeitstempel → „3. November um 14 Uhr 30“, Abkürzungen → „zum Beispiel“, Markdown, Emojis,
+Code-Blöcke) und verwirft alles über dem Satzlimit. Was sich nicht sicher durch ein Alltagswort ersetzen lässt, entfällt.
+Das Limit gilt je Textabschnitt; ein Werkzeugaufruf beginnt einen neuen, damit ein „Moment, ich schaue nach“ die Antwort
+danach nicht verdrängt. Das Transkript zeigt, was gesprochen wurde. Dieselbe Bereinigung gilt für die Begrüßung beim
+Abnehmen und den Klingel-Betreff (Fahrzeug-Displays lesen ihn vor; `ring_owner`). Preis: Gesprochen wird ein Satz, sobald er
+vollständig ist, nicht schon mit dem ersten Wort.
+
+*Bewegungscheck.* `ring_owner` ruft vor dem Klingeln `motion_before_call` auf, in jedem Zug aktualisiert
+`CallVoiceAgent._update_motion` den Wert (nur Speicher, kein Netz). Der Standortdienst der App liefert **keine
+Geschwindigkeit** (nur Breite, Länge, Genauigkeit, Messzeit); `detect_motion` (rein, ohne I/O) leitet sie aus zwei
+Messungen ab: Ergebnis `yes`/`no`/`unknown`. Schwelle `MOVING_SPEED_KMH` = 20 km/h Durchschnitt. Der Fehlerbereich der
+Messungen (Genauigkeit beider Fixes) wird berücksichtigt: „ja“ nur, wenn selbst die kleinstmögliche Strecke über der
+Schwelle liegt, „nein“ nur, wenn selbst die größtmögliche darunter bleibt, dazwischen `unknown`. `unknown` gilt auch bei
+fehlendem oder älterem Standort (> 10 Minuten, `MAX_FIX_AGE_MIN`), bei nur einer Messung und bei Messungen weniger als
+30 s oder mehr als 10 Minuten auseinander. Dann wird nicht auf Bewegung geschlossen; das Ergebnis von
+`mobile_call_owner` enthält `motion_note`, damit Jarvis Sir in seiner Antwort ehrlich sagt, dass er es nicht weiß. Der Check
+fragt das Handy bei Bedarf per Push (ohne Nutzdaten) nach einem frischen Standort (max. 8 s Wartezeit), im Gespräch höchstens
+einmal pro Minute im Hintergrund. Er nutzt denselben Speicher wie `mobile_get_location`, aber ohne Adresssuche: die
+Koordinaten verlassen den Core nicht (kein Nominatim, kein Modell, kein Log).
+*Datenschutz:* Der Speicher hält die letzte und die davor liegende Messung nur im Arbeitsspeicher (`LocationStore`), nie in
+Datenbank, Datei, Log, Gedächtnis oder Anruf-Kontext; „Freigabe aus“ und Neustart löschen beide. Koordinaten werden nie
+vorgelesen. Gespeichert wird höchstens das Ergebnis `yes`/`no`/`unknown` in den Anruf-Kennzahlen.
+
 ## Erweiterbarkeit
 
 - **Weitere LLM-Provider:** `agent.provider` (Claude Code oder Hermes); Adapter in `agent/claude_agent.py` bzw. `agent/llm.py`.

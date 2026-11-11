@@ -16,6 +16,13 @@ from jarvis.tools.registry import ToolContext, ToolSpec
 if TYPE_CHECKING:
     from jarvis.app_state import AppState
 
+# The message is spoken (Anrufstil, see jarvis.mobile.call_style): the model should write it that way from the start.
+CALL_MESSAGE_HINT = (
+    "Wird am Telefon gesprochen: ein bis zwei kurze Sätze in Alltagssprache, ohne IDs, Pfade, Modellnamen, "
+    "Befehle, Fehlercodes oder Abkürzungen (z. B. „Der Auftrag für die Website ist fertig.“)."
+)
+MESSAGE_SCHEMA = {"type": "string", "minLength": 3, "maxLength": 500, "description": CALL_MESSAGE_HINT}
+
 
 def mobile_tools(state: AppState) -> list[ToolSpec]:
     from jarvis.tools.executor import ToolUserError
@@ -114,10 +121,12 @@ def mobile_tools(state: AppState) -> list[ToolSpec]:
             "mobile_call_owner",
             "Ruft Sir JETZT auf seinem Handy an – über die J.A.R.V.I.S.-App (Internet-Anruf, klingelt wie ein normaler "
             "Anruf). Standard für „ruf mich an“ / „ruf mich am Handy an“. NUR verwenden, wenn Sir ausdrücklich "
-            "angerufen werden möchte. Für „ruf mich an, sobald …“ stattdessen mobile_call_when.",
+            "angerufen werden möchte. Für „ruf mich an, sobald …“ stattdessen mobile_call_when. Vor dem Anruf prüft "
+            "das System selbst Standort und Bewegung. Enthält das Ergebnis 'motion_note', sag Sir in deiner "
+            "Antwort kurz und ehrlich, dass du nicht weißt, ob er gerade unterwegs ist.",
             {
                 "type": "object",
-                "properties": {"message": {"type": "string", "minLength": 3, "maxLength": 500}},
+                "properties": {"message": MESSAGE_SCHEMA},
                 "required": ["message"],
                 "additionalProperties": False,
             },
@@ -135,7 +144,7 @@ def mobile_tools(state: AppState) -> list[ToolSpec]:
                 "type": "object",
                 "properties": {
                     "trigger": trigger_schema,
-                    "message": {"type": "string", "minLength": 3, "maxLength": 500},
+                    "message": MESSAGE_SCHEMA,
                 },
                 "required": ["trigger", "message"],
                 "additionalProperties": False,

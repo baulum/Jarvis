@@ -554,6 +554,10 @@ async def test_spoken_model_switch_on_a_call_changes_nothing(tmp_path: Any) -> N
     sess = _sess()
     model, _, confirmation, text = await orch._model_for_turn(sess, OWNER, "phone", "Nimm ab jetzt Opus.")
     assert model == "haiku" and confirmation and "Haiku 5.5" in confirmation
+    # Anrufstil: spoken on the phone without the model name, and without leftovers of it
+    from jarvis.mobile.call_style import speakable
+
+    assert speakable(confirmation) == "Bei Anrufen bleibt das Modell fest eingestellt, Sir."
     assert router.default == "sonnet" and not router.next_turn and not router.session_overrides
     model, _, confirmation, text = await orch._model_for_turn(sess, OWNER, "phone", "Wie spät ist es?")
     assert (model, confirmation, text) == ("haiku", None, "Wie spät ist es?")

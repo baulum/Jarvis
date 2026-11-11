@@ -603,7 +603,9 @@ class Orchestrator:
             # calls always run on CALL_MODEL / CALL_EFFORT: a spoken switch changes neither them nor the chat model
             if cmd is not None and not cmd.remainder:
                 alias = resolve_alias(CALL_MODEL) or "haiku"
-                said = f"Bei Anrufen nutze ich fest {MODELS[alias]['label']}, Sir."
+                # the model name sits in parentheses: the call style filter drops it (and the empty parentheses)
+                # from what is spoken, the chat transcript keeps it
+                said = f"Bei Anrufen bleibt das Modell fest eingestellt, Sir ({MODELS[alias]['label']})."
                 return (alias, "Anruf: festes Modell", said, text)
             call_text = cmd.remainder if cmd else text
             model, reason = router.choose(call_text, channel, str(sess.id))

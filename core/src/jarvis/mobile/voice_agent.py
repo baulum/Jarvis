@@ -32,6 +32,16 @@ from jarvis.agent.llm import AgentEvent
 from jarvis.agent.persona import LeadingGreetingFilter, ack_phrase, error_phrase, never_say
 from jarvis.events import Event, bus, spawn
 from jarvis.mobile.call_context import call_context_block, is_vague_confirmation, load_call_context, open_question
+from jarvis.mobile.call_style import (
+    LOCATION_REFRESH_EVERY_S,
+    MOTION_REFRESH_WAIT_S,
+    CallReplyFilter,
+    call_style_block,
+    max_sentences_for,
+    speakable,
+)
+from jarvis.mobile.location import FRESH_ENOUGH_S
+from jarvis.mobile.motion import Motion
 from jarvis.security.auth import Principal
 from jarvis.voice.audio import Endpointer, looks_complete, pcm_to_wav, rms
 from jarvis.voice.pipeline import SpeechTurn
@@ -90,6 +100,7 @@ class CallVoiceAgent:
     # every ``filler_repeat_s`` (long jobs must not get chatty)
     filler_delays_s: tuple[float, ...] = (8.0, 20.0, 30.0)
     filler_repeat_s = 45.0
+    motion = Motion.UNKNOWN  # is Sir moving? set by the movement check before ringing, renewed every turn
 
     def __init__(
         self,
@@ -132,6 +143,7 @@ class CallVoiceAgent:
         self._owner_track = asyncio.Event()
         self._prepared: SpeechTurn | None = None
         self._greeting_spoken = False
+        self._last_location_request = float("-inf")
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -253,6 +265,27 @@ class CallVoiceAgent:
                     "nodes": ev.nodes[:12],
                 }
             )
+
+    # ------------------------------------------------------------------ call style
+    def _update_motion(self) -> Motion:
+        """Is Sir moving right now? From the location store in memory (no request, no address lookup, nothing
+        stored); ``unknown`` whenever the data does not say. Also asks the phone for a new fix in the background
+        (at most once a minute) so that the next turn has two recent measurements to compare."""
+        loc = getattr(self.state, "location", None)
+        if loc is None:
+            return self.motion
+        try:
+            self.motion = loc.motion()
+            fix = loc.latest()
+            now = time.monotonic()
+            stale = fix is None or fix.age_minutes() * 60 > FRESH_ENOUGH_S
+            if stale and now - self._last_location_request >= LOCATION_REFRESH_EVERY_S:
+                self._last_location_request = now
+                spawn(loc.request_fresh(MOTION_REFRESH_WAIT_S), name="call-location-refresh")
+        except Exception as e:  # never break a turn because of this; the type only, no location details
+            logger.info("Call %s: movement not determinable (%s)", self.call_id, type(e).__name__)
+            self.motion = Motion.UNKNOWN
+        return self.motion
 
     # ------------------------------------------------------------------ conversation
     async def _load_call_context(self) -> None:
@@ -443,8 +476,16 @@ class CallVoiceAgent:
         title = self.state.personality.owner_title
         # the greeting was said when Sir picked up: the first answer must not open with another one
         greet = LeadingGreetingFilter(title) if self.greeting and self.metrics["turns"] == 1 else None
+        # Anrufstil: everything the model writes passes the call rules (clean, at most N sentences) before it is spoken
+        motion = self._update_motion()
+        self.metrics["motion"] = motion.value
+        style = CallReplyFilter(max_sentences_for(motion))
 
         def say(text: str) -> None:
+            if text:
+                say_cleaned(style.feed(text))
+
+        def say_cleaned(text: str) -> None:
             if text:
                 speech.text(text)
 
@@ -463,6 +504,7 @@ class CallVoiceAgent:
                 name = str(ev.data.get("name", ""))
                 if greet:
                     say(greet.flush())  # keep the order of text and tool start (commitment guard)
+                say_cleaned(style.end_segment())  # pending sentence now; text after the tool gets a new budget
                 speech.tool_started()  # what was said before the call is spoken now, not after the tool
                 running.add(str(ev.data.get("tool_use_id") or name))
                 if not watch:
@@ -501,19 +543,21 @@ class CallVoiceAgent:
                 text,
                 session_id=self.session_id,
                 on_event=on_event,
-                call_context=call_context_block(self.call_context),
+                call_context=call_context_block(self.call_context) + "\n\n" + call_style_block(motion),
             )
             if greet:
                 say(greet.flush())
+            say_cleaned(style.flush())
+            failed_phrase = ""
             if result.error and not reply_parts:
-                speech.say(error_phrase(getattr(self.state, "personality", None)))
+                failed_phrase = error_phrase(getattr(self.state, "personality", None))
+                speech.say(failed_phrase)
             stop_watch()
             metrics = await speech.finish()
             await self._drain()
-            final = result.text or "".join(reply_parts)
-            if greet:  # the transcript shows what was said
-                clean = LeadingGreetingFilter(title)
-                final = (clean.feed(final) + clean.flush()).strip()
+            if style.truncated:
+                self.metrics["style_cuts"] = self.metrics.get("style_cuts", 0) + 1
+            final = style.spoken_text() or failed_phrase  # the transcript shows what was said
             if final:
                 await self._transcript("jarvis", final)
             metrics["stt_to_done_ms"] = round((time.perf_counter() - t0) * 1000, 1)
@@ -593,9 +637,10 @@ class CallVoiceAgent:
     async def _answer_vague_confirmation(self, text: str) -> None:
         """Sir said yes without saying to what, and the call has no open question: ask instead of acting."""
         assert self.session_id is not None
-        reply = (
+        reply = speakable(
             "Worauf beziehen Sie sich, Sir? Ich habe in diesem Gespräch keine offene Frage an Sie. "
-            "Was soll ich konkret tun?"
+            "Was soll ich konkret tun?",
+            max_sentences_for(self._update_motion()),  # on the move: only the question
         )
         meta = {"channel": "phone", "call_id": str(self.call_id), "guard": "vague_confirmation"}
         await self.state.orchestrator.record_turn(self.session_id, text, reply, meta)
