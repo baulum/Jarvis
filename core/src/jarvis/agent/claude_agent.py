@@ -217,7 +217,8 @@ class ClaudeCodeAgent:
             await self._kill(standby, "reload")
         spawn(self._ensure_standby(), name="claude-standby")
 
-    async def _spawn(self, resume: str | None = None) -> _Proc:
+    async def _spawn(self, resume: str | None = None, effort: str | None = None) -> _Proc:
+        """``effort``: fixed effort for this process (calls); None = the router's chat effort."""
         exe = shutil.which(self.cfg.claude_binary)
         if exe is None:
             raise ClaudeUnavailable("Claude Code CLI nicht gefunden")
@@ -248,7 +249,7 @@ class ClaudeCodeAgent:
             "--append-system-prompt",
             self.system_prompt(),
         ]
-        effort = self._effort()
+        effort = effort or self._effort()
         if effort:
             argv += ["--effort", effort]
         if resume:
@@ -324,18 +325,20 @@ class ClaudeCodeAgent:
                     self._procs.pop(sid)  # out of the pool before the (awaited) kill: no turn may pick it up
                     await self._kill(p, "idle")
 
-    async def _proc_for(self, session_id: uuid.UUID, resume: str | None) -> _Proc:
+    async def _proc_for(self, session_id: uuid.UUID, resume: str | None, effort: str | None = None) -> _Proc:
         p = self._procs.get(session_id)
         if p is not None and p.usable:
             return p
         self._procs.pop(session_id, None)
         if resume:
-            p = await self._spawn(resume=resume)
+            p = await self._spawn(resume=resume, effort=effort)
         else:
             async with self._standby_lock:
                 p, self._standby = self._standby, None
-            if p is None or not p.usable:
-                p = await self._spawn()
+            if p is None or not p.usable or (effort and p.effort != effort):
+                if p is not None and p.usable:  # standby has the wrong effort: fresh process instead of a restart
+                    spawn(self._kill(p, "reload"), name="claude-standby-kill")
+                p = await self._spawn(effort=effort)
             spawn(self._ensure_standby(), name="claude-standby")
         self._procs[session_id] = p
         return p
@@ -372,8 +375,10 @@ class ClaudeCodeAgent:
         context: str,
         model: str | None = None,
         images: list[dict[str, Any]] | None = None,
+        effort: str | None = None,
     ) -> AsyncGenerator[AgentEvent]:
-        """One turn. Ends with ``completed``, ``failed`` or ``cancelled`` (stopped by Sir / a barge-in).
+        """One turn. ``effort`` fixes the effort for this conversation's process (calls); None = chat effort.
+        Ends with ``completed``, ``failed`` or ``cancelled`` (stopped by Sir / a barge-in).
 
         If the CLI dies on its own the turn is retried once (``retry`` event with the reason): via ``--resume`` of
         the conversation, or as a fresh conversation if resuming it was what failed. When tools already ran in the
@@ -383,7 +388,7 @@ class ClaudeCodeAgent:
             crash: AgentEvent | None = None
             tools: list[str] = []
             content = user_content(prompt, context, images)
-            async with contextlib.aclosing(self._attempt(session_id, resume_id, content, model)) as stream:
+            async with contextlib.aclosing(self._attempt(session_id, resume_id, content, model, effort)) as stream:
                 async for ev in stream:
                     if ev.type == "crashed":
                         crash = ev
@@ -403,17 +408,23 @@ class ClaudeCodeAgent:
                 prompt = RETRY_NOTE.format(tools=", ".join(dict.fromkeys(tools))) + text
 
     async def _attempt(
-        self, session_id: uuid.UUID, resume_id: str | None, content: str | list[dict[str, Any]], model: str | None
+        self,
+        session_id: uuid.UUID,
+        resume_id: str | None,
+        content: str | list[dict[str, Any]],
+        model: str | None,
+        effort: str | None = None,
     ) -> AsyncGenerator[AgentEvent]:
         """One try of a turn on this conversation's process. An unexpected end yields ``crashed`` (internal)."""
-        p = await self._proc_for(session_id, resume_id)
-        if p.effort != self._effort() or p.persona != self._persona():
+        want_effort = effort or self._effort()
+        p = await self._proc_for(session_id, resume_id, effort)
+        if p.effort != want_effort or p.persona != self._persona():
             # effort and the system prompt (personality) are launch flags: restart this conversation's process
             # (history comes back via --resume) – this is how a process that was busy during a switch catches up
             resume_id = p.claude_session_id or resume_id
             self._procs.pop(session_id, None)
             await self._kill(p, "restart")
-            p = await self._proc_for(session_id, resume_id)
+            p = await self._proc_for(session_id, resume_id, effort)
         p.busy = True
         p.last_used = time.monotonic()
         finished = False

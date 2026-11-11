@@ -38,7 +38,7 @@ mode = modes[min(n, len(modes) - 1)]
 argv = sys.argv[1:]
 resume = argv[argv.index("--resume") + 1] if "--resume" in argv else None
 with (state / "spawns.jsonl").open("a") as f:
-    f.write(json.dumps({"mode": mode, "resume": resume}) + "\n")
+    f.write(json.dumps({"mode": mode, "resume": resume, "argv": argv}) + "\n")
 
 
 def out(obj):
@@ -497,3 +497,66 @@ async def test_persona_switch_restarts_the_conversation_with_its_history(make_ag
     agent.state.personality = SimpleNamespace(id="rene_redo")
     assert _types(await _turn(agent, sid))[-1] == "completed"
     assert [s["resume"] for s in fake.spawns] == [None, "sess-0"]
+
+
+# ---------------------------------------------------------------------------------------------- call rule (effort)
+
+
+def _effort_of(spawn: dict[str, Any]) -> str | None:
+    argv = spawn["argv"]
+    return argv[argv.index("--effort") + 1] if "--effort" in argv else None
+
+
+async def test_call_effort_is_a_launch_flag_of_the_calls_process_only(make_agent: Any) -> None:
+    agent, fake = make_agent("ok")
+    call_sid, chat_sid = uuid.uuid4(), uuid.uuid4()
+    events = [ev async for ev in agent.chat_stream(call_sid, None, "Hallo", "", effort="medium")]
+    assert _types(events)[-1] == "completed"
+    assert _effort_of(fake.spawns[0]) == "medium"
+    assert _types(await _turn(agent, chat_sid))[-1] == "completed"  # chat turn: no fixed effort
+    assert _effort_of(fake.spawns[1]) is None
+    # the next call turn keeps its process (no restart), the chat process is not touched
+    assert [ev async for ev in agent.chat_stream(call_sid, None, "Und weiter", "", effort="medium")]
+    assert len(fake.spawns) == 2
+
+
+async def test_orchestrator_passes_the_call_effort_only_for_calls() -> None:
+    class Recorder(ScriptedAgent):
+        def __init__(self) -> None:
+            super().__init__([AgentEvent("completed", data={})])
+            self.kwargs: list[dict[str, Any]] = []
+
+        async def chat_stream(self, *a: Any, **k: Any) -> AsyncIterator[AgentEvent]:
+            self.kwargs.append(k)
+            async for ev in super().chat_stream(*a, **k):
+                yield ev
+
+    agent = Recorder()
+    orch = _orch(agent)
+
+    async def emit(ev: AgentEvent) -> None:
+        return None
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("jarvis.agent.orchestrator.bus.publish", _no_publish)
+        await orch._run_claude(_sess(), OWNER, "Hallo", "", emit, "sonnet", effort="medium")
+        await orch._run_claude(_sess(), OWNER, "Hallo", "", emit, "sonnet")
+    assert agent.kwargs[0].get("effort") == "medium"
+    assert "effort" not in agent.kwargs[1]
+
+
+async def test_spoken_model_switch_on_a_call_changes_nothing(tmp_path: Any) -> None:
+    from jarvis.agent.model_router import ModelRouter
+
+    router = ModelRouter("sonnet", True, tmp_path / "m.json")
+    orch = _orch(ScriptedAgent([]))
+    orch.state.model_router = router  # type: ignore[attr-defined]
+    sess = _sess()
+    model, _, confirmation, text = await orch._model_for_turn(sess, OWNER, "phone", "Nimm ab jetzt Opus.")
+    assert model == "sonnet" and confirmation and "Sonnet 5.5" in confirmation
+    assert router.default == "sonnet" and not router.next_turn and not router.session_overrides
+    model, _, confirmation, text = await orch._model_for_turn(sess, OWNER, "phone", "Wie spät ist es?")
+    assert (model, confirmation, text) == ("sonnet", None, "Wie spät ist es?")
+    # the same sentence in the chat still switches the chat model
+    model, _, _, _ = await orch._model_for_turn(sess, OWNER, "desktop", "Nimm ab jetzt Opus.")
+    assert model == "opus" and router.default == "opus"

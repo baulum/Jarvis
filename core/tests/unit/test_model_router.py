@@ -66,3 +66,30 @@ def test_skill_catalog(tmp_path: Path) -> None:
     links = sorted(p.name for p in (cat.plugin_dir / "skills").iterdir())
     assert links == ["seo"]
     assert SkillCatalog(tmp_path / "data", home).enabled_names() == ["seo"]
+
+
+def test_calls_always_use_the_fixed_call_model(tmp_path: Path) -> None:
+    from jarvis.agent.model_router import CALL_EFFORT, CALL_MODEL, MODELS, is_call_channel
+
+    assert (CALL_MODEL, CALL_EFFORT) == ("claude-sonnet-5-5", "medium")
+    assert MODELS["sonnet"]["id"] == CALL_MODEL
+    assert is_call_channel("phone") and not any(is_call_channel(c) for c in ("desktop", "voice", "mobile", "api"))
+    r = ModelRouter("opus", False, tmp_path / "m.json")
+    r.set_effort("max")
+    r.set("haiku", "session", "s1")
+    r.next_turn["s1"] = "opus"
+    # chat choices (default, session, one-shot, effort) never touch a call, not even a trivial question
+    assert r.choose("Wie spät ist es?", "phone", "s1", turn_override="opus")[0] == "sonnet"
+    # ... and a call does not consume the chat's one-shot choice or change the chat state
+    assert r.next_turn == {"s1": "opus"} and r.default == "opus" and r.effort == "max"
+    assert r.choose("Wie spät ist es?", "desktop", "s1")[0] == "opus"  # chat/other channels unchanged: next-turn
+    assert r.choose("Wie spät ist es?", "desktop", "s1")[0] == "haiku"  # session override
+
+
+def test_call_model_ignores_quota_pressure(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    r = ModelRouter("sonnet", True, tmp_path / "m.json")
+    r.usage = SimpleNamespace(pressure=lambda: 0.99)  # type: ignore[assignment]
+    assert r.choose("Plane mein Projekt", "desktop", "s1")[0] == "haiku"  # chat steps down under quota pressure
+    assert r.choose("Hallo", "phone", "s1")[0] == "sonnet"  # calls never do

@@ -25,7 +25,7 @@ from sqlalchemy import select
 from jarvis.agent.attachments import AttachmentInfo, build_agent_input, summary_line
 from jarvis.agent.claude_agent import ClaudeUnavailable
 from jarvis.agent.llm import AgentEvent, HermesError
-from jarvis.agent.model_router import MODELS, parse_command
+from jarvis.agent.model_router import CALL_EFFORT, CALL_MODEL, MODELS, is_call_channel, parse_command, resolve_alias
 from jarvis.agent.persona import error_phrase, turn_instructions
 from jarvis.agent.timeline import (
     DbTimelineStore,
@@ -311,7 +311,14 @@ class Orchestrator:
                 await bus.publish("chat.model", session_id=str(sess.id), model=model, reason=model_reason)
                 await turn.set_model(model, _model_label(model), model_reason)
                 result = await self._run_claude(
-                    sess, principal, agent_input.text, instructions, emit, model, images=agent_input.images
+                    sess,
+                    principal,
+                    agent_input.text,
+                    instructions,
+                    emit,
+                    model,
+                    images=agent_input.images,
+                    effort=CALL_EFFORT if is_call_channel(channel) else None,
                 )
                 result.model = model
             elif self.state.hermes is not None and await self._hermes_ready():
@@ -475,6 +482,14 @@ class Orchestrator:
         router = self.state.model_router
         cmd = parse_command(text)
         turn_model: str | None = None
+        if is_call_channel(channel):
+            # calls always run on CALL_MODEL / CALL_EFFORT: a spoken switch changes neither them nor the chat model
+            if cmd is not None and not cmd.remainder:
+                label = MODELS[resolve_alias(CALL_MODEL) or "sonnet"]["label"]
+                return ("sonnet", "Anruf: festes Modell", f"Bei Anrufen nutze ich fest {label}, Sir.", text)
+            call_text = cmd.remainder if cmd else text
+            model, reason = router.choose(call_text, channel, str(sess.id))
+            return model, reason, None, call_text
         if cmd is not None:
             if cmd.scope == "turn":
                 turn_model = cmd.model
@@ -513,10 +528,13 @@ class Orchestrator:
         emit: EventCallback,
         model: str | None = None,
         images: list[dict[str, Any]] | None = None,
+        effort: str | None = None,
     ) -> TurnResult:
         agent = self.state.agent
         assert agent is not None
         extra: dict[str, Any] = {"images": images} if images else {}  # image content blocks of attachments
+        if effort:  # fixed effort of this turn (calls); otherwise the chat effort of the router applies
+            extra["effort"] = effort
         tools: list[dict[str, Any]] = []
         chunks: list[str] = []
         final_text = ""

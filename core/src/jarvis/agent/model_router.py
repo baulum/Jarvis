@@ -34,6 +34,18 @@ EFFORTS: dict[str, str] = {
     "max": "Maximal",
 }
 
+# Fixed rule for every call answer (phone call in the J.A.R.V.I.S. app, Twilio phone call): one model, one effort,
+# independent of Sir's chat choice (``ModelRouter.default`` / ``effort`` / session overrides / quota step-down) and of
+# the coding jobs (their model is set per job). Change it here, nowhere else.
+CALL_MODEL = "claude-sonnet-5-5"
+CALL_EFFORT = "medium"
+CALL_CHANNELS = frozenset({"phone"})  # Principal/session channel of both call paths (voice_agent, telephony)
+
+
+def is_call_channel(channel: str | None) -> bool:
+    return channel in CALL_CHANNELS
+
+
 _MODEL_WORD = r"(opus|sonnet|sonett|haiku|hayku)"
 _VERB = (
     r"(?:nimm|nehm\w*|nutz\w*|benutz\w*|verwend\w*|wechs\w*|schalt\w*|stell\w*|geh\w*|wähl\w*|switch\w*|"
@@ -216,7 +228,10 @@ class ModelRouter:
         return model, reason
 
     def choose(self, text: str, channel: str, session_id: str, turn_override: str | None = None) -> tuple[str, str]:
-        """Returns (model alias, reason). Explicit commands are always honoured; defaults/auto react to the quota."""
+        """Returns (model alias, reason). Explicit commands are always honoured; defaults/auto react to the quota.
+        Calls are the exception: always ``CALL_MODEL`` (no override, no auto-downgrade, no quota step-down)."""
+        if is_call_channel(channel):
+            return resolve_alias(CALL_MODEL) or "sonnet", "Anruf: festes Modell"
         if turn_override:
             return turn_override, "Befehl (nur diese Antwort)"
         if session_id in self.next_turn:
