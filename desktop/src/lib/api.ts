@@ -27,6 +27,8 @@ import type {
   KillSwitchState,
   LogEntry,
   MemoryGraph,
+  RulesResponse,
+  SystemPromptView,
   MemoryItemDetail,
   MemoryItemSummary,
   MemorySearchHit,
@@ -278,6 +280,18 @@ export function createApi(opts: ApiOptions) {
       get<ActivitySnapshot>("/activity", { since, boot: boot ?? undefined }),
     memoryEdit: (mid: string, body: { title?: string; content?: string; kind?: string }) =>
       put<{ status: string }>(`/memory/items/${id(mid)}`, body),
+    memoryRules: () => get<RulesResponse>("/memory/rules"),
+    memoryRuleCreate: (body: { title: string; text: string; scope: "global" | "project"; project?: string }) =>
+      post<{ status: string; id: string }>("/memory/rules", body),
+    memoryRuleUpdate: (
+      rid: string,
+      body: { title?: string; text?: string; scope?: "global" | "project"; project?: string; active?: boolean },
+    ) => put<{ status: string }>(`/memory/rules/${id(rid)}`, body),
+    memoryRulesMigrate: (dryRun = false) =>
+      post<{ dry_run: boolean; migrated?: number; candidates: unknown[] }>(`/memory/rules/migrate?dry_run=${dryRun}`),
+    systemPrompt: () => get<SystemPromptView>("/agent/system-prompt"),
+    setSystemPrompt: (text: string) => put<SystemPromptView>("/agent/system-prompt", { text }),
+    resetSystemPrompt: () => del<SystemPromptView>("/agent/system-prompt"),
     memoryDelete: (mid: string) => del<{ status: string }>(`/memory/items/${id(mid)}`),
     voiceMetrics: (limit = 20) => get<Record<string, unknown>[]>("/voice/metrics", { limit }),
     memoryExport: async (): Promise<Uint8Array> => {

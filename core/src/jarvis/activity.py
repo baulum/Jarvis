@@ -156,6 +156,8 @@ _TASK_LABELS = {
     "paused": "Aufgabe pausiert",
     "waiting_approval": "Aufgabe wartet auf Freigabe",
     "waiting_input": "Aufgabe wartet auf Eingabe",
+    "retrying": "Aufgabe wiederholt nach Fehler",
+    "blocked": "Aufgabe blockiert",
     "completed": "Aufgabe abgeschlossen",
     "failed": "Aufgabe fehlgeschlagen",
     "cancelled": "Aufgabe abgebrochen",
@@ -169,8 +171,8 @@ _MEMORY_LABELS = {
     "created": "Neue Erinnerung im Vault",
     "modified": "Erinnerung im Vault geändert",
 }
-_DONE = {"completed", "failed", "cancelled"}
-_STATUS = {"completed": "ok", "failed": "error", "cancelled": "cancelled"}
+_DONE = {"completed", "failed", "cancelled", "blocked"}
+_STATUS = {"completed": "ok", "failed": "error", "cancelled": "cancelled", "blocked": "error"}
 
 
 # ------------------------------------------------------------------ state

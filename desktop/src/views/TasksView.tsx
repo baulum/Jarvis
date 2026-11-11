@@ -1,5 +1,6 @@
 import { Ban, ListChecks, Plus, RotateCcw, Send, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { AgentProgress } from "../components/AgentProgress";
 import { Button, CodeBlock, EmptyState, ErrorState, KeyValue, Skeleton, StatusText } from "../components/ui";
 import { useFocusedSelection } from "../hooks/useFocusedSelection";
 import { useAction, useQuery } from "../hooks/useQuery";
@@ -8,7 +9,7 @@ import { applyTaskEvent } from "../lib/reducers";
 import type { JsonSchema, Playbook, Task } from "../lib/types";
 import { api, useApp } from "../store/app";
 
-const ACTIVE = new Set(["queued", "running", "waiting_approval", "waiting_input", "waiting_external"]);
+const ACTIVE = new Set(["queued", "running", "retrying", "waiting_approval", "waiting_input", "waiting_external"]);
 
 export function TasksView() {
   const tasks = useQuery(() => api.tasks(), "tasks", { topics: ["task"] });
@@ -91,7 +92,7 @@ function TaskDetail({ task: initial, playbooks, onChanged }: { task: Task; playb
   const task = detail.data ?? initial;
   const { busy, run } = useAction();
   const canCancel = ACTIVE.has(task.status);
-  const canRetry = task.status === "failed" || task.status === "cancelled";
+  const canRetry = task.status === "failed" || task.status === "cancelled" || task.status === "blocked";
 
   // fold live step events into the detail while the refetch is in flight
   const versions = useApp((s) => s.versions.task);
@@ -105,7 +106,7 @@ function TaskDetail({ task: initial, playbooks, onChanged }: { task: Task; playb
         <div className="min-w-0 flex-1">
           <h2 className="type-display text-[1.5rem] text-ink">{task.title || task.kind}</h2>
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-ink-dim">
-            <StatusText tone={statusTone(task.status)} pulse={task.status === "running"}>
+            <StatusText tone={statusTone(task.status)} pulse={task.status === "running" || task.status === "retrying"}>
               {statusLabel(task.status)}
             </StatusText>
             <span className="type-data">{task.kind}</span>
@@ -148,6 +149,8 @@ function TaskDetail({ task: initial, playbooks, onChanged }: { task: Task; playb
           {task.error}
         </div>
       )}
+
+      {task.agent && <AgentProgress view={task.agent} />}
 
       <section>
         <h3 className="type-title mb-4 text-sm text-ink-dim">Schritte</h3>

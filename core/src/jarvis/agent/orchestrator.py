@@ -39,6 +39,8 @@ from jarvis.agent.timeline import (
 from jarvis.db import session_scope
 from jarvis.db.models import ChatMessage, ChatSession
 from jarvis.events import Event, activity, bus, spawn
+from jarvis.jobs.agent_task import classify_error
+from jarvis.memory.rules import match_projects, render_project_rules
 from jarvis.security.audit import audit
 from jarvis.security.auth import OWNER_ROLES, Principal
 from jarvis.tools.artifacts import artifacts
@@ -226,11 +228,25 @@ class Orchestrator:
         images: list[str] | None = None,
         call_context: str = "",
         attachments: list[AttachmentInfo] | None = None,
+        project_hints: list[str] | None = None,
+        internal: bool = False,
     ) -> TurnResult:
+        """``project_hints``: task/job context (project path, title, parameters) – selects the project rules of the
+        run. ``internal``: a turn the system wrote (agent-task prompts): no model-switch parsing, no auto-routing
+        to a background task, no memory extraction from the prompt text."""
         sess = await self.get_or_create_session(principal, channel, session_id)
         with activity(session_id=str(sess.id)):
             return await self._handle_turn(
-                sess, principal, channel, text, on_event, images, call_context, attachments or []
+                sess,
+                principal,
+                channel,
+                text,
+                on_event,
+                images,
+                call_context,
+                attachments or [],
+                project_hints,
+                internal,
             )
 
     async def _handle_turn(
@@ -243,6 +259,8 @@ class Orchestrator:
         images: list[str] | None,
         call_context: str = "",
         attachments: list[AttachmentInfo] | None = None,
+        project_hints: list[str] | None = None,
+        internal: bool = False,
     ) -> TurnResult:
         t0 = time.perf_counter()
         timings: dict[str, float] = {}
@@ -271,7 +289,13 @@ class Orchestrator:
                 event_id=user_item.id if user_item else None,
                 turn_id=turn.turn_id,
             )
-            model, model_reason, confirmation, agent_text = await self._model_for_turn(sess, principal, channel, said)
+            model, model_reason, confirmation, agent_text = await self._model_for_turn(
+                sess, principal, channel, said, internal=internal
+            )
+            if confirmation is None and not internal and not images:
+                confirmation = await self._background_confirmation(
+                    sess, principal, channel, said, bool(attachments), project_hints
+                )
             if attachments and agent_text == said and not text.strip():
                 agent_text = ""  # only files: the agent gets them without the summary line as "text"
             agent_input = await build_agent_input(agent_text, attachments)
@@ -287,6 +311,7 @@ class Orchestrator:
                 tainted=sess.tainted,
                 call_context=call_context,
                 confirm_example=getattr(persona, "confirm_example", None) or "Sehr wohl, Sir. Ich kümmere mich darum.",
+                project_rules=self._project_rules(project_hints, said, persona),
             )
             t_agent = time.perf_counter()
 
@@ -330,6 +355,11 @@ class Orchestrator:
 
             timings["agent_ms"] = round((time.perf_counter() - t_agent) * 1000, 1)
             result.timings = timings
+            if not internal and result.error:
+                note = await self._continue_in_background(sess, principal, channel, said, result, project_hints)
+                if note:
+                    await emit(AgentEvent("delta", text="\n\n" + note))
+                    result.text = f"{result.text}\n\n{note}".strip()
             await turn.finish(error=result.error, model_label=_model_label(result.model) if result.model else None)
         finally:
             for pattern in TURN_WATCH:
@@ -359,10 +389,93 @@ class Orchestrator:
             timings=timings,
             turn_id=turn.turn_id,
         )
-        if result.text and not result.error and principal.role in OWNER_ROLES and not await self._is_tainted(sess.id):
+        if (
+            result.text
+            and not result.error
+            and not internal
+            and principal.role in OWNER_ROLES
+            and not await self._is_tainted(sess.id)
+        ):
             # a session that read untrusted content (web/mail) must not write "facts" into the long-term memory
             spawn(self._queue_extraction(sess.id, channel, said, result.text, user_msg_id), name="memory-extract")
         return result
+
+    async def _background_confirmation(
+        self,
+        sess: ChatSession,
+        principal: Principal,
+        channel: str,
+        text: str,
+        has_files: bool,
+        project_hints: list[str] | None,
+    ) -> str | None:
+        """A multi-step request from the phone becomes a persistent task at once (no model turn that dies with a
+        timeout, restart or closed app). Returns the confirmation to show, or None for a normal turn."""
+        svc = getattr(self.state, "agent_tasks", None)
+        if (
+            svc is None
+            or principal.role not in OWNER_ROLES
+            or not svc.should_background(channel, text, has_files=has_files)
+        ):
+            return None
+        try:
+            task = await svc.start(
+                text, principal, channel=channel, project_hints=project_hints, origin_session=sess.id
+            )
+        except Exception:
+            logger.warning("Hintergrundaufgabe konnte nicht gestartet werden – normaler Lauf", exc_info=True)
+            return None
+        return (
+            f"Verstanden, Sir. Das ist ein mehrstufiger Auftrag – ich bearbeite ihn dauerhaft im Hintergrund "
+            f"(Aufgabe „{task.title}“). Die App kann geschlossen werden; ich melde mich bei Abschluss, bei einem "
+            "Blocker oder wenn ich eine Freigabe brauche."
+        )
+
+    async def _continue_in_background(
+        self,
+        sess: ChatSession,
+        principal: Principal,
+        channel: str,
+        text: str,
+        result: TurnResult,
+        project_hints: list[str] | None,
+    ) -> str | None:
+        """A chat turn that died (timeout, crash, restart) after real work is not lost: it goes on as a task."""
+        svc = getattr(self.state, "agent_tasks", None)
+        cfg = getattr(getattr(getattr(self.state, "settings", None), "agent", None), "tasks", None)
+        if svc is None or cfg is None or not cfg.enabled or not cfg.resume_failed_turns or is_call_channel(channel):
+            return None
+        if principal.role not in OWNER_ROLES or classify_error(result.error) != "transient":
+            return None
+        done = [t["name"] for t in result.tools if t.get("event") == "tool_completed"]
+        if len(done) < 3:
+            return None
+        goal = (
+            f"{text}\n\n[Hinweis: Ein erster Versuch brach nach {len(done)} Werkzeugaufrufen ab ({result.error}). "
+            f"Bereits ausgeführt: {', '.join(dict.fromkeys(done))}. Prüfe zuerst den Stand und wiederhole keine "
+            "Aktion mit Außenwirkung, die schon gelaufen ist.]"
+        )
+        try:
+            task = await svc.start(
+                goal, principal, channel=channel, project_hints=project_hints, origin_session=sess.id
+            )
+        except Exception:
+            logger.warning("Fortsetzung als Hintergrundaufgabe fehlgeschlagen", exc_info=True)
+            return None
+        return f"Ich mache im Hintergrund weiter (Aufgabe „{task.title}“) und melde mich, sobald es erledigt ist."
+
+    def _project_rules(self, hints: list[str] | None, text: str, persona: Any) -> str:
+        """Project rules for this run (deterministic, from the vault): by task/job hints and by name in the message."""
+        memory = getattr(self.state, "memory", None)
+        if memory is None:
+            return ""
+        try:
+            names = tuple(n for n in (getattr(persona, "name", ""), getattr(persona, "id", "")) if n)
+            matched = match_projects(memory.rules.effective(), list(hints or []), [text], ignore=names)
+            return render_project_rules(matched)
+        except Exception:
+            logger.warning("Projektregeln konnten nicht geladen werden", exc_info=True)
+            return ""
 
     async def _plan_steps(self, task_id: str) -> list[str]:
         task = await self.state.tasks.get_task(uuid.UUID(task_id))
@@ -476,10 +589,14 @@ class Orchestrator:
         return False
 
     async def _model_for_turn(
-        self, sess: ChatSession, principal: Principal, channel: str, text: str
+        self, sess: ChatSession, principal: Principal, channel: str, text: str, internal: bool = False
     ) -> tuple[str, str, str | None, str]:
-        """Apply model-switch commands; returns (model, reason, confirmation-or-None, text for the agent)."""
+        """Apply model-switch commands; returns (model, reason, confirmation-or-None, text for the agent).
+        System-written turns (``internal``) never contain commands – a goal that mentions "Opus" is not a switch."""
         router = self.state.model_router
+        if internal:
+            model, reason = router.choose(text, channel, str(sess.id))
+            return model, reason, None, text
         cmd = parse_command(text)
         turn_model: str | None = None
         if is_call_channel(channel):

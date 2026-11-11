@@ -149,10 +149,72 @@ export type TaskStatus =
   | "waiting_approval"
   | "waiting_input"
   | "waiting_external"
+  | "retrying"
+  | "blocked"
   | "completed"
   | "failed"
   | "cancelled"
   | string;
+
+/** Agent task (kind "agent_task"): plan checklist and progress from `Task.context.agent`, same data for every client. */
+export interface AgentTaskView {
+  goal: string;
+  phase: string;
+  activity: string;
+  plan: { title: string; status: "open" | "done" | "skipped" | "failed"; result: string }[];
+  plan_done: number;
+  plan_total: number;
+  session_id: string | null;
+  turns: number;
+  continuations: number;
+  tool_calls: number;
+  retries: number;
+  notes: string[];
+  missing: string[];
+  verification: { passed?: boolean; evidence?: string; missing?: string[] };
+  waiting: { kind?: string; question?: string };
+  blocked: string;
+  active_s: number;
+  updated: string;
+}
+
+export interface BehaviourRule {
+  id: string;
+  title: string;
+  text: string;
+  scope: "global" | "project";
+  project: string;
+  active: boolean;
+  topic: string;
+  path: string;
+  created_at: string;
+  updated_at: string;
+  supersedes: string | null;
+  superseded: boolean;
+  in_force: boolean;
+  shadowed_by: string | null;
+  migrated_from: string | null;
+  note: string | null;
+}
+
+export interface RulesResponse {
+  rules: BehaviourRule[];
+  in_force: number;
+  budget: number;
+}
+
+export interface SystemPromptView {
+  persona: string;
+  persona_label: string;
+  text: string;
+  default: string;
+  customized: boolean;
+  updated_at: string | null;
+  max_chars: number;
+  core: string;
+  rules: string;
+  rules_warnings: string[];
+}
 
 export interface TaskStep {
   idx: number;
@@ -170,6 +232,9 @@ export interface Task {
   title: string;
   kind: string;
   status: TaskStatus;
+  /** Canonical phase: queued | running | waiting_for_user | retrying | blocked | failed | cancelled | completed … */
+  phase?: string;
+  agent?: AgentTaskView | null;
   params: Record<string, unknown>;
   error: string | null;
   question: string | null;

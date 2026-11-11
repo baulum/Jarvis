@@ -5,6 +5,8 @@
   "scripts": {
     "build": "npm --prefix desktop run build",
     "test": "npm --prefix desktop run test",
+    "test:core": "python3 -m pytest -q",
+    "test:all": "npm --prefix desktop run test && python3 -m pytest -q",
     "lint": "npm --prefix desktop run lint",
     "typecheck": "npm --prefix desktop run typecheck"
   }

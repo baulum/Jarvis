@@ -178,4 +178,6 @@ const statusTextDe = {
   'waiting_approval': 'Wartet auf Freigabe',
   'waiting_input': 'Braucht Angaben',
   'waiting_external': 'Wartet auf Ergebnis',
+  'retrying': 'Wiederholt',
+  'blocked': 'Blockiert',
 };

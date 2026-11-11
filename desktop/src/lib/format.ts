@@ -134,6 +134,9 @@ const STATUS_LABELS: Record<string, string> = {
   waiting_approval: "Wartet auf Freigabe",
   waiting_input: "Wartet auf Eingabe",
   waiting_external: "Wartet extern",
+  retrying: "Wiederholt",
+  blocked: "Blockiert",
+  waiting_for_user: "Wartet auf Sir",
   completed: "Abgeschlossen",
   failed: "Fehlgeschlagen",
   cancelled: "Abgebrochen",
@@ -160,6 +163,7 @@ export function statusTone(s: string | null | undefined): Tone {
       return "ok";
     case "running":
     case "queued":
+    case "retrying":
       return "info";
     case "paused":
     case "waiting_approval":
@@ -168,6 +172,7 @@ export function statusTone(s: string | null | undefined): Tone {
     case "pending":
       return "warn";
     case "failed":
+    case "blocked":
     case "rejected":
     case "error":
       return "bad";

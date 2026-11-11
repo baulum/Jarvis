@@ -11,6 +11,7 @@ from croniter import croniter
 from jarvis.agent.persona import TZ
 from jarvis.connectors.base import Connector, Health, Manifest
 from jarvis.events import bus
+from jarvis.jobs.task_status import phase as task_phase
 from jarvis.security.audit import audit
 from jarvis.security.auth import OWNER_ROLES
 from jarvis.tools.executor import ToolUserError
@@ -95,14 +96,41 @@ class SystemConnector(Connector):
                 "hinweis": "Schritte mit nicht eingerichteten Connectoren werden übersprungen – sag Sir das ehrlich.",
             }
 
+        async def start_agent(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            if not st.settings.agent.tasks.enabled:
+                raise ToolUserError("Agent-Aufgaben sind deaktiviert")
+            if ctx.session_id is not None and str(ctx.session_id) in st.agent_tasks._sessions:
+                raise ToolUserError("Du arbeitest bereits in einer Hintergrundaufgabe – führe die Schritte selbst aus.")
+            channel = ctx.principal.channel if ctx.principal.channel in ("desktop", "mobile", "api") else "mobile"
+            task = await st.agent_tasks.start(
+                a["goal"],
+                ctx.principal,
+                title=a.get("title", ""),
+                channel=channel,
+                project_hints=[a["project"]] if a.get("project") else None,
+                origin_session=ctx.session_id,
+                idempotency_key=ctx.idempotency_key,
+            )
+            return {
+                "task_id": str(task.id),
+                "title": task.title,
+                "status": task.status,
+                "note": "Die Aufgabe läuft dauerhaft im Hintergrund (auch bei geschlossener App), wird gegen Ziel und "
+                "Plan geprüft und meldet sich bei Abschluss, Blocker oder nötiger Freigabe. Bestätige Sir kurz.",
+            }
+
         async def task_status(ctx: ToolContext, a: dict[str, Any]) -> Any:
             task = await st.tasks.get_task(_uuid(a["task_id"]))
             if task is None:
                 raise ToolUserError("Aufgabe nicht gefunden")
+            from jarvis.jobs.agent_task import AgentTaskService
+
             return {
                 "id": str(task.id),
                 "title": task.title,
                 "status": task.status,
+                "phase": task_phase(task.status),
+                "agent": AgentTaskService.view(task),
                 "error": task.error,
                 "question": task.pending_question,
                 "steps": [{"name": s.name, "status": s.status, "error": s.error} for s in task.steps],
@@ -267,6 +295,25 @@ class SystemConnector(Connector):
                 "low",
                 "system",
                 summarize=lambda a: f"Ablauf '{a['playbook']}' starten",
+            ),
+            ToolSpec(
+                "task_start_agent",
+                "Startet einen mehrstufigen oder längeren Auftrag als dauerhafte Hintergrundaufgabe: ein Agent plant, "
+                "führt aus, prüft das Ergebnis gegen das Ziel und macht weiter, bis es erreicht ist (oder ein echter "
+                "Blocker vorliegt) – unabhängig davon, ob die App offen ist. goal = der vollständige Auftrag mit allem "
+                "Kontext, den Sir genannt hat (der Agent kann nicht nachfragen); project = Projektname, falls bekannt.",
+                _obj(
+                    {
+                        "goal": {"type": "string", "minLength": 3, "maxLength": 20000},
+                        "title": {"type": "string", "maxLength": 200},
+                        "project": {"type": "string", "maxLength": 120},
+                    },
+                    ["goal"],
+                ),
+                start_agent,
+                "low",
+                "system",
+                summarize=lambda a: f"Hintergrundaufgabe starten: {str(a.get('title') or a['goal'])[:80]}",
             ),
             ToolSpec(
                 "task_status",

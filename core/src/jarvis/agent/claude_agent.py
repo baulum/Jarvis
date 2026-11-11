@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -33,7 +34,8 @@ from typing import TYPE_CHECKING, Any
 
 from jarvis.agent.llm import AgentEvent
 from jarvis.agent.model_router import MODELS
-from jarvis.agent.persona import host_note, render_soul, whatsapp_note
+from jarvis.agent.persona import host_note, whatsapp_note
+from jarvis.agent.prompting import PromptParts, build_parts
 from jarvis.events import spawn
 from jarvis.logging_setup import hide_secret_args
 from jarvis.platform.procs import terminate_group
@@ -153,6 +155,7 @@ class ClaudeCodeAgent:
         self._standby_lock = asyncio.Lock()
         self._reaper: asyncio.Task[None] | None = None
         self.last_error: str | None = None
+        self._warned_digest = ""
 
     # ------------------------------------------------------------------ lifecycle
     def write_mcp_config(self, token: str) -> None:
@@ -188,7 +191,8 @@ class ClaudeCodeAgent:
     def available(self) -> bool:
         return shutil.which(self.cfg.claude_binary) is not None and self.mcp_config.exists()
 
-    def system_prompt(self) -> str:
+    def prompt_parts(self) -> PromptParts:
+        """Core instructions → Sir's editable prompt → active global behaviour rules (see ``agent.prompting``)."""
         skills = self.state.skills.enabled_names()
         skill_note = (
             "\n\n## Skills\nDu kannst Sirs aktivierte Claude-Skills mit dem Skill-Werkzeug laden, wenn sie zur Aufgabe "
@@ -204,10 +208,32 @@ class ClaudeCodeAgent:
         )
         connectors = getattr(self.state, "connectors", None)
         wa = getattr(connectors, "connectors", {}).get("whatsapp") if connectors is not None else None
-        return render_soul(self.state.personality) + (
-            "\n\n## Werkzeuge\nDeine Werkzeuge sind die Jarvis-Werkzeuge (Namen beginnen mit `mcp__jarvis__`) und "
-            "das Skill-Werkzeug." + skill_note
-        ) + note + whatsapp_note(bool(wa is not None and wa.active))
+        core_extra = (
+            (
+                "\n\n## Werkzeuge\nDeine Werkzeuge sind die Jarvis-Werkzeuge (Namen beginnen mit `mcp__jarvis__`) und "
+                "das Skill-Werkzeug." + skill_note
+            )
+            + note
+            + whatsapp_note(bool(wa is not None and wa.active))
+        )
+        memory = getattr(self.state, "memory", None)
+        rules = [r for r in memory.rules.effective() if r.scope == "global"] if memory is not None else []
+        parts = build_parts(
+            self.state.personality,
+            getattr(self.state, "prompt_store", None),
+            rules,
+            core_extra,
+            budget=getattr(getattr(self.state.settings, "agent", None), "rules_budget_chars", 6000),
+        )
+        digest = hashlib.sha1(parts.text.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
+        if parts.warnings and digest != self._warned_digest:
+            self._warned_digest = digest
+            for w in parts.warnings:
+                logger.warning("Verhaltensregeln: %s", w)
+        return parts
+
+    def system_prompt(self) -> str:
+        return self.prompt_parts().text
 
     async def reload(self) -> None:
         """Apply changed skills/persona: idle processes and the standby are restarted, busy ones finish first."""
@@ -225,6 +251,7 @@ class ClaudeCodeAgent:
         exe = shutil.which(self.cfg.claude_binary)
         if exe is None:
             raise ClaudeUnavailable("Claude Code CLI nicht gefunden")
+        prompt = self.system_prompt()  # once: the process is stamped with the signature of exactly this text
         argv = [
             exe,
             "-p",
@@ -250,7 +277,7 @@ class ClaudeCodeAgent:
             "--model",
             self._model_id(self._spawn_model()),
             "--append-system-prompt",
-            self.system_prompt(),
+            prompt,
         ]
         effort = effort or self._effort()
         if effort:
@@ -268,13 +295,23 @@ class ClaudeCodeAgent:
             start_new_session=True,
         )
         p = _Proc(
-            proc=proc, model=self._model_id(self._spawn_model()), effort=effort, persona=self._persona(), resumed=resume
+            proc=proc,
+            model=self._model_id(self._spawn_model()),
+            effort=effort,
+            persona=self._signature(prompt),
+            resumed=resume,
         )
         spawn(self._drain_stderr(p), name="claude-stderr")
         return p
 
     def _persona(self) -> str:
-        return str(getattr(getattr(self.state, "personality", None), "id", "") or "")
+        """Signature of what the process' system prompt was built from: persona + hash of the whole prompt (Sir's
+        edited text, his rules, skills). Another value → the conversation's process restarts via ``--resume``."""
+        return self._signature(self.system_prompt())
+
+    def _signature(self, prompt: str) -> str:
+        pid = str(getattr(getattr(self.state, "personality", None), "id", "") or "")
+        return f"{pid}:{hashlib.sha1(prompt.encode('utf-8'), usedforsecurity=False).hexdigest()[:12]}"
 
     def _effort(self) -> str | None:
         router = getattr(self.state, "model_router", None)

@@ -21,6 +21,8 @@ const _taskStatus = {
   'waiting_approval': 'Wartet auf Freigabe',
   'waiting_input': 'Braucht Angaben',
   'waiting_external': 'Wartet auf Ergebnis',
+  'retrying': 'Wiederholt',
+  'blocked': 'Blockiert',
   'completed': 'Erledigt',
   'failed': 'Fehlgeschlagen',
   'cancelled': 'Abgebrochen',
@@ -90,8 +92,8 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
   }
 
   List<Widget> _sections(BuildContext context, ActivityData d) {
-    final waiting = d.tasks.where((t) => t['status'] == 'waiting_input').toList();
-    final running = d.tasks.where((t) => ['queued', 'running', 'paused', 'waiting_approval', 'waiting_external'].contains(t['status'])).toList();
+    final waiting = d.tasks.where((t) => t['status'] == 'waiting_input' || t['status'] == 'blocked').toList();
+    final running = d.tasks.where((t) => ['queued', 'running', 'retrying', 'paused', 'waiting_approval', 'waiting_external'].contains(t['status'])).toList();
     final liveJobs = d.jobs.where((j) => ['queued', 'running', 'paused'].contains(j['status'])).toList();
     final history = <({DateTime at, Widget w})>[
       for (final a in d.alerts) (at: DateTime.parse(a['created_at'] as String), w: _AlertRow(a: a)),
@@ -213,8 +215,8 @@ String _callTitle(Map<String, dynamic> c) {
 
 Color _statusColor(String s) => switch (s) {
       'completed' || 'ok' => J.green,
-      'failed' || 'error' => J.red,
-      'running' => J.cyan,
+      'failed' || 'error' || 'blocked' => J.red,
+      'running' || 'retrying' => J.cyan,
       'skipped' || 'cancelled' => J.text3,
       _ => J.amber,
     };
@@ -420,12 +422,20 @@ class _TaskRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final steps = (t['steps'] as List).cast<Map>();
-    final done = steps.where((s) => s['status'] == 'completed' || s['status'] == 'skipped').length;
+    var done = steps.where((s) => s['status'] == 'completed' || s['status'] == 'skipped').length;
+    var total = steps.length;
+    // persistent agent task: the plan checklist and the current activity come from `agent` (same data as the desktop)
+    final agent = t['agent'] is Map ? (t['agent'] as Map) : null;
+    if (agent != null && (agent['plan_total'] as int? ?? 0) > 0) {
+      done = agent['plan_done'] as int? ?? 0;
+      total = agent['plan_total'] as int;
+    }
+    final activity = agent == null ? null : (agent['activity']?.toString() ?? '');
     return _Row(
       dot: _statusColor(t['status'] as String),
       title: t['title'].toString(),
-      sub: t['question']?.toString() ?? t['error']?.toString(),
-      meta: 'AUFGABE · ${(_taskStatus[t['status']] ?? t['status']).toString().toUpperCase()} · $done/${steps.length} · ${relDay(DateTime.parse(t['updated_at'] as String))}',
+      sub: t['question']?.toString() ?? t['error']?.toString() ?? ((activity ?? '').isEmpty ? null : activity),
+      meta: 'AUFGABE · ${(_taskStatus[t['status']] ?? t['status']).toString().toUpperCase()} · $done/$total · ${relDay(DateTime.parse(t['updated_at'] as String))}',
       onTap: onTap,
     );
   }

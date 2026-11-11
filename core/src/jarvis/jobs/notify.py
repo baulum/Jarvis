@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 _CATEGORY = {
     "task.completed": "task",
     "task.failed": "error",
+    "task.blocked": "error",
     "task.input_required": "task",
     "approval.requested": "approval",
     "coding.finished": "task",
@@ -73,6 +74,7 @@ class Notifier:
     def start(self) -> None:
         bus.subscribe("task.completed", self._on_event)
         bus.subscribe("task.failed", self._on_event)
+        bus.subscribe("task.blocked", self._on_event)
         bus.subscribe("task.input_required", self._on_event)
         bus.subscribe("approval.requested", self._on_event)
         bus.subscribe("coding.finished", self._on_event)
@@ -150,11 +152,16 @@ class Notifier:
         d = ev.data
         if ev.type == "task.completed":
             warn = d.get("result", {}).get("warnings") or []
-            body = "Abgeschlossen." + (f" Hinweise: {'; '.join(warn)}" if warn else "")
+            summary = str(d.get("result", {}).get("summary") or "").strip() if d.get("agent") else ""
+            body = (summary[:400] or "Abgeschlossen.") + (f" Hinweise: {'; '.join(warn)}" if warn else "")
             await self.notify(ev.type, f"Aufgabe erledigt: {d.get('title')}", body, data=d)
         elif ev.type == "task.failed":
             await self.notify(
                 ev.type, f"Aufgabe fehlgeschlagen: {d.get('title')}", str(d.get("error") or ""), level="warning", data=d
+            )
+        elif ev.type == "task.blocked":
+            await self.notify(
+                ev.type, f"Aufgabe blockiert: {d.get('title')}", str(d.get("error") or ""), level="warning", data=d
             )
         elif ev.type == "task.input_required":
             await self.notify(ev.type, f"Angaben benötigt: {d.get('title')}", str(d.get("question") or ""), data=d)

@@ -19,6 +19,7 @@ import yaml
 
 KIND_FOLDERS: dict[str, str] = {
     "preference": "Präferenzen",
+    "rule": "Regeln",  # lasting behaviour rules Sir gave: loaded into every agent run, see memory/rules.py
     "project": "Projekte",
     "customer": "Kunden",
     "company": "Unternehmen",
@@ -47,6 +48,7 @@ LAYERS: dict[str, str] = {
     "company": "customer",
     "person": "customer",
     "preference": "preference",
+    "rule": "preference",  # same graph layer as preferences (the 3D brain knows no extra layer)
     "decision": "decision",
     "process": "procedural",
     "recurring": "procedural",

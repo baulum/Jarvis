@@ -23,13 +23,14 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import jsonschema
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from jarvis.db import session_scope
 from jarvis.db.models import Task, TaskStep
 from jarvis.events import Event, activity, bus
+from jarvis.jobs.task_status import BLOCKED, EXECUTING, TERMINAL
 from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
 from jarvis.tools.registry import ToolContext
@@ -58,6 +59,16 @@ class StepSkip(Exception):
 
 class StepFail(Exception):
     pass
+
+
+class StepBlock(Exception):
+    """The step cannot go on without outside help (limit reached, real blocker): the task becomes BLOCKED with the
+    reason; ``retry`` continues it from its checkpoint."""
+
+
+class StepYield(Exception):
+    """The step stops here without finishing (pause, kill switch): the task keeps the status it has, the step is
+    taken up again at its checkpoint by the next claim."""
 
 
 @dataclass
@@ -138,6 +149,7 @@ class TaskEngine:
         bus.subscribe("approval.decided", self._on_approval)
         bus.subscribe("coding.finished", self._on_external)
         bus.subscribe("task.external", self._on_external)
+        await self._reclaim_dead_workers()
         self._worker = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
@@ -145,6 +157,22 @@ class TaskEngine:
             self._worker.cancel()
         for t in self._running.values():
             t.cancel()
+
+    async def _reclaim_dead_workers(self) -> None:
+        """After a restart of this Core: tasks whose lease belongs to an older process of this host are orphaned –
+        free them now instead of waiting for the 90 s lease to run out."""
+        host = WORKER_ID.rsplit(":", 1)[0]
+        async with session_scope() as s:
+            res = await s.execute(
+                update(Task)
+                .where(
+                    Task.status.in_(list(EXECUTING)), Task.lease_owner.like(f"{host}:%"), Task.lease_owner != WORKER_ID
+                )
+                .values(lease_until=datetime.now(UTC) - timedelta(seconds=1))
+            )
+            n = res.rowcount or 0  # type: ignore[attr-defined]
+        if n:
+            logger.info("%d Aufgabe(n) eines früheren Core-Prozesses werden wieder aufgenommen", n)
 
     # ------------------------------------------------------------------ API
     async def create(
@@ -252,7 +280,7 @@ class TaskEngine:
     async def cancel(self, task_id: uuid.UUID, actor: str) -> bool:
         async with session_scope() as s:
             task = await s.get(Task, task_id, with_for_update=True)
-            if task is None or task.status in ("completed", "failed", "cancelled"):
+            if task is None or task.status in TERMINAL:
                 return False
             task.status = "cancelled"
             task.lease_until = None
@@ -291,12 +319,12 @@ class TaskEngine:
     async def retry(self, task_id: uuid.UUID, actor: str) -> bool:
         async with session_scope() as s:
             task = await s.get(Task, task_id, with_for_update=True)
-            if task is None or task.status not in ("failed", "cancelled"):
+            if task is None or task.status not in ("failed", "cancelled", BLOCKED):
                 return False
             task.status = "queued"
             task.error = None
             for step in (await s.execute(select(TaskStep).where(TaskStep.task_id == task_id))).scalars():
-                if step.status in ("failed", "running", "waiting_approval", "waiting_external"):
+                if step.status in ("failed", "blocked", "running", "waiting_approval", "waiting_external"):
                     step.status = "pending"
                     step.error = None
         await audit(actor, "task.retry", target=str(task_id))
@@ -340,7 +368,7 @@ class TaskEngine:
             task = (
                 await s.execute(
                     select(Task)
-                    .where(or_(Task.status == "queued", (Task.status == "running") & (Task.lease_until < now)))
+                    .where(or_(Task.status == "queued", Task.status.in_(list(EXECUTING)) & (Task.lease_until < now)))
                     .where(Task.id.not_in(list(self._running) or [uuid.uuid4()]))
                     .order_by(Task.created_at)
                     .limit(1)
@@ -360,7 +388,7 @@ class TaskEngine:
             await asyncio.sleep(LEASE.total_seconds() / 3)
             async with session_scope() as s:
                 task = await s.get(Task, task_id)
-                if task is None or task.status != "running":
+                if task is None or task.status not in EXECUTING:
                     return
                 task.lease_until = datetime.now(UTC) + LEASE
 
@@ -449,6 +477,14 @@ class TaskEngine:
                 await self._set_step(step.id, status="failed", error=str(f), finished_at=datetime.now(UTC))
                 await self._finish(task_id, "failed", error=f"{step.name}: {f}", context=context)
                 return
+            except StepBlock as b:
+                await self._set_step(step.id, status="blocked", error=str(b))
+                await self._finish(task_id, BLOCKED, error=str(b), context=context)
+                return
+            except StepYield:
+                await self._set_step(step.id, status="pending")
+                await self._set_task(task_id, context=_jsonable(context), lease_until=None)
+                return
             context[f"step_{step.idx}"] = out
             context["_warnings"] = warnings
             previous = out
@@ -480,7 +516,12 @@ class TaskEngine:
         title = task.title if task else str(task_id)
         await audit("task-engine", f"task.{status}", target=str(task_id), details={"error": error})
         await bus.publish(
-            f"task.{status}", task_id=str(task_id), title=title, error=error, result=_jsonable(result or {})
+            f"task.{status}",
+            task_id=str(task_id),
+            title=title,
+            error=error,
+            result=_jsonable(result or {}),
+            agent=bool(task and task.kind == "agent_task"),
         )
         await bus.publish("task.updated", task_id=str(task_id), status=status, title=title)
 
@@ -549,10 +590,14 @@ class TaskEngine:
         woke = False
         async with session_scope() as s:
             steps = (
-                await s.execute(
-                    select(TaskStep).where(TaskStep.status == "waiting_external", TaskStep.updated_at < cutoff)
+                (
+                    await s.execute(
+                        select(TaskStep).where(TaskStep.status == "waiting_external", TaskStep.updated_at < cutoff)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             for step in steps:
                 if ((step.output or {}).get("wait") or {}).get("reason") != "tool_in_progress":
                     continue

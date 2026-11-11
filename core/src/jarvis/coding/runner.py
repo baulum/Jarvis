@@ -108,6 +108,7 @@ def resolve_command(
             return [target, *expansion[1:]]
     return None
 
+
 _STRIP_ENV = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -839,6 +840,34 @@ class CodingRunner:
                 for k, v in fields.items():
                     setattr(job, k, v)
 
+    def _rules_block(self, repo: Path, title: str) -> str:
+        """Sir's lasting behaviour rules for this job: the global ones plus those of the job's project (named in the
+        repository path or the title) – deterministic, read from the vault (memory/rules.py). Additive prompt
+        text only."""
+        memory = getattr(self.state, "memory", None)
+        if memory is None:
+            return ""
+        try:
+            from jarvis.memory.rules import match_projects, render_project_rules, render_rules
+
+            rules = memory.rules.effective()
+            glob = [r for r in rules if r.scope == "global"]
+            proj = match_projects(rules, [str(repo), title])
+            block, _ = render_rules(glob, [], 3000)
+            extra = render_project_rules(proj)
+            return (
+                (
+                    "\n\nDauerhafte Verhaltensregeln von Sir (gelten auch für diesen Auftrag):\n"
+                    + block
+                    + ("\n\n" + extra if extra else "")
+                )
+                if (block or extra)
+                else ""
+            )
+        except Exception:
+            logger.warning("Verhaltensregeln für den Coding-Job nicht geladen", exc_info=True)
+            return ""
+
     async def _new_worktree(self, job_id: uuid.UUID, repo: Path, title: str) -> tuple[str, str]:
         """Where a new job works: ``(worktree path, branch)``. Customer sites (below ``CUSTOMER_SITES_DIR``) are edited
         in place on their current branch; everything else gets its own worktree on a ``jarvis/*`` branch."""
@@ -887,7 +916,8 @@ class CodingRunner:
                 )
                 await bus.publish("coding.updated", job_id=str(job_id), status="running", title=title, branch=branch)
                 full_prompt = (
-                    f"{prompt}\n\nArbeite ausschließlich in diesem Verzeichnis. Halte den Code sauber und "
+                    f"{prompt}{self._rules_block(repo, title)}\n\n"
+                    "Arbeite ausschließlich in diesem Verzeichnis. Halte den Code sauber und "
                     "lauffähig. Wenn es Tests oder einen Build gibt, führe sie aus und behebe Fehler. "
                     "Fasse am Ende kurz zusammen, was du gemacht hast. Committen, Pushen, Mergen nach main und "
                     "Aufräumen übernimmt der Runner nach deinem Ende automatisch: Schreibe in der Zusammenfassung "
@@ -1222,9 +1252,7 @@ class CodingRunner:
         effort: str | None = None,
         continue_session: bool = False,
     ) -> dict[str, Any]:
-        argv = self._claude_argv(
-            prompt, resume_session, model=model, effort=effort, continue_session=continue_session
-        )
+        argv = self._claude_argv(prompt, resume_session, model=model, effort=effort, continue_session=continue_session)
         proc = await asyncio.create_subprocess_exec(
             *argv,
             cwd=cwd,

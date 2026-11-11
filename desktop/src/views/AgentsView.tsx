@@ -10,7 +10,7 @@ import { entryStatus, liveEntries, type EntryStatus } from "../lib/monitor";
 import type { CodingJob, Task } from "../lib/types";
 import { api, useApp } from "../store/app";
 
-const TASK_ACTIVE = ["queued", "running", "paused", "waiting_approval", "waiting_input", "waiting_external"];
+const TASK_ACTIVE = ["queued", "running", "retrying", "paused", "waiting_approval", "waiting_input", "waiting_external"];
 const JOB_ACTIVE = ["queued", "running", "paused"];
 const DAY_MS = 86_400_000;
 
@@ -209,7 +209,7 @@ function JobGroup({
 function TaskRow({ task, onChanged }: { task: Task; onChanged: () => Promise<void> }) {
   const done = task.steps.filter((s) => s.status === "completed" || s.status === "skipped").length;
   const current = task.steps.find((s) => !["completed", "skipped"].includes(s.status));
-  const controllable = task.status === "queued" || task.status === "running" || task.status === "paused";
+  const controllable = task.status === "queued" || task.status === "running" || task.status === "retrying" || task.status === "paused";
   const after = (p: Promise<unknown>) => p.then(onChanged);
   const needsSir = task.status === "waiting_approval" || task.status === "waiting_input";
   return (

@@ -44,7 +44,8 @@ MOBILE_ROUTES: list[tuple[frozenset[str], re.Pattern[str]]] = [
         re.compile(r"^/api/media/(images|videos|attachments)/[A-Za-z0-9][A-Za-z0-9_-]{0,100}\.[a-z0-9]{2,5}$"),
     ),
     (frozenset({"POST"}), re.compile(r"^/api/attachments$")),  # one file per request, checked by the core
-    (frozenset({"GET"}), re.compile(r"^/api/tasks(/[0-9a-f-]{36})?$")),
+    (frozenset({"GET"}), re.compile(r"^/api/tasks(/[0-9a-f-]{36}(/log)?)?$")),
+    (frozenset({"POST"}), re.compile(r"^/api/tasks/agent$")),  # start a persistent agent task from the app
     (frozenset({"POST"}), re.compile(r"^/api/tasks/[0-9a-f-]{36}/(input|cancel|retry|pause|resume|message)$")),
     (frozenset({"GET"}), re.compile(r"^/api/approvals(/mode)?$")),  # deciding goes through /api/mobile (signed)
     (frozenset({"GET", "POST"}), re.compile(r"^/api/agent/model$")),  # model picker in the app
@@ -56,6 +57,8 @@ MOBILE_ROUTES: list[tuple[frozenset[str], re.Pattern[str]]] = [
     (frozenset({"POST"}), re.compile(r"^/api/notifications/read$")),
     (frozenset({"GET"}), re.compile(r"^/api/graph(/cluster/[a-z_]+)?$")),
     (frozenset({"GET"}), re.compile(r"^/api/memory/(search|items)(/[0-9a-f-]{36})?$")),
+    (frozenset({"GET"}), re.compile(r"^/api/memory/rules$")),  # behaviour rules, read-only on the phone
+    (frozenset({"GET"}), re.compile(r"^/api/agent/system-prompt$")),  # editable system prompt, read-only on the phone
     (frozenset({"GET"}), re.compile(r"^/api/system/(status|greeting)$")),
     (frozenset({"POST"}), re.compile(r"^/api/system/killswitch$")),  # engaging only; release is owner-only
     (frozenset({"GET"}), re.compile(r"^/api/coding/jobs$")),

@@ -75,6 +75,28 @@ class LlmCfg(_Strict):
     keep_alive: str = "30m"
 
 
+class AgentTaskCfg(_Strict):
+    """Limits of persistent agent tasks (``jobs/agent_task.py``). Generous on purpose – they stop runaway loops, they
+    must not cut a long legitimate job short; hitting one ends the task as BLOCKED/FAILED with the reason."""
+
+    enabled: bool = True
+    # A multi-step request from the phone (channel mobile) starts as a background task right away instead of one
+    # chat turn that dies with the 15-minute turn timeout; short questions are untouched (see ``looks_long_running``).
+    auto_background: bool = True
+    auto_min_chars: int = Field(default=180, ge=40)
+    # A chat turn that ended with a timeout/crash after real work continues as a task instead of ending in an error.
+    resume_failed_turns: bool = True
+    max_wall_clock_s: int = Field(default=6 * 3600, ge=60)
+    max_turns: int = Field(default=120, ge=1)  # agent turns per task (≈ cost; the subscription has no price per call)
+    max_continuations: int = Field(default=40, ge=0)  # forced continuations after a turn ended before the goal
+    max_tool_calls: int = Field(default=4000, ge=1)
+    max_retries: int = Field(default=6, ge=0)  # consecutive transient failures before the task is BLOCKED
+    retry_base_s: float = Field(default=8.0, ge=0)  # exponential backoff: base · 2^n, capped at retry_max_s
+    retry_max_s: float = Field(default=300.0, ge=0)
+    repeat_limit: int = Field(default=3, ge=2)  # the same failing action this often in a row → BLOCKED
+    session_rotate_turns: int = Field(default=10, ge=2)  # new agent session with a compact handoff after N turns
+
+
 class AgentCfg(_Strict):
     provider: Literal["claude_code", "hermes"] = "claude_code"
     claude_binary: str = "claude"
@@ -83,6 +105,10 @@ class AgentCfg(_Strict):
     auto_downgrade: bool = True
     idle_timeout_minutes: int = 15
     turn_timeout_s: int = Field(default=900, ge=30)  # a hung Claude turn would block every channel (global run lock)
+    rules_budget_chars: int = Field(
+        default=6000, ge=500
+    )  # system-prompt budget of the behaviour rules (memory/rules.py)
+    tasks: AgentTaskCfg = AgentTaskCfg()
 
 
 class HermesCfg(_Strict):
@@ -130,7 +156,7 @@ class TtsCfg(_Strict):
 
 
 class WakeupCfg(_Strict):
-    """"Jarvis, wach auf": a staged start-up show – sound, optional line and apps brought to the front.
+    """ "Jarvis, wach auf": a staged start-up show – sound, optional line and apps brought to the front.
 
     Start values only: once Sir changes the routine in the desktop app, ``wakeup.json`` in the data dir
     holds enabled/sound/volume/apps (see ``jarvis.voice.wakeup``)."""

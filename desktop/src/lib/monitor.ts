@@ -22,9 +22,11 @@ export const ENTRY_STATUS: Record<EntryStatus, { label: string; tone: Tone }> = 
 export function entryStatus(s: string | null | undefined): EntryStatus {
   switch (s) {
     case "running":
+    case "retrying":
     case "in_progress":
       return "running";
     case "waiting_approval":
+    case "waiting_for_user":
     case "approval_required":
     case "pending":
       return "waiting";

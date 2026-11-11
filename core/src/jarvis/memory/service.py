@@ -52,6 +52,7 @@ from jarvis.memory.entities import (
     query_terms,
     same_entity,
 )
+from jarvis.memory.rules import RULE_KIND, SCOPES, RuleBook, plan_migration
 from jarvis.memory.vault import ENTITY_KINDS, KIND_FOLDERS, LAYERS, Note, Vault
 from jarvis.security.audit import audit
 from jarvis.security.auth import OWNER_ROLES
@@ -251,6 +252,7 @@ class MemoryService:
         structured_llm: Callable[[str, str, dict[str, Any]], Awaitable[Any]],
     ) -> None:
         self.vault = vault
+        self.rules = RuleBook(vault)  # lasting behaviour rules, read from the vault (memory/rules.py)
         self.embedder = embedder
         self.structured_llm = structured_llm
         self._watch_task: asyncio.Task[None] | None = None
@@ -621,6 +623,8 @@ class MemoryService:
         lines: list[str] = []
         used = 0
         for h in hits:
+            if h["kind"] == RULE_KIND:
+                continue  # rules are loaded into the system prompt on every run – not a "maybe relevant" hit
             relevant = h["score"] >= 0.42 or "keyword" in h["match"]
             if not relevant:
                 continue
@@ -864,7 +868,11 @@ class MemoryService:
             row = (
                 await s.execute(
                     select(MemoryItem, dist.label("d"))
-                    .where(MemoryItem.status == "active", MemoryItem.embedding.is_not(None))
+                    .where(
+                        MemoryItem.status == "active",
+                        MemoryItem.embedding.is_not(None),
+                        MemoryItem.kind != RULE_KIND,  # a rule's wording is never merged with other notes
+                    )
                     .order_by(dist)
                     .limit(1)
                 )
@@ -889,9 +897,16 @@ class MemoryService:
         confirmed: bool = False,
         confidence: float = 1.0,
         relations: list[dict[str, str]] | None = None,
+        scope: str = "global",
+        project: str = "",
     ) -> dict[str, Any]:
-        """Store a fact with entity resolution and dedupe. Sensitive facts wait for explicit confirmation."""
+        """Store a fact with entity resolution and dedupe. Sensitive facts wait for explicit confirmation.
+        ``kind="rule"`` stores a lasting behaviour rule instead (``save_rule``: no merging with other notes)."""
         kind = kind if kind in KIND_FOLDERS else "note"
+        if kind == RULE_KIND:
+            return await self.save_rule(
+                title, content, scope=scope, project=project, actor=actor, source=source, confidence=confidence
+            )
         names, typed = _norm_entities(entities)
         rels = _merge_relations(typed, relations or [])
         confidence = max(0.0, min(1.0, float(confidence)))
@@ -999,6 +1014,171 @@ class MemoryService:
         )
         await audit(actor, "memory.create", target=note.path, details={"title": note.title, "kind": kind})
         return {"status": "created", "id": str(item_id), "path": note.path}
+
+    # ------------------------------------------------------------------ lasting behaviour rules
+    async def save_rule(
+        self,
+        title: str,
+        text: str,
+        *,
+        scope: str = "global",
+        project: str = "",
+        actor: str = "system",
+        source: dict[str, Any] | None = None,
+        topic: str = "",
+        active: bool = True,
+        migrated_from: str = "",
+        note: str = "",
+        created: str = "",
+        updated: str = "",
+        confidence: float = 1.0,
+    ) -> dict[str, Any]:
+        """Create a behaviour rule note (``Regeln/``). Rules are never merged into other notes; an identical active
+        rule of the same scope is reported as ``duplicate``. Credentials do not belong into rules – they end up in
+        the system prompt of every run."""
+        scope = scope if scope in SCOPES else "global"
+        project = project.strip()[:120] if scope == "project" else ""
+        if scope == "project" and not project:
+            raise ValueError("Eine Projektregel braucht ein Projekt")
+        title, text = title.strip()[:200], text.strip()
+        if len(text) < 3 or not title:
+            raise ValueError("Regel braucht Titel und Text")
+        if looks_sensitive(f"{title} {text}"):
+            raise ValueError("Regeln dürfen keine Zugangsdaten oder sensiblen Daten enthalten")
+
+        def norm(t: str) -> str:
+            return re.sub(r"\W+", " ", t.lower()).strip()
+
+        async with self._write_lock:
+            for r in self.rules.all():
+                if (
+                    r.in_force
+                    and r.scope == scope
+                    and r.project.lower() == project.lower()
+                    and norm(r.text) == norm(text)
+                ):
+                    return {"status": "duplicate", "id": r.id, "path": r.path}
+            now = datetime.now(UTC).isoformat(timespec="seconds")
+            extra: dict[str, Any] = {"scope": scope}
+            if project:
+                extra["project"] = project
+            if topic:
+                extra["topic"] = topic
+            if not active:
+                extra["active"] = False
+            if migrated_from:
+                extra["migrated_from"] = migrated_from
+            if note:
+                extra["note"] = note
+            n = Note(
+                title=title,
+                body=text,
+                kind=RULE_KIND,
+                source={"ts": now, **(source or {})},
+                confidence=max(0.0, min(1.0, float(confidence))),
+                extra=extra,
+                created=created or now,
+                updated=updated or created or now,
+            )
+            self._write(n)
+            item_id = await self.index_note(n)
+        await bus.publish(
+            "memory.changed", id=str(item_id), path=n.path, change="added", origin="jarvis", title=title, kind=RULE_KIND
+        )
+        await bus.publish("rules.changed", id=str(item_id), change="added")
+        await audit(
+            actor, "memory.rule.create", target=n.path, details={"title": title, "scope": scope, "project": project}
+        )
+        return {"status": "created", "id": str(item_id), "path": n.path}
+
+    async def update_rule(
+        self,
+        rule_id: str,
+        actor: str,
+        *,
+        title: str | None = None,
+        text: str | None = None,
+        scope: str | None = None,
+        project: str | None = None,
+        active: bool | None = None,
+    ) -> dict[str, Any]:
+        """Edit a rule in place or switch it on/off (Sir's own change in the settings or by tool)."""
+        rule = self.rules.get(rule_id)
+        if rule is None:
+            raise LookupError("Regel nicht gefunden")
+        async with self._write_lock:
+            n = self.vault.read(rule.path)
+            if title is not None and title.strip():
+                n.title = title.strip()[:200]
+            if text is not None:
+                if len(text.strip()) < 3 or looks_sensitive(text):
+                    raise ValueError("Regeltext zu kurz oder enthält sensible Daten")
+                n.body = text.strip()
+            new_scope = scope if scope in SCOPES else n.extra.get("scope", "global")
+            new_project = (project if project is not None else str(n.extra.get("project") or "")).strip()
+            if new_scope == "project" and not new_project:
+                raise ValueError("Eine Projektregel braucht ein Projekt")
+            n.extra["scope"] = new_scope
+            if new_scope == "project":
+                n.extra["project"] = new_project[:120]
+            else:
+                n.extra.pop("project", None)
+            if active is not None:
+                if active:
+                    n.extra.pop("active", None)
+                    n.extra.pop("note", None)
+                    if n.status == "superseded":
+                        n.status = "active"
+                        n.extra.pop("superseded_by", None)
+                else:
+                    n.extra["active"] = False
+            n.updated = datetime.now(UTC).isoformat(timespec="seconds")
+            self._write(n)
+            item_id = await self.index_note(n, force=True)
+        await bus.publish(
+            "memory.changed",
+            id=str(item_id),
+            path=n.path,
+            change="edited",
+            origin="owner",
+            title=n.title,
+            kind=RULE_KIND,
+        )
+        await bus.publish("rules.changed", id=str(item_id), change="edited")
+        await audit(actor, "memory.rule.update", target=n.path, details={"active": active})
+        return {"status": "updated", "id": str(item_id), "path": n.path}
+
+    async def migrate_rules(self, actor: str = "system", dry_run: bool = False) -> dict[str, Any]:
+        """Derive rules from old preference notes (idempotent, nothing is deleted or changed in the old notes).
+        Per topic only the newest note becomes an active rule; older contradicting ones become inactive rules."""
+        plan = plan_migration(self.vault, self.rules)
+        items = [
+            {"source": c.source_path, "title": c.title, "active": c.active, "topic": c.topic, "note": c.note}
+            for c in plan
+        ]
+        if dry_run:
+            return {"dry_run": True, "candidates": items}
+        created = 0
+        for c in plan:
+            try:
+                res = await self.save_rule(
+                    c.title,
+                    c.text,
+                    actor=actor,
+                    source={"type": "migration", "from": c.source_path},
+                    topic=c.topic,
+                    active=c.active,
+                    migrated_from=c.source_path,
+                    note=c.note,
+                    created=c.created,
+                    updated=c.updated,
+                )
+                created += res["status"] == "created"
+            except ValueError:
+                logger.info("Präferenz %s nicht als Regel übernommen", c.source_path)
+        if created:
+            logger.info("%d Präferenz-Notizen als Verhaltensregeln übernommen", created)
+        return {"dry_run": False, "migrated": created, "candidates": items}
 
     async def consolidate(
         self,
@@ -1113,6 +1293,10 @@ class MemoryService:
             body=f"{new_content.strip()}\n\nErsetzt: [[{old_note.title}]] (veraltet)",
             source={"ts": datetime.now(UTC).isoformat(timespec="seconds"), "type": "correction", "actor": actor},
         )
+        if kind == RULE_KIND:  # the replacement is the same kind of rule: scope, project and topic carry over
+            new_note.extra = {k: old_note.extra[k] for k in ("scope", "project", "topic") if old_note.extra.get(k)}
+            new_note.extra["supersedes"] = old_note.id
+            old_note.extra["active"] = False
         if new_note.title == old_title:
             old_note.title = f"{old_title} (veraltet {datetime.now(UTC).strftime('%Y-%m-%d')})"
             new_note.body = new_note.body.replace(f"[[{old_title}]]", f"[[{old_note.title}]]")

@@ -98,3 +98,60 @@ async def test_llm_extraction_updates_existing_entity(mem: MemoryService) -> Non
     hits = await mem.search("Wer ist Ansprechpartner bei der Bäckerei Schmidt?", limit=2)
     assert "Becker" in hits[0]["content"]
     assert hits[0]["id"] == base["id"] or (await mem.get(uuid.UUID(base["id"])))["status"] == "superseded"
+
+
+# ------------------------------------------------------------------ behaviour rules
+async def test_rules_create_replace_deactivate_and_migrate(mem: MemoryService) -> None:
+    r = await mem.remember("Coding-Modell", "Coding-Aufträge laufen fest mit Sonnet 5.5.", "rule", actor="pytest")
+    assert r["status"] == "created" and r["path"].startswith("Regeln/")
+    assert [x.title for x in mem.rules.effective()] == ["Coding-Modell"]
+    dup = await mem.save_rule("Anders benannt", "Coding-Aufträge laufen fest mit Sonnet 5.5.")
+    assert dup["status"] == "duplicate"  # the same rule is not stored twice
+    proj = await mem.remember(
+        "Lead-Tool Tests", "Immer npm test ausführen.", "rule", scope="project", project="Lead-Tool"
+    )
+    assert proj["status"] == "created"
+    glob = [x for x in mem.rules.effective() if x.scope == "global"]
+    assert [x.title for x in glob] == ["Coding-Modell"]
+
+    # correcting a rule: the new one is in force, the old one stays visible but is replaced; scope carries over
+    corr = await mem.correct(uuid.UUID(r["id"]), "Coding-Aufträge laufen fest mit Opus 5.5.", "pytest")
+    assert corr["status"] == "corrected"
+    live = {x.title: x for x in mem.rules.effective()}
+    assert (
+        "Coding-Modell" in live and "Opus 5.5" in live["Coding-Modell"].text and live["Coding-Modell"].scope == "global"
+    )
+    old = [x for x in mem.rules.all() if x.superseded]
+    assert len(old) == 1 and "Sonnet" in old[0].text and not old[0].in_force
+    assert live["Coding-Modell"].supersedes == r["id"]
+
+    # deactivating removes it from the prompt, reactivating brings it back, nothing is deleted
+    await mem.update_rule(live["Coding-Modell"].id, "pytest", active=False)
+    assert "Coding-Modell" not in {x.title for x in mem.rules.effective()}
+    assert any(x.title == "Coding-Modell" and not x.active for x in mem.rules.all())
+    await mem.update_rule(live["Coding-Modell"].id, "pytest", active=True)
+    assert "Coding-Modell" in {x.title for x in mem.rules.effective()}
+
+    # rules never enter the "maybe relevant" block (they are in the system prompt) and hold no credentials
+    assert "Opus 5.5" not in await mem.context_for("Welches Modell für Coding-Aufträge?", include_sensitive=True)
+    with pytest.raises(ValueError):
+        await mem.save_rule("Zugang", "Das Passwort: geheim123 immer verwenden")
+    with pytest.raises(ValueError):
+        await mem.save_rule("Ohne Projekt", "Etwas Wichtiges", scope="project")
+
+
+async def test_preference_migration_through_the_service(mem: MemoryService) -> None:
+    from jarvis.memory.vault import Note
+
+    for title, text, ts in (
+        ("Modell alt", "Coding-Aufträge laufen immer mit Sonnet 5.5.", "2026-02-01T10:00:00+00:00"),
+        ("Modell neu", "Coding-Aufträge laufen fest mit Opus 5.5.", "2026-05-01T10:00:00+00:00"),
+    ):
+        mem.vault.write(Note(title=title, body=text, kind="preference", created=ts, updated=ts))
+    dry = await mem.migrate_rules(dry_run=True)
+    assert dry["dry_run"] and len(dry["candidates"]) == 2 and not mem.rules.all()
+    res = await mem.migrate_rules()
+    assert res["migrated"] == 2
+    assert [x.title for x in mem.rules.effective()] == ["Modell neu"]
+    assert (await mem.migrate_rules())["migrated"] == 0  # idempotent
+    assert (mem.vault.root / "Präferenzen" / "Modell alt.md").exists()  # nothing deleted

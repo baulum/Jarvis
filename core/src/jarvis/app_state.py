@@ -20,6 +20,7 @@ from jarvis.agent.llm import HermesClient, OllamaClient
 from jarvis.agent.model_router import ModelRouter
 from jarvis.agent.orchestrator import Orchestrator
 from jarvis.agent.personas import PersonaStore
+from jarvis.agent.prompting import PromptStore
 from jarvis.agent.skills import SkillCatalog
 from jarvis.agent.usage import UsageTracker
 from jarvis.backup.service import BackupService
@@ -48,6 +49,7 @@ from jarvis.devices.connector import DevicesConnector
 from jarvis.devices.hub import DeviceHub
 from jarvis.events import Event, bus, spawn
 from jarvis.graph import GraphBuilder
+from jarvis.jobs.agent_task import AgentTaskService
 from jarvis.jobs.engine import TaskEngine
 from jarvis.jobs.notify import Notifier
 from jarvis.jobs.playbooks import register_playbooks
@@ -132,6 +134,7 @@ class AppState:
         self.hermes: HermesClient | None = None
         self.hermes_supervisor = HermesSupervisor(self)
         self.skills = SkillCatalog(settings.paths.data_dir)
+        self.prompt_store = PromptStore(settings.paths.data_dir / "system-prompt.json")  # Sir's editable prompt part
         self.usage = UsageTracker(settings.paths.data_dir / "agent-usage.json")
         self.oneshot = ClaudeOneShot(self)
         self.model_router = ModelRouter(
@@ -153,6 +156,7 @@ class AppState:
         self.tts.set_voice(self.personality.voice, self.personality.system_voice)
         self.orchestrator = Orchestrator(self)
         self.tasks = TaskEngine(self)
+        self.agent_tasks = AgentTaskService(self)  # persistent agent loop on top of the task engine
         self.scheduler = Scheduler(self)
         self.notifier = Notifier(self)
         self.usage.notify = lambda level, title, body: self.notifier.notify("agent.usage", title, body, level=level)
@@ -219,6 +223,7 @@ class AppState:
         self._register_phone_tool()
         self._register_mobile_tools()
         register_playbooks(self)
+        self.agent_tasks.register()
         self.tasks.register(social_playbook(self.social))
 
     def _register_phone_tool(self) -> None:
@@ -281,6 +286,7 @@ class AppState:
             await self.memory.start(self.settings.paths.data_dir / "memory-embedding-model")
         except Exception:
             logger.exception("Memory engine failed to start (embeddings?)")
+        spawn(self._migrate_rules_once(), name="rules-migrate")
         interrupted_jobs = await self.coding.resume_interrupted()
         await self.tasks.start()
         await self.scheduler.start()
@@ -385,6 +391,20 @@ class AppState:
             await self.hermes.close()
         await self.bridge.close()
 
+    async def _migrate_rules_once(self) -> None:
+        """Once per installation: preference notes that read like lasting rules become behaviour rules (nothing is
+        deleted or changed in the old notes; per topic only the newest is active).
+        Re-run: POST /api/memory/rules/migrate."""
+        marker = self.settings.paths.data_dir / "rules-migrated"
+        if marker.exists():
+            return
+        try:
+            res = await self.memory.migrate_rules("system")
+            marker.write_text(datetime.now(UTC).isoformat(), encoding="utf-8")
+            logger.info("Regel-Migration: %s Präferenz-Notizen übernommen", res.get("migrated"))
+        except Exception:
+            logger.warning("Regel-Migration fehlgeschlagen – wird beim nächsten Start erneut versucht", exc_info=True)
+
     @property
     def personality(self) -> Personality:
         """The active persona – everything that speaks (prompt, greetings, error phrases, voice) reads it here."""
@@ -478,7 +498,15 @@ class AppState:
                     .select_from(Task)
                     .where(
                         Task.status.in_(
-                            ["running", "queued", "paused", "waiting_approval", "waiting_input", "waiting_external"]
+                            [
+                                "running",
+                                "retrying",
+                                "queued",
+                                "paused",
+                                "waiting_approval",
+                                "waiting_input",
+                                "waiting_external",
+                            ]
                         )
                     )
                 )

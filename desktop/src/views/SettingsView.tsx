@@ -1,6 +1,7 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { PersonaCard } from "../components/PersonaCard";
+import { SystemPromptCard } from "../components/SystemPromptCard";
 import { WakeupCard } from "../components/WakeupCard";
 import { Button, CodeBlock, Dialog, EmptyState, ErrorState, Field, KeyValue, Section, Skeleton, Tag, Toggle } from "../components/ui";
 import { useAction, useQuery } from "../hooks/useQuery";
@@ -45,6 +46,7 @@ export function SettingsView() {
           </Section>
         )}
         <PersonaCard />
+        <SystemPromptCard />
         <WakeupCard />
         {settings.loading && <Skeleton rows={6} />}
         {settings.error && <ErrorState message={settings.error} onRetry={settings.refetch} />}

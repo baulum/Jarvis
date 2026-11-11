@@ -50,6 +50,22 @@ agent:
   # in the desktop app or via POST /api/agent/model. Opus is only used when asked for.
   idle_timeout_minutes: 15 # idle conversation processes are stopped and resumed later
   turn_timeout_s: 900      # a Claude turn that hangs longer is killed (it would block every channel)
+  rules_budget_chars: 6000 # system-prompt budget of Sir's behaviour rules (global ones are never dropped)
+  # Persistent agent tasks (docs/adr/0001-…): plan → execute → verify → continue, server-side, resumed after restarts.
+  tasks:
+    enabled: true
+    auto_background: true      # multi-step requests from the phone start as a background task right away
+    auto_min_chars: 180
+    resume_failed_turns: true  # a chat turn that died after real work goes on as a task
+    max_wall_clock_s: 21600    # active run time (waiting for Sir does not count)
+    max_turns: 120
+    max_continuations: 40
+    max_tool_calls: 4000
+    max_retries: 6             # consecutive transient errors, backoff retry_base_s · 2^n (max retry_max_s)
+    retry_base_s: 8
+    retry_max_s: 300
+    repeat_limit: 3            # the same failing action this often in a row → blocked
+    session_rotate_turns: 10   # fresh agent session with the compact state after N turns
 
 hermes:
   enabled: false

@@ -1,6 +1,7 @@
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, type SimulationLinkDatum, type SimulationNodeDatum } from "d3-force";
 import { Download, Search, Waypoints } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { RulesPanel } from "../components/RulesPanel";
 import { Button, EmptyState, ErrorState, Section, Skeleton, Tag } from "../components/ui";
 import { useAction, useQuery } from "../hooks/useQuery";
 import { formatDateTime } from "../lib/format";
@@ -12,7 +13,7 @@ interface GNode extends SimulationNodeDatum { id: string; label: string; kind: s
 type GLink = SimulationLinkDatum<GNode>;
 
 const KIND_COLOR: Record<string, string> = {
-  customer: "#6ad3e4", project: "#9fe0c3", preference: "#e2a14c", decision: "#d6a6f0", process: "#8fb7ff",
+  customer: "#6ad3e4", project: "#9fe0c3", preference: "#e2a14c", rule: "#e2a14c", decision: "#d6a6f0", process: "#8fb7ff",
   technical: "#a7c4cf", person: "#f0c38c", recurring: "#c9d98a", entity: "#52666f",
 };
 
@@ -128,6 +129,7 @@ export function MemoryView() {
                  onKeyDown={(e) => e.key === "Enter" && search()} aria-label="Gedächtnis durchsuchen" />
           <Button size="sm" busy={act.busy === "search"} icon={<Search className="size-3.5" />} onClick={search} aria-label="Suchen" />
         </div>
+        <RulesPanel />
         {(pending.data?.items.length ?? 0) > 0 && (
           <Section title="Sensibel – wartet auf Bestätigung" className="m-3">
             <ul className="divide-y divide-seam">

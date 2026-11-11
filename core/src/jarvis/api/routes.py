@@ -29,6 +29,8 @@ from jarvis.db import session_scope
 from jarvis.db.models import Approval, AuditEntry, Call, ChatSession, CodingJob, Schedule, Task
 from jarvis.desktop_build import desktop_build_status
 from jarvis.events import bus, spawn
+from jarvis.jobs.agent_task import AgentTaskService
+from jarvis.jobs.task_status import phase as task_phase
 from jarvis.logging_setup import ring
 from jarvis.platform import get_adapter
 from jarvis.security.audit import audit, verify_chain
@@ -71,9 +73,7 @@ async def desktop_build(commit: str = Query(default="", max_length=40), p: Princ
 
 
 @router.get("/system/capabilities")
-async def system_capabilities(
-    refresh: bool = False, st: AppState = StateDep, p: Principal = Reader
-) -> dict[str, Any]:
+async def system_capabilities(refresh: bool = False, st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
     """What this Core host can do (capability flags with reasons), which tools are unavailable here and why,
     and the connected Jarvis Device Agents with their own capabilities."""
     adapter = get_adapter()
@@ -473,6 +473,8 @@ def _task_dict(t: Task) -> dict[str, Any]:
         "title": t.title,
         "kind": t.kind,
         "status": t.status,
+        "phase": task_phase(t.status),  # canonical: queued/running/waiting_for_user/retrying/blocked/…
+        "agent": AgentTaskService.view(t),  # goal, plan checklist, activity, counters (agent tasks only)
         "params": t.params,
         "error": t.error,
         "question": t.pending_question,
@@ -528,6 +530,38 @@ async def task_create(body: TaskCreate, st: AppState = StateDep, p: Principal = 
     return _task_dict(t)
 
 
+class AgentTaskCreate(BaseModel):
+    goal: str = Field(min_length=3, max_length=20000)
+    title: str = Field(default="", max_length=200)
+    channel: str = "mobile"
+    project_hints: list[str] = Field(default_factory=list, max_length=10)
+
+
+@router.post("/tasks/agent")
+async def task_create_agent(body: AgentTaskCreate, st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
+    """Start a persistent agent task: returns at once with the task id; the work continues on the server whatever
+    the client does (app closed, display locked, connection lost). Progress: GET /tasks/{id} or the task events."""
+    if not st.settings.agent.tasks.enabled:
+        raise HTTPException(409, "Agent-Aufgaben sind deaktiviert")
+    t = await st.agent_tasks.start(
+        body.goal,
+        p,
+        title=body.title,
+        channel=body.channel if body.channel in ("desktop", "mobile", "api") else "mobile",
+        project_hints=body.project_hints,
+    )
+    return _task_dict(t)
+
+
+@router.get("/tasks/{tid}/log")
+async def task_log(tid: str, st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    """Progress notes, tool ledger and last result of an agent task (the full conversation: its session timeline)."""
+    t = await st.tasks.get_task(_uuid(tid))
+    if t is None:
+        raise HTTPException(404, "not found")
+    return AgentTaskService.log(t)
+
+
 class TaskInput(BaseModel):
     values: dict[str, Any]
 
@@ -557,9 +591,7 @@ async def task_resume(tid: str, st: AppState = StateDep, p: Principal = Actor) -
 
 
 @router.post("/tasks/{tid}/message")
-async def task_message(
-    tid: str, body: AgentMessage, st: AppState = StateDep, p: Principal = Actor
-) -> dict[str, Any]:
+async def task_message(tid: str, body: AgentMessage, st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
     """Message to the agent working for this task: forwarded to its running coding job."""
     async with session_scope() as s:
         job_id = (
@@ -845,6 +877,135 @@ async def memory_delete(mid: str, st: AppState = StateDep, p: Principal = Owner)
         return await st.memory.forget(_uuid(mid), p.label)
     except LookupError as e:
         raise HTTPException(404, str(e)) from e
+
+
+# ------------------------------------------------------------------ behaviour rules (memory kind "rule")
+class RuleCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    text: str = Field(min_length=3, max_length=4000)
+    scope: Literal["global", "project"] = "global"
+    project: str = Field(default="", max_length=120)
+
+
+class RulePatch(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=200)
+    text: str | None = Field(default=None, min_length=3, max_length=4000)
+    scope: Literal["global", "project"] | None = None
+    project: str | None = Field(default=None, max_length=120)
+    active: bool | None = None
+
+
+@router.get("/memory/rules")
+async def memory_rules(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    """All behaviour rules (active, inactive, replaced) for the settings list; ``in_force`` marks what the agent
+    actually gets in its prompt."""
+    st.memory.rules.effective()  # refreshes the shadowed-by marks
+    rules = [r.public() for r in st.memory.rules.all()]
+    rules.sort(key=lambda r: (not r["in_force"], r["scope"] != "global", r["created_at"]))
+    return {
+        "rules": rules,
+        "in_force": sum(1 for r in rules if r["in_force"]),
+        "budget": st.settings.agent.rules_budget_chars,
+    }
+
+
+@router.post("/memory/rules")
+async def memory_rule_create(body: RuleCreate, st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    try:
+        res = await st.memory.save_rule(
+            body.title, body.text, scope=body.scope, project=body.project, actor=p.label, source={"type": "manual"}
+        )
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    await _reload_prompt(st)
+    return res
+
+
+@router.put("/memory/rules/{rid}")
+async def memory_rule_update(
+    rid: str, body: RulePatch, st: AppState = StateDep, p: Principal = Owner
+) -> dict[str, Any]:
+    try:
+        res = await st.memory.update_rule(
+            rid, p.label, title=body.title, text=body.text, scope=body.scope, project=body.project, active=body.active
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    await _reload_prompt(st)
+    return res
+
+
+@router.post("/memory/rules/migrate")
+async def memory_rules_migrate(dry_run: bool = False, st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    """Derive rules from old preference notes (idempotent; nothing is deleted)."""
+    res = await st.memory.migrate_rules(p.label, dry_run=dry_run)
+    if not dry_run:
+        await _reload_prompt(st)
+    return res
+
+
+async def _reload_prompt(st: AppState) -> None:
+    """A changed rule or prompt is effective on the next turn: processes with the old text restart via --resume."""
+    if st.agent is not None:
+        await st.agent.reload()
+
+
+# ------------------------------------------------------------------ editable system prompt
+class SystemPromptBody(BaseModel):
+    text: str = Field(min_length=1, max_length=20000)
+
+
+def _system_prompt_view(st: AppState) -> dict[str, Any]:
+    from jarvis.agent.persona import default_editable
+    from jarvis.agent.prompting import MAX_PROMPT_CHARS, editable_text
+
+    persona = st.personality
+    text, customized = editable_text(st.prompt_store, persona)
+    entry = st.prompt_store.get(persona.id)
+    parts = st.agent.prompt_parts() if st.agent is not None else None
+    return {
+        "persona": persona.id,
+        "persona_label": persona.display_name,
+        "text": text,
+        "default": default_editable(persona),
+        "customized": customized,
+        "updated_at": entry["updated_at"] if entry else None,
+        "max_chars": MAX_PROMPT_CHARS,
+        "core": parts.core if parts else "",
+        "rules": parts.rules if parts else "",
+        "rules_warnings": parts.warnings if parts else [],
+    }
+
+
+@router.get("/agent/system-prompt")
+async def system_prompt_get(st: AppState = StateDep, p: Principal = Reader) -> dict[str, Any]:
+    """Editable part of the active persona's system prompt (+ fixed core and loaded rules, read-only)."""
+    return _system_prompt_view(st)
+
+
+@router.put("/agent/system-prompt")
+async def system_prompt_set(body: SystemPromptBody, st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    from jarvis.agent.prompting import PromptError
+
+    try:
+        st.prompt_store.set(st.personality.id, body.text)
+    except PromptError as e:
+        raise HTTPException(422, str(e)) from e
+    await audit(p.label, "agent.system_prompt.set", details={"persona": st.personality.id, "chars": len(body.text)})
+    await _reload_prompt(st)
+    await bus.publish("prompt.changed", persona=st.personality.id)
+    return _system_prompt_view(st)
+
+
+@router.delete("/agent/system-prompt")
+async def system_prompt_reset(st: AppState = StateDep, p: Principal = Owner) -> dict[str, Any]:
+    st.prompt_store.reset(st.personality.id)
+    await audit(p.label, "agent.system_prompt.reset", details={"persona": st.personality.id})
+    await _reload_prompt(st)
+    await bus.publish("prompt.changed", persona=st.personality.id)
+    return _system_prompt_view(st)
 
 
 @router.post("/memory/pending/{mid}")
@@ -1418,9 +1579,7 @@ async def coding_resume(jid: str, st: AppState = StateDep, p: Principal = Actor)
 
 
 @router.post("/coding/jobs/{jid}/message")
-async def coding_message(
-    jid: str, body: AgentMessage, st: AppState = StateDep, p: Principal = Actor
-) -> dict[str, Any]:
+async def coding_message(jid: str, body: AgentMessage, st: AppState = StateDep, p: Principal = Actor) -> dict[str, Any]:
     try:
         return await st.coding.send_message(_uuid(jid), body.text, p.label, body.immediate)
     except CodingError as e:

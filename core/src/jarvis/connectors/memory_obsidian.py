@@ -57,6 +57,8 @@ class ObsidianMemoryConnector(Connector):
                 sensitive=a.get("sensitive"),
                 source={"type": "agent", "session_id": str(ctx.session_id or "")},
                 actor=ctx.principal.label,
+                scope=a.get("scope", "global"),
+                project=a.get("project", ""),
             )
 
         async def get(ctx: ToolContext, a: dict[str, Any]) -> Any:
@@ -72,6 +74,16 @@ class ObsidianMemoryConnector(Connector):
 
         async def forget(ctx: ToolContext, a: dict[str, Any]) -> Any:
             return await mem.forget(_uuid(a["id"]), ctx.principal.label)
+
+        async def rules_list(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            rules = mem.rules.all() if a.get("include_inactive") else mem.rules.effective()
+            return {"rules": [r.public() for r in rules]}
+
+        async def rule_set_active(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            try:
+                return await mem.update_rule(a["id"], ctx.principal.label, active=bool(a["active"]))
+            except LookupError as e:
+                raise ToolUserError(str(e)) from e
 
         def p(props: dict[str, Any], req: list[str]) -> dict[str, Any]:
             return {"type": "object", "properties": props, "required": req, "additionalProperties": False}
@@ -96,7 +108,12 @@ class ObsidianMemoryConnector(Connector):
             ToolSpec(
                 "memory_save",
                 "Speichert dauerhaft relevantes Wissen im Gedächtnis (Duplikate werden "
-                "erkannt und zusammengeführt). Sensible Daten warten auf Sirs Bestätigung.",
+                "erkannt und zusammengeführt). Sensible Daten warten auf Sirs Bestätigung. "
+                'Gibt Sir eine Anweisung, die dauerhaft gelten soll ("immer …", "ab sofort …", "nie wieder …"), '
+                'speicherst du sie mit kind="rule" (kurzer Titel, content = die Regel als Anweisung): Verhaltensregeln '
+                'werden bei jedem Lauf fest geladen, normale Erinnerungen nur bei einem Suchtreffer. scope="project" '
+                "+ project nur, wenn die Regel ausdrücklich nur für ein Projekt gilt. Widerspricht sie einer "
+                "vorhandenen Regel (memory_rules_list), ersetze diese mit memory_correct statt eine zweite anzulegen.",
                 p(
                     {
                         "title": {"type": "string", "minLength": 2, "maxLength": 200},
@@ -104,6 +121,8 @@ class ObsidianMemoryConnector(Connector):
                         "kind": {"type": "string", "enum": KINDS},
                         "entities": {"type": "array", "items": {"type": "string"}},
                         "sensitive": {"type": "boolean"},
+                        "scope": {"type": "string", "enum": ["global", "project"]},
+                        "project": {"type": "string", "maxLength": 120},
                     },
                     ["title", "content"],
                 ),
@@ -137,6 +156,25 @@ class ObsidianMemoryConnector(Connector):
                 "obsidian",
                 writes=True,
                 summarize=lambda a: f"Gedächtnis korrigieren ({a['id'][:8]})",
+            ),
+            ToolSpec(
+                "memory_rules_list",
+                "Listet Sirs dauerhafte Verhaltensregeln (gelten bei jedem Lauf). Mit include_inactive auch "
+                "deaktivierte und ersetzte.",
+                p({"include_inactive": {"type": "boolean"}}, []),
+                rules_list,
+                "read",
+                "obsidian",
+            ),
+            ToolSpec(
+                "memory_rule_set_active",
+                "Schaltet eine Verhaltensregel ab oder wieder an (ohne sie zu löschen).",
+                p({"id": {"type": "string"}, "active": {"type": "boolean"}}, ["id", "active"]),
+                rule_set_active,
+                "low",
+                "obsidian",
+                writes=True,
+                summarize=lambda a: f"Regel {a['id'][:8]} {'aktivieren' if a['active'] else 'deaktivieren'}",
             ),
             ToolSpec(
                 "memory_forget",

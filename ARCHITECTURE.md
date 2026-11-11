@@ -100,6 +100,7 @@ Modell muss nur die Parameter extrahieren (ein Tool-Call `task_start_playbook`).
 - persistiert Aufgabe und Schritte, Worker claimen mit Lease (`FOR UPDATE SKIP LOCKED`) → Wiederaufnahme nach Absturz/Neustart
 - erzeugt deterministische Idempotenzschlüssel pro Schritt und Aufrufposition → keine doppelten Lexware-Kontakte/Rechnungen
 - pausiert für Freigaben (`waiting_approval`), fehlende Angaben (`waiting_input`) und externe Ereignisse (`waiting_external`, z. B. Coding-Job fertig)
+- Agent-Aufgaben (`agent_task`): der Agent selbst läuft als Task (Plan → Ausführen → Prüfen → Fortsetzen, Checkpoints in `Task.context`, Status zusätzlich `retrying`/`blocked`); Verhaltensregeln (`kind: rule`) und editierbarer System-Prompt: siehe `docs/adr/0001-persistente-agent-aufgaben-und-verhaltensregeln.md`
 - überspringt nicht eingerichtete Connectoren nachvollziehbar (Schritt `skipped` + Hinweis)
 
 Beispiel `new_customer_project` („Müller Gebäudereinigung, Website, 499 €“): Kunde prüfen → Pflichtangaben → Kunde anlegen (Freigabe)
