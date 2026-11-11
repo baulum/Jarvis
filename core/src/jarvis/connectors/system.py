@@ -245,6 +245,9 @@ class SystemConnector(Connector):
                 "oder einen Effort nennt („mach das auf medium“, „es soll Sonnet sein“): Das betrifft den Job, nicht "
                 "den Chat – dann `coding_cancel_job` und `coding_start_job` mit model/effort. "
                 "model: haiku (schnell/günstig), sonnet (Standard), opus (stärkste Denkleistung) oder auto. "
+                "Bei unklarer Modellangabe (nur „5.5“, andere Version als 5.5, unbekanntes Wort) nicht raten, "
+                "erst bei Sir nachfragen; die erkannte Angabe vorher kurz zurückspiegeln "
+                "(„Erkannt: Haiku 5.5 (claude-haiku-5-5)“). "
                 "scope: turn = nur nächste Antwort, session = dieses Gespräch (Standard), default = dauerhaft.",
                 _obj(
                     {

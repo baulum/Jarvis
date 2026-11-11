@@ -217,7 +217,9 @@ class CodingConnector(Connector):
                 "Job mit anderem Modell/Effort, erst `coding_cancel_job`, dann hier neu starten (model/effort wie "
                 "genannt, nicht genannte Werte vom bisherigen Job übernehmen) und in der Antwort ausdrücklich "
                 "nennen, mit welchem Modell und Effort gestartet wurde. 'Sonnet'/'Opus'/'Haiku' ohne Zahl = "
-                "aktuelle Version 5.5; '5.5' ohne Familie = Familie des bisherigen Jobs. "
+                "aktuelle Version 5.5. Nennt Sir nur '5.5' ohne Familie, eine andere Version (z. B. 'Haiku 4.5') oder "
+                "sonst eine unklare Modellangabe, rate nicht: erst bei Sir nachfragen, dann starten. Spiegle das "
+                "erkannte Modell vorher kurz zurück ('Erkannt: Haiku 5.5 (claude-haiku-5-5)'). "
                 "Mit attachments gibt Jarvis Dateien aus dem Chat (Fotos, Screenshots, PDFs, Dokumente) an "
                 "den Job weiter; sie werden kopiert und in den Anweisungen mit Pfad genannt.",
                 _obj(
