@@ -59,7 +59,7 @@ def test_operating_rules_cover_coding_model_effort() -> None:
     assert "niemals für dein Chat-Modell" in rules
     assert "`coding_cancel_job`" in rules and "`coding_start_job`" in rules
     assert "bisherigen Wert des Jobs" in rules
-    assert "ohne Zahl" in rules and "Familie des bisherigen Jobs" in rules
+    assert "ohne Zahl" in rules and "rätst du nicht" in rules and "Erkannt: Haiku" in rules
     assert "mit welchem Modell und Effort gestartet" in rules
 
 

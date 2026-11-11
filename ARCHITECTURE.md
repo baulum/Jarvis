@@ -232,6 +232,28 @@ Begrüßung vor → verschlüsselter FCM-Push `call` → Telefon: Core-Telecom `
 Auto) → Annehmen → `/answer` liefert das Raum-Token → natives LiveKit über `wss://gateway/rtc` → Gespräch. Kein
 Annehmen in 45 s → `missed` + Benachrichtigung. Sir → Jarvis: `/api/mobile/calls` nur wenn `availability` es erlaubt.
 
+### Modellerkennung im Chat
+
+Code: `core/src/jarvis/agent/model_names.py` (Erkennung), `model_router.py` (`parse_command`, `model_hint`,
+`resolve_alias`); Aufruf in `Orchestrator._model_for_turn`. Der Chat-Text kommt unverändert im Core an (Desktop,
+Handy, Sprache) – erkannt wird erst dort.
+- **Schreibweisen:** Haiku, Sonnet, Opus (Groß-/Kleinschreibung egal, auch „Sonett“/„Hayku“), buchstabiert mit
+  Punkten, Leerzeichen, Binde-/Unterstrichen (`h.a.i.k.u`, `h a i k u`, `h-a-i-k-u`).
+- **Version:** direkt hinter (oder bei Dezimalzahl direkt vor) dem Namen: `5.5`, `5,5`, `5-5`, `5 komma 5`,
+  `fünf komma fünf`, `fünf punkt fünf`. Ohne Zahl gilt die aktuelle Version 5.5.
+- **Canonical-IDs:** haiku → `claude-haiku-5-5`, sonnet → `claude-sonnet-5-5`, opus → `claude-opus-5-5`
+  (`MODELS` im Router; keine weiteren IDs).
+- **Rückfrageregel:** Nur „5.5“ (mit Schaltverb/„Modell“, aber ohne Familie), eine andere Version als 5.5
+  („Haiku 4.5“) oder eine unbekannte Angabe wählt nie ein Modell. Bei Schaltbefehlen fragt der Core selbst zurück
+  (`SwitchCommand.clarify`, es wird nichts umgeschaltet); bei Coding-Aufträgen erhält der Agent per `model_hint`
+  die bereinigte Angabe samt „nicht raten, nachfragen“. `resolve_alias` (Coding-Runner, Tool-Argumente) liefert für
+  Unklares `None` und der Runner bricht mit einer Rückfrage-Meldung ab.
+- **Spiegeln:** Jede erkannte Angabe wird zurückgemeldet („Erkannt: Haiku 5.5 (claude-haiku-5-5)“).
+- **Chat vs. Job:** Steht „Coding“/„Job“/„Auftrag“ im Satz, schaltet `parse_command` das Chat-Modell nie
+  selbst um; das Modell gehört dann an `coding_start_job`. Das Chat-Modell ändert nur `agent_set_model`.
+- **Kein Treffer ohne Kontext:** „Haiku-Gedichte“, „Sonett von Shakespeare“, „Unterschied zwischen Opus und
+  Sonnet“ lösen nichts aus – ein Schaltverb bzw. „Modell/auf/mit“ ist nötig.
+
 ## Erweiterbarkeit
 
 - **Weitere LLM-Provider:** `agent.provider` (Claude Code oder Hermes); Adapter in `agent/claude_agent.py` bzw. `agent/llm.py`.

@@ -15,6 +15,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from jarvis.agent.model_names import (
+    FAMILY_PATTERN,
+    KNOWN_VERSION,
+    VERSION_PATTERN,
+    adjacent_version,
+    family_of,
+    find_mentions,
+    parse_spec,
+    version_of,
+)
+
 if TYPE_CHECKING:
     from jarvis.agent.usage import UsageTracker
 
@@ -34,17 +45,18 @@ EFFORTS: dict[str, str] = {
     "max": "Maximal",
 }
 
-_MODEL_WORD = r"(opus|sonnet|sonett|haiku|hayku)"
+_MODEL_WORD = FAMILY_PATTERN  # also "h.a.i.k.u", "h a i k u", "h-a-i-k-u"
 _VERB = (
     r"(?:nimm|nehm\w*|nutz\w*|benutz\w*|verwend\w*|wechs\w*|schalt\w*|stell\w*|geh\w*|wähl\w*|switch\w*|"
     r"use|take|ich (?:will|möchte|brauche)|soll\w*)"
 )
 _SWITCH_RE = re.compile(
     # "nimm Opus", "nutze bitte Haiku", "stell auf Sonnet um"
-    r"(?:\b" + _VERB + r"\b[^.?!]{0,30}?\b" + _MODEL_WORD + r"\b"
+    r"(?:\b" + _VERB + r"\b(?:[^.?!]|(?<=\d)\.(?=\d)){0,30}?\b" + _MODEL_WORD + r"\b"
     # "Haiku nutzen", "auf Opus wechseln"
-    r"|\b" + _MODEL_WORD + r"\b[^.?!]{0,20}?\b(?:nutz\w*|benutz\w*|verwend\w*|nehmen|wechseln|umschalten|"
-    r"umstellen|aktivier\w*)\b"
+    # (the gap may contain a version such as "5.5", hence the digit-dot-digit exception)
+    r"|\b" + _MODEL_WORD + r"\b(?:[^.?!]|(?<=\d)\.(?=\d)){0,20}?\b(?:nutz\w*|benutz\w*|verwend\w*|nehmen|wechseln|"
+    r"umschalten|umstellen|aktivier\w*)\b"
     # "Claude Opus", "Modell Haiku", "auf Sonnet", "Opus-Modus"
     r"|\b(?:nur diesmal|einmalig|nur (?:für )?(?:diese|die nächste) \w+|just this once)\W+" + _MODEL_WORD
     + r"|\b(?:claude|modell|model|auf|mit)\s+" + _MODEL_WORD + r"\b"
@@ -71,24 +83,22 @@ _COMPLEX_RE = re.compile(
 
 
 def normalize(word: str) -> str | None:
-    w = word.lower()
-    if w.startswith("opus"):
-        return "opus"
-    if w.startswith(("sonnet", "sonett")):
-        return "sonnet"
-    if w.startswith(("haiku", "hayku")):
-        return "haiku"
-    return None
+    """Family alias for one spelling ("Opus", "sonett", "h.a.i.k.u"); None if it is no model family."""
+    return family_of(word)
 
 
 def resolve_alias(value: str | None) -> str | None:
-    """haiku|sonnet|opus or a full model id (``claude-opus-5-5``) → alias; None for empty/``auto``/unknown."""
+    """haiku|sonnet|opus (also spelled out or with version 5.5: ``h.a.i.k.u 5,5``) or a full model id
+    (``claude-opus-5-5``) → alias; None for empty/``auto``/unknown – an unknown version is never rounded to 5.5."""
     if not value:
         return None
     v = value.strip().lower()
     for alias, m in MODELS.items():
         if v == alias or v == m["id"]:
             return alias
+    mention = parse_spec(value)
+    if mention is not None and mention.version_known:
+        return mention.family
     return None
 
 
@@ -96,11 +106,47 @@ def model_id(alias: str) -> str:
     return MODELS[alias]["id"]
 
 
+def describe(alias: str) -> str:
+    """"Haiku 5.5 (claude-haiku-5-5)" – how a recognised model is mirrored back to Sir."""
+    return f"{MODELS[alias]['label']} ({MODELS[alias]['id']})"
+
+
+def unclear_model_note(value: str) -> str:
+    """Why a model statement could not be mapped – for error messages: never guess, ask Sir."""
+    mention = parse_spec(value)
+    if mention is not None and not mention.version_known:
+        return (
+            f"Version {mention.version} von {MODELS[mention.family]['label'].split()[0]} ist unbekannt "
+            f"(bekannt ist nur {KNOWN_VERSION}) – nicht raten, Sir nachfragen"
+        )
+    return "Modellangabe nicht eindeutig (z. B. nur eine Versionszahl) – nicht raten, Sir nachfragen"
+
+
 @dataclass(slots=True)
 class SwitchCommand:
     model: str | None  # None = back to automatic selection
     scope: Scope
     remainder: str  # the rest of the utterance that still needs an answer ("" = pure command)
+    clarify: str | None = None  # set = the model statement is unclear: ask Sir this, switch nothing
+
+
+# "nimm 5.5", "Modell 5.5", "stell auf Version fünf punkt fünf" – a version with a switching verb but no family
+_BARE_VERSION_RE = re.compile(
+    r"(?:\b" + _VERB + r"\b(?:\s+(?:bitte|doch|mal|jetzt|ab sofort|auf|das|die|den|dem|neue\w*|version|modell|model))"
+    r"{0,4}"
+    r"|\b(?:modell|model)\s*(?:auf|:)?)\s*(" + VERSION_PATTERN + ")",
+    re.IGNORECASE,
+)
+# a model named together with a coding job belongs to the job (coding_start_job), not to the chat model
+_JOB_CONTEXT_RE = re.compile(r"\b(coding|codier\w*|jobs?|auftrag\w*|aufträge)\b", re.IGNORECASE)
+
+
+def _unknown_version_question(family: str, version: str) -> str:
+    label = MODELS[family]["label"]
+    return (
+        f"„{label.split()[0]} {version}“ kenne ich nicht, Sir – verfügbar ist nur Version {KNOWN_VERSION}. "
+        f"Ich schalte nichts um. Soll es {label} sein?"
+    )
 
 
 def parse_command(text: str) -> SwitchCommand | None:
@@ -109,14 +155,61 @@ def parse_command(text: str) -> SwitchCommand | None:
         return SwitchCommand(None, "default" if _DEFAULT_RE.search(text) else "session", _clean(rest))
     m = _SWITCH_RE.search(text)
     if not m:
+        bare = _BARE_VERSION_RE.search(text)
+        if bare and not _JOB_CONTEXT_RE.search(text):
+            version = version_of(bare.group(1)) or bare.group(1)
+            return SwitchCommand(
+                None,
+                "session",
+                "",
+                clarify=(
+                    f"Verstanden habe ich nur die Version „{version}“, Sir, nicht das Modell. Haiku, Sonnet oder "
+                    "Opus? Ich schalte nichts um, bis das Modell feststeht."
+                ),
+            )
         return None
-    model = normalize(next(g for g in m.groups() if g))
+    if _JOB_CONTEXT_RE.search(text):
+        return None  # "Opus für den Coding-Job": belongs to coding_start_job, never to the chat model
+    group = next(i for i, g in enumerate(m.groups(), 1) if g)
+    model = normalize(m.group(group))
     if model is None:
         return None
+    version, start, end = adjacent_version(text, m.start(group), m.end(group))
+    start, end = min(start, m.start()), max(end, m.end())
     scope: Scope = "turn" if _TURN_RE.search(text) else "default" if _DEFAULT_RE.search(text) else "session"
-    rest = text[: m.start()] + text[m.end() :]
+    if version is not None and version != KNOWN_VERSION:
+        return SwitchCommand(None, scope, "", clarify=_unknown_version_question(model, version))
+    rest = text[:start] + text[end:]
     rest = _TURN_RE.sub("", _DEFAULT_RE.sub("", rest))
     return SwitchCommand(model, scope, _clean(rest))
+
+
+def model_hint(text: str) -> str:
+    """Note for the agent about model names in Sir's message (cleaned spelling, canonical id, ask-don't-guess rule).
+    Empty when nothing model-like (with version or spelled out) is in the text – plain "Haiku-Gedichte" stays quiet."""
+    lines: list[str] = []
+    for mention in find_mentions(text):
+        decimal = mention.version is not None and "." in mention.version
+        if not (mention.spelled_out or decimal):
+            continue
+        name = MODELS[mention.family]["label"].split()[0]
+        if mention.version_known:
+            lines.append(f"„{name}“ → {describe(mention.family)}")
+        else:
+            lines.append(f"„{name} {mention.version}“ → unbekannte Version (nur {KNOWN_VERSION} existiert)")
+    bare = _BARE_VERSION_RE.search(text)
+    if bare and not find_mentions(text):
+        lines.append(f"nur die Version „{version_of(bare.group(1)) or bare.group(1)}“ ohne Modellfamilie")
+    if not lines:
+        return ""
+    return (
+        "Modellangaben in Sirs Nachricht (Schreibweise bereinigt): "
+        + "; ".join(lines)
+        + ". Verwende genau das Modell, das Sir nennt. Bei Coding-Aufträgen gehört es als `model` an den Job "
+        "(`coding_start_job`); das Chat-Modell änderst du nur mit `agent_set_model`, wenn Sir ausdrücklich den Chat "
+        "meint. Spiegle die erkannte Angabe vorher kurz zurück („Erkannt: Haiku 5.5 (claude-haiku-5-5)“). Ist die "
+        "Angabe unklar (nur eine Zahl, unbekannte Version), rate nicht, sondern frage nach."
+    )
 
 
 def _clean(rest: str) -> str:

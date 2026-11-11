@@ -34,7 +34,7 @@ from urllib.parse import quote
 
 from sqlalchemy import select
 
-from jarvis.agent.model_router import EFFORTS, model_id, resolve_alias
+from jarvis.agent.model_router import EFFORTS, model_id, resolve_alias, unclear_model_note
 from jarvis.coding import self_restart
 from jarvis.coding.monitor import build_monitor, compact_events
 from jarvis.config import CUSTOMER_SITES_DIR, REPO_ROOT
@@ -445,7 +445,10 @@ class CodingRunner:
         if requested and requested.strip().lower() != "auto":
             alias = resolve_alias(requested)
             if alias is None:
-                raise CodingError(f"Unbekanntes Modell '{requested}' (erlaubt: haiku, sonnet, opus, auto)")
+                raise CodingError(
+                    f"Unbekanntes Modell '{requested}' (erlaubt: haiku, sonnet, opus, auto): "
+                    f"{unclear_model_note(requested)}"
+                )
             return model_id(alias)
         configured = getattr(self.cfg, "default_model", "") or ""
         alias = resolve_alias(configured)

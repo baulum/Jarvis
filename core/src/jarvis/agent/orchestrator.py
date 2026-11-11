@@ -25,7 +25,7 @@ from sqlalchemy import select
 from jarvis.agent.attachments import AttachmentInfo, build_agent_input, summary_line
 from jarvis.agent.claude_agent import ClaudeUnavailable
 from jarvis.agent.llm import AgentEvent, HermesError
-from jarvis.agent.model_router import MODELS, parse_command
+from jarvis.agent.model_router import MODELS, describe, model_hint, parse_command
 from jarvis.agent.persona import error_phrase, turn_instructions
 from jarvis.agent.timeline import (
     DbTimelineStore,
@@ -285,7 +285,7 @@ class Orchestrator:
                 channel,
                 memory_context=memory_context,
                 tainted=sess.tainted,
-                call_context=call_context,
+                call_context="\n\n".join(p for p in (call_context, model_hint(agent_text)) if p),
                 confirm_example=getattr(persona, "confirm_example", None) or "Sehr wohl, Sir. Ich kümmere mich darum.",
             )
             t_agent = time.perf_counter()
@@ -475,6 +475,8 @@ class Orchestrator:
         router = self.state.model_router
         cmd = parse_command(text)
         turn_model: str | None = None
+        if cmd is not None and cmd.clarify:  # unclear model statement: ask, switch nothing, don't guess
+            return ("sonnet", "Modellangabe unklar", cmd.clarify, text)
         if cmd is not None:
             if cmd.scope == "turn":
                 turn_model = cmd.model
@@ -499,7 +501,8 @@ class Orchestrator:
                 }[cmd.scope]
                 if cmd.scope == "turn" and cmd.model:
                     router.next_turn[str(sess.id)] = cmd.model  # a bare "only once" means: the next answer
-                return (cmd.model or "sonnet", "Befehl", f"Sehr wohl, Sir – {label} {where}.", text)
+                seen = f"Erkannt: {describe(cmd.model)}" if cmd.model else f"Erkannt: {label}"
+                return (cmd.model or "sonnet", "Befehl", f"Sehr wohl, Sir – {seen}, {where}.", text)
             text = cmd.remainder
         model, reason = router.choose(text, channel, str(sess.id), turn_model)
         return model, reason, None, text

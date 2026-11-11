@@ -3,6 +3,20 @@
 > Wiedereinstiegspunkt für neue Sessions. Nach jeder größeren Änderung aktualisieren.
 > Doku: ARCHITECTURE.md (Aufbau), SETUP.md (Installation/Betrieb), SECURITY.md (Sicherheitsmodell).
 
+## Stand: 2026-11-11 – Modellnamen im Chat zuverlässig erkannt
+
+Beschreibung: ARCHITECTURE.md „Modellerkennung im Chat“.
+- **Ursache:** Desktop (`desktop/src/lib/api.ts:210`) und Orchestrator reichen den Text unverändert weiter; es gab
+  aber keine Modellerkennung für buchstabierte Namen oder Versionen. `_MODEL_WORD` in `model_router.py` kannte nur
+  `opus|sonnet|sonett|haiku|hayku` am Stück, die Versionszahl wurde nirgends geparst, und die Lücke füllte allein
+  das LLM (Persona-Regel „‚5.5‘ ohne Familie = Familie des bisherigen Jobs“ riet still; Tool-Enum nur ohne Version).
+  `h.a.i.k.u` und `Haiku 5.5` ohne Schaltverb trafen keine Regel.
+- **Behoben:** neues `agent/model_names.py` (Schreibweisen, Versionen), `parse_command` mit Version/Rückfrage,
+  `model_hint` für den Agenten, Spiegelung „Erkannt: … (claude-…)“, kein stilles Raten mehr (Persona-Regel und
+  Tool-Beschreibungen angepasst), Coding-Kontext schaltet das Chat-Modell nie um.
+- **Tests:** `core/tests/unit/test_model_names.py` (Schreibweisen, Rückfrage, Regression „Haiku-Gedichte“).
+- **Offen:** Kommt der Text schon vor dem Core verstümmelt an (macOS-Diktat), liegt das außerhalb dieses Repos.
+
 ## Stand: 2026-10-28 – Social Media: tägliches PJE-Systems-Video
 
 Beschreibung, APIs und Technikwahl: docs/SOCIAL_MEDIA.md.
