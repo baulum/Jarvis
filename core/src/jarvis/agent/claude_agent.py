@@ -66,9 +66,12 @@ class _ProcessEnded(ClaudeUnavailable):
     """stdout of the CLI closed (the process ended) while Jarvis was waiting for it."""
 
 
-def claude_env() -> dict[str, str]:
+def claude_env(mcp_tool_timeout_s: float | None = None) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k not in _STRIP_ENV and not k.startswith("JARVIS_SECRET")}
     env["PATH"] = os.pathsep.join([env.get("PATH", ""), "/opt/homebrew/bin", "/usr/local/bin"])
+    if mcp_tool_timeout_s:
+        # Request timeout of the CLI's MCP client (SDK default: 60 s) – long tools like chrome_task need more.
+        env["MCP_TOOL_TIMEOUT"] = str(int(mcp_tool_timeout_s * 1000))
     return env
 
 
@@ -257,7 +260,7 @@ class ClaudeCodeAgent:
         proc = await asyncio.create_subprocess_exec(
             *argv,
             cwd=self.home,
-            env=claude_env(),
+            env=claude_env(self.cfg.turn_timeout_s),  # no tool may outlast the turn
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -751,7 +754,7 @@ class ClaudeOneShot:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
                 cwd=self.home,
-                env=claude_env(),
+                env=claude_env(timeout_s + 60),
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
