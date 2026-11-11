@@ -139,3 +139,69 @@ async def test_fresh_call_without_agent_still_counts(tmp_path: Path, monkeypatch
     tools = {t.name: t for t in mobile_tools(SimpleNamespace(calls=svc))}  # type: ignore[arg-type]
     with pytest.raises(ToolUserError, match="es läuft bereits ein Anruf"):
         await tools["mobile_call_owner"].handler(CTX, {"message": "Hallo Sir"})
+
+
+# ---------------------------------------------------------------------------------------- Anrufstil beim Klingeln
+def _capture_agent(svc: CallService, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    greetings: list[str] = []
+
+    def fake_agent(call_id: uuid.UUID, room: str, greeting: str, join_timeout: float) -> FakeAgent:
+        greetings.append(greeting)
+        agent = FakeAgent()
+        svc.agents[call_id] = agent  # type: ignore[assignment]
+        return agent
+
+    monkeypatch.setattr(svc, "_start_agent", fake_agent)
+    return greetings
+
+
+TECHNICAL = "Job 1963367e ist fertig. Commit a3f9c21 liegt in /srv/app/main.py. Mehr gibt es nicht. Auch sonst nichts."
+
+
+async def test_call_greeting_and_ring_subject_are_speakable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    svc, push = service(tmp_path, monkeypatch, targets=["dev-1"])
+    greetings = _capture_agent(svc, monkeypatch)
+    res = await svc.ring_owner(message=TECHNICAL, reason="agent", explicit=True)
+    _cancel_timers(svc)
+    spoken = greetings[0]
+    for token in ("1963367e", "a3f9c21", "/srv", "main.py"):
+        assert token not in spoken
+    assert "Der Auftrag ist fertig" in spoken
+    assert spoken.count(".") <= 4  # greeting + at most three sentences
+    subject = push.sent[0][1]["subject"]
+    assert subject.startswith("Der Auftrag ist fertig") and "1963367e" not in subject
+    # no location service in this state: honest "unknown" with a note for the agent's answer, nothing technical
+    assert res["motion"] == "unknown" and "weißt du nicht" in res["motion_note"]
+
+
+async def test_call_on_the_move_is_announced_in_one_sentence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import UTC
+
+    from jarvis.mobile.location import LocationStore
+
+    svc, push = service(tmp_path, monkeypatch, targets=["dev-1"])
+    greetings = _capture_agent(svc, monkeypatch)
+    loc = LocationStore(push)  # type: ignore[arg-type]
+    dev = uuid.uuid4()
+    loc.update(dev, 52.52, 13.405, 10, datetime.now(UTC) - timedelta(minutes=4))
+    loc.update(dev, 52.52 + 2000 / 111_195, 13.405, 10, datetime.now(UTC) - timedelta(seconds=5))
+    svc.state.location = loc  # type: ignore[attr-defined]
+    res = await svc.ring_owner(message=TECHNICAL, reason="agent", explicit=True)
+    _cancel_timers(svc)
+    assert res["motion"] == "yes" and "motion_note" not in res
+    assert greetings[0].endswith("Der Auftrag ist fertig.") and "Mehr gibt es nicht" not in greetings[0]
+    assert svc.agents[uuid.UUID(res["call_id"])].motion.value == "yes"  # type: ignore[attr-defined]
+
+
+async def test_local_device_test_call_skips_the_movement_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    svc, push = service(tmp_path, monkeypatch, targets=[])
+    _capture_agent(svc, monkeypatch)
+
+    class Boom:
+        def latest(self) -> None:
+            raise AssertionError("must not be asked")
+
+    svc.state.location = Boom()  # type: ignore[attr-defined]
+    res = await svc.ring_owner(message="Test", reason="test", skip_push=True)
+    _cancel_timers(svc)
+    assert res["push"].startswith("skipped") and not push.sent

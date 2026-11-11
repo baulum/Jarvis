@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from jarvis.mobile.motion import MAX_FIX_AGE_MIN, MIN_FIX_GAP_S, Motion, Sample, detect_motion
 from jarvis.routing.providers import NominatimReverser, RoutingError, TTLCache
 
 if TYPE_CHECKING:
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 # httpx logs full request URLs at INFO; the Nominatim URL contains the coordinates, which must never be logged.
 logging.getLogger("httpx").setLevel(logging.WARNING)
-STALE_AFTER_MIN = 10
+STALE_AFTER_MIN = MAX_FIX_AGE_MIN  # one limit for "stale" everywhere (tool note, movement check)
 FRESH_ENOUGH_S = 120  # younger fixes are used as they are, older ones trigger a request to the phone
 REQUEST_WAIT_S = 12.0
 MAX_CLOCK_SKEW = timedelta(minutes=5)
@@ -52,6 +53,9 @@ class LocationFix:
     def age_minutes(self, now: datetime | None = None) -> float:
         return max(0.0, ((now or datetime.now(UTC)) - self.measured_at).total_seconds() / 60)
 
+    def sample(self) -> Sample:
+        return Sample(self.latitude, self.longitude, self.measured_at, self.accuracy_m)
+
 
 class LocationStore:
     def __init__(self, push: PushService, transport: httpx.AsyncBaseTransport | None = None) -> None:
@@ -60,11 +64,23 @@ class LocationStore:
         self._client: httpx.AsyncClient | None = None
         self._reverse: NominatimReverser | None = None
         self._fix: LocationFix | None = None
+        # The fix before ``_fix`` (at least MIN_FIX_GAP_S older): only for the movement check, in memory like the
+        # fix itself – gone with a restart, with "sharing off" and never written anywhere.
+        self._previous: LocationFix | None = None
         self._sharing_off = False  # the phone said "sharing off" since the last fix (until restart)
         self._changed = asyncio.Event()
 
     def latest(self) -> LocationFix | None:
         return self._fix
+
+    def motion(self, now: datetime | None = None) -> Motion:
+        """Is Sir moving? From the last two fixes in memory; ``unknown`` whenever they do not support an answer
+        (see ``jarvis.mobile.motion``). Asks nobody, calls no service, logs nothing."""
+        fix, prev = self._fix, self._previous
+        if fix is None:
+            return Motion.UNKNOWN
+        usable_prev = prev.sample() if prev is not None and prev.device_id == fix.device_id else None
+        return detect_motion(usable_prev, fix.sample(), now)
 
     def update(
         self, device_id: uuid.UUID, latitude: float, longitude: float, accuracy_m: float | None, measured_at: datetime
@@ -76,6 +92,8 @@ class LocationStore:
         measured_at = min(measured_at, now)
         if self._fix is not None and measured_at < self._fix.measured_at:
             return False
+        if self._fix is not None and (measured_at - self._fix.measured_at).total_seconds() >= MIN_FIX_GAP_S:
+            self._previous = self._fix  # a fix just seconds apart would only hold GPS noise
         self._fix = LocationFix(latitude, longitude, accuracy_m, measured_at, device_id)
         self._sharing_off = False
         self._changed.set()
@@ -86,6 +104,7 @@ class LocationStore:
         """Sir switched sharing off on this phone (or unpaired it): forget its fix."""
         if self._fix is not None and self._fix.device_id == device_id:
             self._fix = None
+            self._previous = None
         self._sharing_off = self._sharing_off or sharing_off
 
     async def request_fresh(self, timeout_s: float = REQUEST_WAIT_S) -> bool:

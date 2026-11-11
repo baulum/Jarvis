@@ -30,6 +30,8 @@ from jarvis.db.models import CallSession, CodingJob, Task
 from jarvis.events import Event, bus, spawn
 from jarvis.mobile.alerts import Alert
 from jarvis.mobile.call_context import build_call_context
+from jarvis.mobile.call_style import FALLBACK_SUBJECT, MotionCheck, max_sentences_for, motion_before_call, speakable
+from jarvis.mobile.motion import Motion
 from jarvis.mobile.voice_agent import CallVoiceAgent
 from jarvis.security.audit import audit
 from jarvis.security.auth import Principal
@@ -207,6 +209,12 @@ class CallService:
         blocker = None if skip_push else await self.call_blocker(event_key, explicit=explicit)
         if blocker:
             raise RuntimeError(blocker)
+        # Anrufstil rule 3: look at the phone's location before ringing (not for the local device test)
+        check = (
+            MotionCheck(Motion.UNKNOWN)
+            if skip_push
+            else await motion_before_call(getattr(self.state, "location", None))
+        )
         call_id = uuid.uuid4()
         room = f"jarvis-{call_id.hex[:12]}"
         call_context = build_call_context(
@@ -232,8 +240,15 @@ class CallService:
                     context=call_context,
                 )
             )
-        greeting = call_opening(self.state.personality, message)  # said once, a greeting in the message is not doubled
-        self._start_agent(call_id, room, greeting, join_timeout=self.cfg.ring_timeout_s + 30)
+        # What Sir hears on pick-up follows the call style: nothing technical, 1-3 sentences (1 on the move)
+        spoken = speakable(message, max_sentences_for(check.motion))
+        greeting = call_opening(self.state.personality, spoken)  # said once, a greeting in the message is not doubled
+        agent = self._start_agent(call_id, room, greeting, join_timeout=self.cfg.ring_timeout_s + 30)
+        if agent is not None:
+            agent.motion = check.motion
+        extra: dict[str, Any] = {"motion": check.motion.value}
+        if check.note:
+            extra["motion_note"] = check.note
         if skip_push:
             self._ring_timers[call_id] = spawn(self._ring_timeout(call_id), name=f"ring-{call_id}")
             await bus.publish("call.ringing", call_id=str(call_id), direction="to_owner", message=message[:300])
@@ -243,7 +258,7 @@ class CallService:
             {
                 "call_id": str(call_id),
                 "caller": "Jarvis",  # read aloud by car/Bluetooth head units: no dotted acronym
-                "subject": message[:140],
+                "subject": speakable(message, 1)[:140] or FALLBACK_SUBJECT,  # head units read it aloud
                 "ring_timeout_s": self.cfg.ring_timeout_s,
             },
             high_priority=True,
@@ -255,7 +270,7 @@ class CallService:
         self._ring_timers[call_id] = spawn(self._ring_timeout(call_id), name=f"ring-{call_id}")
         await audit("calls", "call.ring_owner", target=str(call_id), details={"reason": reason, "alert": str(alert_id)})
         await bus.publish("call.ringing", call_id=str(call_id), direction="to_owner", message=message[:300])
-        return {"call_id": str(call_id), "room": room, "devices": [r.device_id for r in results if r.ok]}
+        return {"call_id": str(call_id), "room": room, "devices": [r.device_id for r in results if r.ok], **extra}
 
     async def _ring_timeout(self, call_id: uuid.UUID) -> None:
         await asyncio.sleep(self.cfg.ring_timeout_s)

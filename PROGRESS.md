@@ -3,6 +3,25 @@
 > Wiedereinstiegspunkt für neue Sessions. Nach jeder größeren Änderung aktualisieren.
 > Doku: ARCHITECTURE.md (Aufbau), SETUP.md (Installation/Betrieb), SECURITY.md (Sicherheitsmodell).
 
+## Stand: 2026-11-11 – Anrufstil: natürliche Gespräche am Handy
+
+Regeln und Bewegungscheck: ARCHITECTURE.md („Anrufstil“). Code: `core/src/jarvis/mobile/call_style.py` (Regeln, Prompt,
+Bereinigung, Satzlimit), `mobile/motion.py` (Bewegung ja/nein/unbekannt), Anbindung in `calls.py` (`ring_owner`),
+`voice_agent.py` (`_turn`) und `location.py` (`LocationStore.motion`).
+- **Greift nur bei Anrufen in der App** (Kanal `phone`). Chat, Mac-Sprachdaemon, Coding-Jobs und Modellwahl unverändert.
+- **Sprachausgabe wird erzwungen, nicht nur erbeten:** IDs, Hashes, Pfade, Dateinamen, Modellnamen, Befehle, Fehlercodes,
+  Maschinen-Zeitstempel, Abkürzungen, Markdown und Emojis fliegen raus oder werden durch Alltagswörter ersetzt; mehr als
+  3 Sätze werden gekürzt. Gleiches für Begrüßung beim Abnehmen und Klingel-Betreff.
+- **Fahrmodus:** Bewegung (≥ 20 km/h im Schnitt zweier Standortmessungen, Fehlerbereich eingerechnet) → genau ein Satz.
+  Fehlender/älterer (> 10 min) Standort, nur eine Messung oder unklare Lage → `unknown`: normale Länge, keine Annahme;
+  `mobile_call_owner` meldet dann `motion_note`, damit Jarvis ehrlich sagt, dass er es nicht weiß.
+- **Grenze:** Die App liefert keine Geschwindigkeit, nur Position/Genauigkeit/Zeit. Ein sicheres „ja“ gibt es erst, wenn zwei
+  Messungen 30 s bis 10 min auseinander liegen. Liegt vor dem Anruf nur eine Messung vor, ist der erste Zug `unknown`; im
+  Gespräch fragt der Core höchstens einmal pro Minute ein frisches Fix an, ab dem nächsten Zug zählt es. Standort bleibt im
+  Speicher (kein Log, keine Datei, kein Gedächtnis, kein Nominatim für den Check).
+- Tests: `test_call_style.py`, `test_call_motion.py`, Ergänzungen in `integration/test_mobile_calls.py`; Gesamtlauf
+  `pytest -q`: 1177 bestanden, 66 übersprungen. Nie mit echtem Handy/echter Stimme erprobt.
+
 ## Stand: 2026-10-28 – Social Media: tägliches PJE-Systems-Video
 
 Beschreibung, APIs und Technikwahl: docs/SOCIAL_MEDIA.md.
