@@ -16,6 +16,7 @@ import 'ui/screens/job_screen.dart';
 import 'ui/screens/memory_screen.dart';
 import 'ui/screens/pair_screen.dart';
 import 'ui/screens/settings_screen.dart';
+import 'ui/screens/setup_screen.dart';
 import 'ui/screens/social_screen.dart';
 import 'ui/screens/uptik_screen.dart';
 
@@ -28,6 +29,16 @@ void main() {
   ));
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   runApp(const ProviderScope(child: JarvisMobile()));
+}
+
+/// Where the router sends Sir: pairing first, then (once) the setup flow, then the app. The setup flow opens on
+/// its own only instead of the start page – a deep link or a call is never blocked by it.
+String? redirectFor({required bool loading, required bool paired, required bool setupDone, required String location}) {
+  if (loading) return location == '/boot' ? null : '/boot';
+  if (!paired) return location == '/pair' ? null : '/pair';
+  if (location == '/pair' || location == '/boot') return setupDone ? '/' : '/setup';
+  if (location == '/' && !setupDone) return '/setup';
+  return null;
 }
 
 /// Maps notification / system deep links (jarvis://…) onto app routes.
@@ -84,17 +95,18 @@ class _JarvisMobileState extends ConsumerState<JarvisMobile> with WidgetsBinding
       refreshListenable: _refresh,
       redirect: (context, state) {
         final p = ref.read(pairingProvider);
-        if (p.isLoading && !p.hasValue) return state.matchedLocation == '/boot' ? null : '/boot';
-        final paired = p.valueOrNull?.paired ?? false;
-        final loc = state.matchedLocation;
-        if (!paired && loc != '/pair') return '/pair';
-        if (paired && (loc == '/pair' || loc == '/boot')) return '/';
-        return null;
+        return redirectFor(
+          loading: p.isLoading && !p.hasValue,
+          paired: p.valueOrNull?.paired ?? false,
+          setupDone: p.valueOrNull?.setupDone ?? true,
+          location: state.matchedLocation,
+        );
       },
       routes: [
         GoRoute(path: '/boot', builder: (_, _) => const Scaffold(backgroundColor: J.void_)),
         GoRoute(path: '/pair', builder: (_, s) => PairScreen(linkPayload: s.uri.queryParameters['p'])),
         GoRoute(path: '/', builder: (_, _) => const HomeScreen()),
+        GoRoute(path: '/setup', pageBuilder: (_, _) => _fadeUp(const SetupScreen())),
         GoRoute(
           path: '/chat',
           pageBuilder: (_, s) => _fadeUp(ChatScreen(sessionId: s.uri.queryParameters['session'], initial: s.extra as String?)),

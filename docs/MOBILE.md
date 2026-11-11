@@ -46,7 +46,13 @@ Die Release-APKs sind derzeit mit dem Debug-Schlüssel signiert (siehe §12 für
 2. Am Mac: `cd core && uv run jarvisctl mobile-pair` → QR-Code im Terminal (10 Minuten gültig, einmalig).
 3. App öffnen → **QR-Code scannen**. Alternativ den ausgegebenen Text unter „Kopplungstext einfügen“ einfügen
    oder als Link `jarvis://pair?p=<base64url>` öffnen (die App fragt vor dem Koppeln nach).
-4. Danach führt die App durch die Berechtigungen (Benachrichtigungen, Mikrofon, Bluetooth, Vollbild-Anrufe, Akku).
+4. Danach führt die App Schritt für Schritt durch die Einrichtung: Benachrichtigungen, Mikrofon, Bluetooth,
+   Vollbild-Anrufe, Akku-Optimierung, Über anderen Apps einblenden, Standard-Assistent, Handy-Steuerung
+   (Bedienungshilfen), Standort, App-Updates. Jeder Schritt erklärt vorher, wofür Jarvis ihn braucht, fragt Android erst
+   auf Tippen und lässt sich überspringen; „Später einrichten“ springt zur Übersicht, „Fertig“ schließt immer.
+   Nachholen: Einstellungen › Einrichtung & Berechtigungen › **Einrichtung öffnen**. Der Stand wird nach der Rückkehr aus
+   einer Systemseite neu von Android gelesen (`setupStatus`). Wird die App mitten in der Einrichtung beendet, öffnet sie
+   sich beim nächsten Start erneut; eine neue Kopplung zeigt sie wieder.
 
 Was passiert: Das Telefon erzeugt im **Android Keystore** (StrongBox, wenn vorhanden) einen EC-P-256-Schlüssel, der das
 Gerät nie verlässt, und signiert damit die Kopplungsanfrage. Der Core legt ein Gerät mit der Rolle `mobile_owner` an,
@@ -126,7 +132,10 @@ eine stille Meldung „J.A.R.V.I.S. ist wieder online“.
 | `USE_FULL_SCREEN_INTENT` | Anruf im Vollbild auf dem Sperrbildschirm | Android 14+: in den Einstellungen widerrufbar |
 | `BLUETOOTH_CONNECT` | Namen von Headset/Auto in der Audioauswahl | |
 | `CAMERA` | nur QR-Scan bei der Kopplung | |
-| Akku-Optimierung | optional | bei Herstellern mit aggressivem Energiesparen (Xiaomi, Huawei …) |
+| `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | Akku-Optimierung aus (Systemdialog „Akku-Optimierung ignorieren?“) | empfohlen; ohne die Deklaration schließt Android den Dialog ungesehen. Fallback: Akku-Liste |
+| Bedienungshilfen (`PhoneControlService`) | Handy-Steuerung durch Jarvis | nur in den Einstellungen; bei installierter APK ggf. App-Info › ⋮ › „Eingeschränkte Einstellungen zulassen“ |
+| `ACCESS_*_LOCATION` | Standortfreigabe | optional, im Einrichtungsschritt oder in den Einstellungen |
+| `REQUEST_INSTALL_PACKAGES` | App-Updates vom Core | einmalig „Aus dieser Quelle zulassen“ |
 | `SYSTEM_ALERT_WINDOW` | Sprachfenster nach „Hey Jarvis“ über anderen Apps öffnen | nur in den Einstellungen erteilbar; unnötig, wenn Jarvis Standard-Assistent ist (§14) |
 | `RECEIVE_BOOT_COMPLETED` | Hinweis „Hey Jarvis wieder aktivieren“ nach Neustart | automatisch |
 

@@ -16,6 +16,9 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Setup step "Akku-Optimierung aus": lets the app show Android's own "Akku-Optimierung ignorieren?" dialog
+         (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS). Without it the system closes that dialog unseen. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Location sharing with Jarvis (off by default, switched on in the app's settings); "always" lets the
          phone answer Jarvis' location request while the app is closed -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />

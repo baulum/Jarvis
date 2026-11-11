@@ -46,7 +46,16 @@ class NativeBridge {
   Future<void> hangup() => _ch.invokeMethod('hangup');
   Future<void> setMuted(bool muted) => _ch.invokeMethod('setMuted', {'muted': muted});
   Future<void> setEndpoint(String id) => _ch.invokeMethod('setEndpoint', {'id': id});
-  Future<void> openSettings(String kind) => _ch.invokeMethod('openSettings', {'kind': kind});
+  /// Opens a system settings page (`notifications`, `fullscreen`, `battery`, `battery_request`, `overlay`,
+  /// `accessibility`, `assistant`, `install`, `app`); false when Android could not open any page for it.
+  Future<bool> openSettings(String kind) async => await _ch.invokeMethod<bool>('openSettings', {'kind': kind}) ?? false;
+
+  /// Setup flow: the real state of every permission/setting it offers (`null` = not applicable on this Android).
+  Future<Map<String, dynamic>> setupStatus() async =>
+      jsonDecode(await _ch.invokeMethod<String>('setupStatus') ?? '{}') as Map<String, dynamic>;
+
+  /// Setup flow finished or postponed (shown again only on request or after a new pairing).
+  Future<void> setSetupDone(bool done) => _ch.invokeMethod('setSetupDone', {'done': done});
 
   /// Location sharing with Jarvis: `{enabled, permission: none|while_in_use|always, precise, location_on}`.
   Future<Map<String, dynamic>> locationStatus() async =>

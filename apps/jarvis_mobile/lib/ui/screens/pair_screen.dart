@@ -13,8 +13,8 @@ import '../../state/providers.dart';
 import '../widgets/core_orb.dart';
 import '../widgets/hud.dart';
 
-/// First launch: pair with the Mac (QR from `jarvisctl mobile-pair`), watch the core ignite, then grant the
-/// permissions a phone call needs – each one explained at the moment it matters.
+/// First launch: pair with the Mac (QR from `jarvisctl mobile-pair`) and watch the core ignite. Afterwards the
+/// router opens the setup flow (`SetupScreen`), which explains and asks for each permission one by one.
 class PairScreen extends ConsumerStatefulWidget {
   const PairScreen({super.key, this.linkPayload});
   final String? linkPayload; // base64url from jarvis://pair?p=…
@@ -22,7 +22,7 @@ class PairScreen extends ConsumerStatefulWidget {
   ConsumerState<PairScreen> createState() => _PairScreenState();
 }
 
-enum _Step { intro, scan, pairing, ignite, permissions }
+enum _Step { intro, scan, pairing, ignite }
 
 class _PairScreenState extends ConsumerState<PairScreen> {
   _Step _step = _Step.intro;
@@ -100,12 +100,15 @@ class _PairScreenState extends ConsumerState<PairScreen> {
       HapticFeedback.heavyImpact();
       setState(() => _step = _Step.ignite);
       await Future<void>.delayed(J.cinematic + const Duration(milliseconds: 900));
-      if (mounted) setState(() => _step = _Step.permissions);
+      if (!mounted) return;
+      // local only (credentials are stored natively): the router moves on to the setup flow right away
+      if (!await ref.read(pairingProvider.notifier).adoptLocalPairing()) throw StateError('Kopplung nicht gespeichert – bitte erneut koppeln.');
     } catch (e) {
       _handled = false;
+      if (!mounted) return;
       setState(() {
         _step = _Step.intro;
-        _error = e.toString().replaceFirst(RegExp(r'^PlatformException\(jarvis, '), '').replaceFirst(RegExp(r', null, null\)$'), '');
+        _error = e.toString().replaceFirst(RegExp(r'^(PlatformException\(jarvis, |Bad state: )'), '').replaceFirst(RegExp(r', null, null\)$'), '');
       });
     }
   }
@@ -123,7 +126,6 @@ class _PairScreenState extends ConsumerState<PairScreen> {
             _Step.scan => _scan(),
             _Step.pairing => _center('Kopple mit Jarvis …'),
             _Step.ignite => const _Ignite(),
-            _Step.permissions => _Permissions(onDone: () => ref.read(pairingProvider.notifier).refresh()),
           },
         ),
       ),
@@ -302,105 +304,4 @@ class _IgniteState extends State<_Ignite> with SingleTickerProviderStateMixin {
           ),
         ]),
       );
-}
-
-/// What a real phone call needs, asked in context and explained – nothing is requested silently.
-class _Permissions extends ConsumerStatefulWidget {
-  const _Permissions({required this.onDone});
-  final VoidCallback onDone;
-  @override
-  ConsumerState<_Permissions> createState() => _PermissionsState();
-}
-
-class _PermissionsState extends ConsumerState<_Permissions> with WidgetsBindingObserver {
-  Map<String, bool> _ok = {};
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _check();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState s) {
-    if (s == AppLifecycleState.resumed) _check();
-  }
-
-  Future<void> _check() async {
-    final st = await ref.read(nativeProvider).status();
-    final ok = {
-      'notifications': await Permission.notification.isGranted,
-      'microphone': await Permission.microphone.isGranted,
-      'bluetooth': await Permission.bluetoothConnect.isGranted,
-      'fullscreen': st['full_screen_allowed'] == true,
-      'battery': await Permission.ignoreBatteryOptimizations.isGranted,
-    };
-    if (mounted) setState(() => _ok = ok);
-  }
-
-  Future<void> _grant(String k) async {
-    final native = ref.read(nativeProvider);
-    switch (k) {
-      case 'notifications':
-        if (!(await Permission.notification.request()).isGranted) await native.openSettings('notifications');
-      case 'microphone':
-        await Permission.microphone.request();
-      case 'bluetooth':
-        await Permission.bluetoothConnect.request();
-      case 'fullscreen':
-        await native.openSettings('fullscreen');
-      case 'battery':
-        await Permission.ignoreBatteryOptimizations.request();
-    }
-    await _check();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    const items = [
-      ('notifications', 'Benachrichtigungen', 'Damit Jarvis klingeln und Sie informieren kann.'),
-      ('microphone', 'Mikrofon', 'Für Gespräche und Diktat.'),
-      ('bluetooth', 'Bluetooth', 'Headset und Auto als Audioausgabe auswählen.'),
-      ('fullscreen', 'Anrufe auf dem Sperrbildschirm', 'Android 14+: eingehende Anrufe im Vollbild zeigen.'),
-      ('battery', 'Akku-Optimierung aus', 'Optional: zuverlässigere Zustellung bei Herstellern mit aggressivem Energiesparen.'),
-    ];
-    return ListView(
-      key: const ValueKey('perm'),
-      padding: const EdgeInsets.fromLTRB(J.s5, J.s7, J.s5, J.s5),
-      children: [
-        Text('Damit Jarvis\nSie erreichen kann.', style: J.display),
-        const SizedBox(height: J.s5),
-        for (final (k, title, why) in items) ...[
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: J.s3),
-            child: Row(children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(shape: BoxShape.circle, color: _ok[k] == true ? J.green : J.lineBright),
-              ),
-              const SizedBox(width: J.s4),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(title, style: J.body),
-                  Text(why, style: J.bodyDim.copyWith(fontSize: 13.5)),
-                ]),
-              ),
-              if (_ok[k] != true) LightAction('Erlauben', onTap: () => _grant(k)) else Text('OK', style: J.mono(11, color: J.green)),
-            ]),
-          ),
-          const Hairline(),
-        ],
-        const SizedBox(height: J.s6),
-        Align(alignment: Alignment.centerRight, child: LightAction('Weiter', onTap: widget.onDone)),
-      ],
-    );
-  }
 }

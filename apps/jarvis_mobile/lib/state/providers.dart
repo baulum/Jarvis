@@ -19,6 +19,11 @@ class Pairing {
   final Map<String, dynamic> me;
   final Map<String, dynamic> status;
   final Map<String, dynamic> push;
+
+  /// Has Sir finished (or postponed) the setup flow after pairing? Missing in older native builds → done.
+  bool get setupDone => status['setup_done'] != false;
+
+  Pairing copyWith({Map<String, dynamic>? status}) => Pairing(paired: paired, me: me, status: status ?? this.status, push: push);
 }
 
 class PairingController extends AsyncNotifier<Pairing> {
@@ -31,22 +36,66 @@ class PairingController extends AsyncNotifier<Pairing> {
     return _withMe(st);
   }
 
+  /// Profile and push setup from the core. Only a revoked device (401) ends the pairing; anything else – offline,
+  /// a native error, Firebase that never answers – leaves Sir paired, so the app can never get stuck here.
   Future<Pairing> _withMe(Map<String, dynamic> st) async {
     final native = ref.read(nativeProvider);
     Map<String, dynamic> me = const {};
     Map<String, dynamic> push = const {};
     try {
       me = (await ref.read(apiProvider).get('/api/mobile/me') as Map).cast<String, dynamic>();
-      final fb = me['firebase'];
-      push = await native.configurePush(fb == null ? null : jsonEncode(fb));
     } on ApiError catch (e) {
       if (e.status == 401) {
         await native.forget();
         return Pairing(paired: false, status: await native.status());
       }
       // offline: still paired; the UI shows "nicht erreichbar"
+    } catch (e) {
+      debugPrint('mobile/me: $e');
+    }
+    if (me.isNotEmpty) {
+      final fb = me['firebase'];
+      try {
+        push = await native.configurePush(fb == null ? null : jsonEncode(fb)).timeout(pushSetupTimeout);
+      } catch (e) {
+        push = {'ready': false, 'error': '$e'};
+      }
     }
     return Pairing(paired: true, me: me, status: await native.status(), push: push);
+  }
+
+  /// Bound for the native push setup (Firebase token + upload); the native side has its own, shorter timeout.
+  static const pushSetupTimeout = Duration(seconds: 30);
+
+  /// After the pairing animation: switch to "paired" from the locally stored credentials at once – the router
+  /// then opens the setup flow – and load profile and push in the background. Never waits on the network.
+  /// Returns false when the phone is not paired (e.g. the pairing was revoked meanwhile).
+  Future<bool> adoptLocalPairing() async {
+    final native = ref.read(nativeProvider);
+    final st = await native.status();
+    if (st['paired'] != true) {
+      state = AsyncData(Pairing(paired: false, status: st));
+      return false;
+    }
+    await ref.read(apiProvider).init();
+    state = AsyncData(Pairing(paired: true, status: st));
+    unawaited(_withMe(st).then((p) {
+      // keep a setup decision made in the meantime
+      final now = state.valueOrNull;
+      state = AsyncData(now == null ? p : p.copyWith(status: {...p.status, 'setup_done': now.status['setup_done']}));
+    }, onError: (Object e) => debugPrint('pairing refresh: $e')));
+    return true;
+  }
+
+  /// Setup flow finished or postponed: remembered natively, the router stops opening it.
+  Future<void> markSetupDone() async {
+    try {
+      await ref.read(nativeProvider).setSetupDone(true);
+    } catch (e) {
+      debugPrint('setSetupDone: $e'); // the flow must still close
+    }
+    final p = state.valueOrNull;
+    if (p != null) state = AsyncData(p.copyWith(status: {...p.status, 'setup_done': true}));
   }
 
   Future<void> pair(String payload, String name) async {

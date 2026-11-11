@@ -8,6 +8,7 @@ import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import systems.pje.jarvis_mobile.net.Gateway
 import systems.pje.jarvis_mobile.notify.Channels
@@ -78,7 +79,9 @@ class JarvisApp : Application() {
         gw.store.put("firebase_options", optionsJson)
         if (!initFirebase(optionsJson)) return JSONObject().put("ready", false).put("error", "Firebase-Initialisierung fehlgeschlagen").toString()
         return try {
-            val token = FirebaseMessaging.getInstance().token.await()
+            // FCM can wait a long time without Play services or network – the app must never hang on it
+            val token = withTimeoutOrNull(20_000) { FirebaseMessaging.getInstance().token.await() }
+                ?: return JSONObject().put("ready", true).put("token_uploaded", false).put("error", "Kein Push-Token erhalten (Zeitüberschreitung)").toString()
             gw.store.put("fcm_token", token)
             val ok = gw.store.get("fcm_token_uploaded") == token || PushRegistration.upload(this, token)
             JSONObject().put("ready", true).put("token_uploaded", ok).toString()

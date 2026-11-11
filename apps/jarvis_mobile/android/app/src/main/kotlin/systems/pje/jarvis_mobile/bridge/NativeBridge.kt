@@ -76,6 +76,7 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
             "status" -> result.success(status())
             "pair" -> async {
                 val res = gw.pair(call.argument<String>("payload")!!, call.argument<String>("name")!!, PushRegistration.appVersion(context))
+                Setup.setDone(context, false) // a new pairing walks through the setup again
                 res.toString()
             }
             "accessToken" -> async { gw.accessToken() }
@@ -98,7 +99,10 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
             "hangup" -> { CallManager.hangup(context); result.success(true) }
             "setMuted" -> { CallManager.setMuted(context, call.argument<Boolean>("muted") == true); result.success(true) }
             "setEndpoint" -> { CallManager.setEndpoint(context, call.argument<String>("id")!!); result.success(true) }
-            "openSettings" -> { openSettings(call.argument<String>("kind") ?: "app"); result.success(true) }
+            "openSettings" -> result.success(openSettings(call.argument<String>("kind") ?: "app"))
+            // setup flow after pairing: real state of every permission/setting it offers (see Setup)
+            "setupStatus" -> result.success(Setup.status(context).toString())
+            "setSetupDone" -> { Setup.setDone(context, call.argument<Boolean>("done") != false); result.success(true) }
             "locationStatus" -> result.success(LocationShare.status(context).toString())
             "setLocationSharing" -> async {
                 val sent = LocationShare.setEnabled(context, call.argument<Boolean>("enabled") == true)
@@ -144,6 +148,7 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
             .put("push_token_uploaded", gw.store.get("fcm_token_uploaded") != null)
             .put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
             .put("sdk", Build.VERSION.SDK_INT)
+            .put("setup_done", Setup.done(context))
             .toString()
     }
 
@@ -159,26 +164,43 @@ class NativeBridge(private val context: Context, messenger: BinaryMessenger) : M
         }
     }
 
-    private fun openSettings(kind: String) {
+    /**
+     * Opens the system page for [kind]. Tries the most direct page first and falls back to broader ones (some
+     * manufacturers remove pages); false only when none of them could be opened. The page reports nothing back –
+     * the Flutter side reads the real state again when the app returns to the foreground.
+     */
+    private fun openSettings(kind: String): Boolean {
         val pkg = Uri.parse("package:${context.packageName}")
-        val intent = when (kind) {
-            "notifications" -> Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-            "fullscreen" -> if (Build.VERSION.SDK_INT >= 34) Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, pkg) else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
-            "battery" -> Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-            "overlay" -> Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkg)
+        val details = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
+        val candidates = when (kind) {
+            "notifications" -> listOf(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+            "fullscreen" -> if (Build.VERSION.SDK_INT >= 34) listOf(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, pkg)) else emptyList()
+            // the list of all apps ("Nicht optimiert" / "Alle Apps")
+            "battery" -> listOf(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            // Android's own dialog "Akku-Optimierung ignorieren?" for this app (needs REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+            // in the manifest); already exempt → the list, so the tap still visibly does something
+            "battery_request" -> if (WakeWord.batteryUnrestricted(context)) listOf(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                else listOf(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, pkg), Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            "overlay" -> listOf(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkg), Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
             // "Handy-Steuerung durch Jarvis" is an accessibility service: straight to the system's list
-            "accessibility" -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            "accessibility" -> listOf(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             // "Digital assistant app" page on Pixel/Samsung; elsewhere the list of default apps
-            "assistant" -> Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)
+            "assistant" -> listOf(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS), Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
             // "Install unknown apps" for J.A.R.V.I.S. – needed once for self-updates
-            "install" -> Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, pkg)
-            else -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
+            "install" -> listOf(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, pkg))
+            else -> emptyList()
+        } + details
+        for (intent in candidates) {
+            try {
+                context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                return true
+            } catch (e: ActivityNotFoundException) {
+                continue
+            } catch (e: SecurityException) {
+                android.util.Log.w("JarvisSettings", "$kind: ${intent.action} refused")
+                continue
+            }
         }
-        try {
-            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        } catch (e: ActivityNotFoundException) {
-            val fallback = if (kind == "assistant") Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS) else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
-            context.startActivity(fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        }
+        return false
     }
 }
