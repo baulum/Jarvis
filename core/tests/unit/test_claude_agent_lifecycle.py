@@ -38,7 +38,12 @@ mode = modes[min(n, len(modes) - 1)]
 argv = sys.argv[1:]
 resume = argv[argv.index("--resume") + 1] if "--resume" in argv else None
 with (state / "spawns.jsonl").open("a") as f:
-    f.write(json.dumps({"mode": mode, "resume": resume}) + "\n")
+    f.write(json.dumps({
+        "mode": mode,
+        "resume": resume,
+        "model": argv[argv.index("--model") + 1] if "--model" in argv else None,
+        "effort": argv[argv.index("--effort") + 1] if "--effort" in argv else None,
+    }) + "\n")
 
 
 def out(obj):
@@ -266,6 +271,20 @@ async def test_follow_up_turn_reuses_the_process(make_agent: Any) -> None:
     assert len(fake.spawns) == 1 and not agent._procs[sid].busy
 
 
+async def test_call_session_process_starts_on_haiku_with_medium_effort(make_agent: Any) -> None:
+    from jarvis.agent.model_router import CALL_EFFORT, CALL_MODEL, CALL_MODEL_ALIAS
+
+    agent, fake = make_agent("ok")
+    agent.state.model_router = SimpleNamespace(default="opus", effort="max")  # Sir's chat choice
+    call_sid, chat_sid = uuid.uuid4(), uuid.uuid4()
+    _ = [e async for e in agent.chat_stream(call_sid, None, "Hallo", "", CALL_MODEL_ALIAS, effort=CALL_EFFORT)]
+    await _turn(agent, chat_sid)
+    call_spawn, chat_spawn = fake.spawns
+    assert (call_spawn["model"], call_spawn["effort"]) == ("claude-haiku-5-5", "medium") == (CALL_MODEL, CALL_EFFORT)
+    assert (chat_spawn["model"], chat_spawn["effort"]) == ("claude-opus-5-5", "max")  # chat path unchanged
+    assert len(fake.spawns) == 2  # the call turn needed no restart for the effort
+
+
 def test_exit_detail() -> None:
     assert exit_detail(3, ["a", "b"]) == "Claude Code wurde unerwartet beendet (Exit-Code 3): a | b"
     # SIGTERM: a signal every OS names (Windows has no SIGKILL)
@@ -328,6 +347,22 @@ async def _no_publish(*a: Any, **k: Any) -> None:
 
 def _sess() -> Any:
     return SimpleNamespace(id=uuid.uuid4(), channel="desktop", hermes_session_id=None)
+
+
+class RecordingAgent(ScriptedAgent):
+    async def chat_stream(self, *a: Any, **k: Any) -> AsyncIterator[AgentEvent]:
+        self.kwargs = k
+        async for ev in super().chat_stream(*a, **k):
+            yield ev
+
+
+async def test_effort_is_passed_for_call_channels_only() -> None:
+    for channel, expected in (("phone", "medium"), ("desktop", None), ("mobile", None), ("voice", None)):
+        agent = RecordingAgent([AgentEvent("completed", data={})])
+        orch = _orch(agent)
+        sess = SimpleNamespace(id=uuid.uuid4(), channel=channel, hermes_session_id=None)
+        await _run(orch, sess)
+        assert agent.kwargs.get("effort") == expected, channel
 
 
 async def test_cancelled_turn_is_not_an_error() -> None:

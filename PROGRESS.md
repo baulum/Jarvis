@@ -3,6 +3,13 @@
 > Wiedereinstiegspunkt für neue Sessions. Nach jeder größeren Änderung aktualisieren.
 > Doku: ARCHITECTURE.md (Aufbau), SETUP.md (Installation/Betrieb), SECURITY.md (Sicherheitsmodell).
 
+## Stand: 2026-11-11 – Anrufe: fest Haiku 5.5, Effort medium
+
+- Alle Anruf-Antworten (Kanal `phone`: Telefonleitung und J.A.R.V.I.S.-App/LiveKit) laufen auf `claude-haiku-5-5` mit
+  Effort `medium`; Konstanten `CALL_MODEL` / `CALL_EFFORT` in `agent/model_router.py`. Chat-Modellwahl und
+  Coding-Jobs unverändert. Details: ARCHITECTURE.md „Modellwahl Anrufe“. Tests: `test_model_router.py`,
+  `test_claude_agent_lifecycle.py`.
+
 ## Stand: 2026-10-28 – Social Media: tägliches PJE-Systems-Video
 
 Beschreibung, APIs und Technikwahl: docs/SOCIAL_MEDIA.md.

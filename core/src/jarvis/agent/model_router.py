@@ -34,6 +34,24 @@ EFFORTS: dict[str, str] = {
     "max": "Maximal",
 }
 
+# Fixed rule for CALL answers (Sir's wish: fast replies on the phone). Single source of truth: both call paths
+# (Twilio phone line, J.A.R.V.I.S. app via LiveKit) run the orchestrator on the "phone" channel. Neither the chat
+# model selection (agent_set_model) nor Sir's spoken switch commands apply there; coding jobs are unaffected.
+CALL_CHANNELS: frozenset[str] = frozenset({"phone"})
+CALL_MODEL_ALIAS = "haiku"
+CALL_MODEL = MODELS[CALL_MODEL_ALIAS]["id"]  # claude-haiku-5-5
+CALL_EFFORT = "medium"
+
+
+def is_call_channel(channel: str | None) -> bool:
+    return channel in CALL_CHANNELS
+
+
+def call_effort(channel: str | None) -> str | None:
+    """The fixed effort for call answers; None for every other channel (their effort stays the router's)."""
+    return CALL_EFFORT if is_call_channel(channel) else None
+
+
 _MODEL_WORD = r"(opus|sonnet|sonett|haiku|hayku)"
 _VERB = (
     r"(?:nimm|nehm\w*|nutz\w*|benutz\w*|verwend\w*|wechs\w*|schalt\w*|stell\w*|geh\w*|wähl\w*|switch\w*|"
@@ -217,6 +235,8 @@ class ModelRouter:
 
     def choose(self, text: str, channel: str, session_id: str, turn_override: str | None = None) -> tuple[str, str]:
         """Returns (model alias, reason). Explicit commands are always honoured; defaults/auto react to the quota."""
+        if is_call_channel(channel):  # fixed rule, before any override; one-shot/session choices stay untouched
+            return CALL_MODEL_ALIAS, f"Anruf: fest {MODELS[CALL_MODEL_ALIAS]['label']}, Effort {CALL_EFFORT}"
         if turn_override:
             return turn_override, "Befehl (nur diese Antwort)"
         if session_id in self.next_turn:

@@ -232,6 +232,25 @@ Begrüßung vor → verschlüsselter FCM-Push `call` → Telefon: Core-Telecom `
 Auto) → Annehmen → `/answer` liefert das Raum-Token → natives LiveKit über `wss://gateway/rtc` → Gespräch. Kein
 Annehmen in 45 s → `missed` + Benachrichtigung. Sir → Jarvis: `/api/mobile/calls` nur wenn `availability` es erlaubt.
 
+### Modellwahl Anrufe
+
+Feste Regel (Sirs Wunsch: schnelle Antworten am Telefon): **alle Anruf-Antworten laufen auf Claude Haiku 5.5
+(`claude-haiku-5-5`) mit Effort `medium`.** Das ersetzt jede frühere Anruf-Vorgabe (Sonnet 5.5).
+
+- **Konstanten (einzige Stelle):** `core/src/jarvis/agent/model_router.py` – `CALL_MODEL` (= `MODELS["haiku"]["id"]`),
+  `CALL_MODEL_ALIAS`, `CALL_EFFORT`, `CALL_CHANNELS` (= `{"phone"}`), Helfer `is_call_channel()` / `call_effort()`.
+- **Greift an beiden Anruf-Wegen,** weil beide den Orchestrator auf dem Kanal `phone` aufrufen: Telefonleitung
+  (`telephony/service.py`, `_answer`) und J.A.R.V.I.S.-App/LiveKit (`mobile/voice_agent.py`; Anruf-Dialog, Rückruf und
+  Status-/Ereignisanrufe nutzen denselben Sprachagenten).
+- **Modell:** `ModelRouter.choose` liefert für Anruf-Kanäle vor jeder anderen Regel Haiku (auch vor Sitzungs-, Einmal- und
+  Standardwahl; ein Einmal-Wunsch für den Chat wird vom Anruf nicht verbraucht).
+- **Effort:** ist ein Startparameter des Claude-Prozesses (`--effort`). `Orchestrator._run_claude` übergibt `medium` an
+  `ClaudeCodeAgent.chat_stream(effort=…)`; der Prozess der Anruf-Sitzung startet damit (und mit Haiku), die Standby-Instanz
+  mit Chat-Effort wird dafür nicht genommen.
+- **Abgrenzung:** Chat (`agent_set_model`, Chat-Auswahl, Effort-Einstellung) und Coding-Jobs (Modell/Effort am Job,
+  Standard Sonnet 5.5 High) bleiben unverändert. Gesprochene Modellbefehle während eines Anrufs ändern höchstens die
+  Chat-Einstellung, nie das Anruf-Modell.
+
 ## Erweiterbarkeit
 
 - **Weitere LLM-Provider:** `agent.provider` (Claude Code oder Hermes); Adapter in `agent/claude_agent.py` bzw. `agent/llm.py`.

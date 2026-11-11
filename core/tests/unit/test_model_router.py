@@ -1,6 +1,36 @@
 from pathlib import Path
 
-from jarvis.agent.model_router import ModelRouter, is_simple, parse_command
+from jarvis.agent.model_router import (
+    CALL_EFFORT,
+    CALL_MODEL,
+    MODELS,
+    ModelRouter,
+    call_effort,
+    is_simple,
+    parse_command,
+)
+
+
+def test_call_rule_constants() -> None:
+    assert CALL_MODEL == "claude-haiku-5-5"
+    assert CALL_EFFORT == "medium"
+    assert call_effort("phone") == "medium"
+    assert call_effort("desktop") is None and call_effort("mobile") is None and call_effort("voice") is None
+
+
+def test_calls_are_fixed_to_haiku_whatever_the_chat_choice(tmp_path: Path) -> None:
+    r = ModelRouter("sonnet", True, tmp_path / "m.json")
+    r.set("opus", "default")
+    r.set("opus", "session", "s1")
+    r.next_turn["s1"] = "opus"
+    model, _ = r.choose("Plane mein Projekt und analysiere die Zahlen ausführlich", "phone", "s1", turn_override="opus")
+    assert MODELS[model]["id"] == CALL_MODEL
+    assert r.next_turn == {"s1": "opus"}  # a one-shot chat choice is not consumed by a call
+    # chat and unrelated channels are unchanged
+    assert r.choose("Plane mein Projekt", "desktop", "s1")[0] == "opus"
+    assert r.choose("Plane mein Projekt", "desktop", "s2")[0] == "opus"
+    r.set("sonnet", "default")
+    assert r.choose("Plane mein Projekt", "desktop", "s9")[0] == "sonnet"
 
 
 def test_switch_commands() -> None:

@@ -25,7 +25,7 @@ from sqlalchemy import select
 from jarvis.agent.attachments import AttachmentInfo, build_agent_input, summary_line
 from jarvis.agent.claude_agent import ClaudeUnavailable
 from jarvis.agent.llm import AgentEvent, HermesError
-from jarvis.agent.model_router import MODELS, parse_command
+from jarvis.agent.model_router import MODELS, call_effort, parse_command
 from jarvis.agent.persona import error_phrase, turn_instructions
 from jarvis.agent.timeline import (
     DbTimelineStore,
@@ -311,7 +311,7 @@ class Orchestrator:
                 await bus.publish("chat.model", session_id=str(sess.id), model=model, reason=model_reason)
                 await turn.set_model(model, _model_label(model), model_reason)
                 result = await self._run_claude(
-                    sess, principal, agent_input.text, instructions, emit, model, images=agent_input.images
+                    sess, principal, agent_input.text, instructions, emit, model, images=agent_input.images, channel=channel
                 )
                 result.model = model
             elif self.state.hermes is not None and await self._hermes_ready():
@@ -513,10 +513,13 @@ class Orchestrator:
         emit: EventCallback,
         model: str | None = None,
         images: list[dict[str, Any]] | None = None,
+        channel: str | None = None,
     ) -> TurnResult:
         agent = self.state.agent
         assert agent is not None
         extra: dict[str, Any] = {"images": images} if images else {}  # image content blocks of attachments
+        if (fixed_effort := call_effort(channel or sess.channel)) is not None:
+            extra["effort"] = fixed_effort  # call answers: fixed effort (model: see ModelRouter.choose)
         tools: list[dict[str, Any]] = []
         chunks: list[str] = []
         final_text = ""
