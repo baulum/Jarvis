@@ -485,8 +485,9 @@ class Orchestrator:
         if is_call_channel(channel):
             # calls always run on CALL_MODEL / CALL_EFFORT: a spoken switch changes neither them nor the chat model
             if cmd is not None and not cmd.remainder:
-                label = MODELS[resolve_alias(CALL_MODEL) or "sonnet"]["label"]
-                return ("sonnet", "Anruf: festes Modell", f"Bei Anrufen nutze ich fest {label}, Sir.", text)
+                alias = resolve_alias(CALL_MODEL) or "haiku"
+                said = f"Bei Anrufen nutze ich fest {MODELS[alias]['label']}, Sir."
+                return (alias, "Anruf: festes Modell", said, text)
             call_text = cmd.remainder if cmd else text
             model, reason = router.choose(call_text, channel, str(sess.id))
             return model, reason, None, call_text

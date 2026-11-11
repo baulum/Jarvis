@@ -553,10 +553,46 @@ async def test_spoken_model_switch_on_a_call_changes_nothing(tmp_path: Any) -> N
     orch.state.model_router = router  # type: ignore[attr-defined]
     sess = _sess()
     model, _, confirmation, text = await orch._model_for_turn(sess, OWNER, "phone", "Nimm ab jetzt Opus.")
-    assert model == "sonnet" and confirmation and "Sonnet 5.5" in confirmation
+    assert model == "haiku" and confirmation and "Haiku 5.5" in confirmation
     assert router.default == "sonnet" and not router.next_turn and not router.session_overrides
     model, _, confirmation, text = await orch._model_for_turn(sess, OWNER, "phone", "Wie spät ist es?")
-    assert (model, confirmation, text) == ("sonnet", None, "Wie spät ist es?")
+    assert (model, confirmation, text) == ("haiku", None, "Wie spät ist es?")
     # the same sentence in the chat still switches the chat model
     model, _, _, _ = await orch._model_for_turn(sess, OWNER, "desktop", "Nimm ab jetzt Opus.")
     assert model == "opus" and router.default == "opus"
+
+
+async def test_call_after_a_finished_coding_job_runs_on_the_call_rule(tmp_path: Any) -> None:
+    """The coding job (Sonnet 5.5 / high) is done and the alert calls Sir: the call turn gets Haiku 5.5 / medium,
+    whatever the chat default, the chat effort or a session override of the call's session say."""
+    from jarvis.agent.model_router import CALL_EFFORT, ModelRouter, is_call_channel
+
+    class Recorder(ScriptedAgent):
+        def __init__(self) -> None:
+            super().__init__([AgentEvent("completed", data={})])
+            self.turns: list[tuple[Any, dict[str, Any]]] = []
+
+        async def chat_stream(self, *a: Any, **k: Any) -> AsyncIterator[AgentEvent]:
+            self.turns.append((a[4], k))  # (model, extra kwargs)
+            async for ev in super().chat_stream(*a, **k):
+                yield ev
+
+    agent = Recorder()
+    orch = _orch(agent)
+    router = ModelRouter("sonnet", True, tmp_path / "m.json")
+    router.set_effort("high")  # what the coding job runs on (chat default / chat effort)
+    orch.state.model_router = router  # type: ignore[attr-defined]
+    call = SimpleNamespace(id=uuid.uuid4(), channel="phone", hermes_session_id=None)
+    router.set("opus", "session", str(call.id))  # even a stale session override must not reach the call
+
+    async def emit(ev: AgentEvent) -> None:
+        return None
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("jarvis.agent.orchestrator.bus.publish", _no_publish)
+        # the same two steps _handle_turn takes for a call turn
+        model, _, _, text = await orch._model_for_turn(call, OWNER, "phone", "Ja, bitte fass den Job zusammen.")
+        effort = CALL_EFFORT if is_call_channel("phone") else None
+        await orch._run_claude(call, OWNER, text, "", emit, model, effort=effort)
+    assert agent.turns[0][0] == "haiku" and agent.turns[0][1].get("effort") == "medium"
+    assert (router.default, router.effort) == ("sonnet", "high")  # the chat settings (and the job's) are untouched

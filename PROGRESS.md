@@ -3,11 +3,11 @@
 > Wiedereinstiegspunkt für neue Sessions. Nach jeder größeren Änderung aktualisieren.
 > Doku: ARCHITECTURE.md (Aufbau), SETUP.md (Installation/Betrieb), SECURITY.md (Sicherheitsmodell).
 
-## Stand: 2026-11-11 – Anrufe: festes Modell Sonnet 5.5 / Effort medium
+## Stand: 2026-11-11 – Anrufe: festes Modell Haiku 5.5 / Effort medium
 
-- Alle Anruf-Antworten (App-Anruf und Twilio-Telefon, Kanal `phone`) laufen fest auf `claude-sonnet-5-5` mit Effort
-  `medium` – Konstanten `CALL_MODEL`/`CALL_EFFORT` in `core/src/jarvis/agent/model_router.py`. Kein Haiku-Downgrade,
-  keine Chat-Overrides; Chat-Modell und Coding-Jobs unverändert. Details: ARCHITECTURE.md „Modellwahl Anrufe“.
+- Alle Anruf-Antworten (App-Anruf und Twilio-Telefon, Kanal `phone`) laufen fest auf `claude-haiku-5-5` mit Effort
+  `medium` (zuvor irrtümlich Sonnet 5.5, im Anruf nach einem Coding-Job aufgefallen) – Konstanten `CALL_MODEL`/`CALL_EFFORT` in `core/src/jarvis/agent/model_router.py`. Kein Downgrade/Upgrade,
+  keine Chat-/Job-Overrides; Chat-Modell und Coding-Jobs unverändert. Details: ARCHITECTURE.md „Modellwahl Anrufe“.
 
 ## Stand: 2026-10-28 – Social Media: tägliches PJE-Systems-Video
 

@@ -37,7 +37,7 @@ EFFORTS: dict[str, str] = {
 # Fixed rule for every call answer (phone call in the J.A.R.V.I.S. app, Twilio phone call): one model, one effort,
 # independent of Sir's chat choice (``ModelRouter.default`` / ``effort`` / session overrides / quota step-down) and of
 # the coding jobs (their model is set per job). Change it here, nowhere else.
-CALL_MODEL = "claude-sonnet-5-5"
+CALL_MODEL = "claude-haiku-5-5"
 CALL_EFFORT = "medium"
 CALL_CHANNELS = frozenset({"phone"})  # Principal/session channel of both call paths (voice_agent, telephony)
 
@@ -231,7 +231,7 @@ class ModelRouter:
         """Returns (model alias, reason). Explicit commands are always honoured; defaults/auto react to the quota.
         Calls are the exception: always ``CALL_MODEL`` (no override, no auto-downgrade, no quota step-down)."""
         if is_call_channel(channel):
-            return resolve_alias(CALL_MODEL) or "sonnet", "Anruf: festes Modell"
+            return resolve_alias(CALL_MODEL) or "haiku", "Anruf: festes Modell"
         if turn_override:
             return turn_override, "Befehl (nur diese Antwort)"
         if session_id in self.next_turn:

@@ -232,17 +232,18 @@ Begrüßung vor → verschlüsselter FCM-Push `call` → Telefon: Core-Telecom `
 Auto) → Annehmen → `/answer` liefert das Raum-Token → natives LiveKit über `wss://gateway/rtc` → Gespräch. Kein
 Annehmen in 45 s → `missed` + Benachrichtigung. Sir → Jarvis: `/api/mobile/calls` nur wenn `availability` es erlaubt.
 
-**Modellwahl Anrufe.** Feste Regel: Jede Anruf-Antwort läuft auf **Claude Sonnet 5.5** (`claude-sonnet-5-5`) mit
+**Modellwahl Anrufe.** Feste Regel: Jede Anruf-Antwort läuft auf **Claude Haiku 5.5** (`claude-haiku-5-5`) mit
 **Effort `medium`**, damit Jarvis am Telefon schnell antwortet. Die Konstanten `CALL_MODEL`, `CALL_EFFORT` und
 `CALL_CHANNELS` (= Kanal `phone`) stehen zentral in `core/src/jarvis/agent/model_router.py`. Sie gilt für beide
 Anrufwege, weil beide den Kanal `phone` nutzen: App-Anruf (`mobile/voice_agent.py`, Jarvis ruft an oder Sir ruft an)
-und Twilio-Telefon (`telephony/service.py`). Umsetzung: `ModelRouter.choose` liefert für `phone` immer Sonnet (kein
+und Twilio-Telefon (`telephony/service.py`). Umsetzung: `ModelRouter.choose` liefert für `phone` immer Haiku (kein
 Turn-/Sitzungs-/Standard-Override, keine Haiku-Automatik, kein Kontingent-Downgrade); der Orchestrator reicht
 `CALL_EFFORT` an `ClaudeCodeAgent.chat_stream(effort=…)` weiter – Effort ist ein Startflag des Claude-Prozesses, ein
 Anruf bekommt deshalb einen eigenen Prozess mit `--effort medium`. Ein gesprochenes „nimm Opus“ im Anruf ändert nichts
-(Jarvis antwortet, dass Anrufe fest auf Sonnet 5.5 laufen). **Abgrenzung:** Das Chat-Modell (`agent_set_model`,
+(Jarvis antwortet, dass Anrufe fest auf Haiku 5.5 laufen). **Abgrenzung:** Das Chat-Modell (`agent_set_model`,
 Chat-Auswahl, Chat-Effort) und alle anderen Kanäle (Desktop, Stimme am Mac, Telegram, mobiler Chat, Scheduler) bleiben
-unverändert; Coding-Jobs wählen ihr Modell am Job (Standard Sonnet 5.5 High). Nicht betroffen sind außerdem
+unverändert; Coding-Jobs wählen ihr Modell am Job (Standard Sonnet 5.5 High); auch ein Anruf direkt nach einem Coding-Job-Alert
+übernimmt davon nichts. Nicht betroffen sind außerdem
 Hintergrundaufrufe ohne Anruf (Wissensextraktion, Kontingent-Ping).
 
 ## Erweiterbarkeit
