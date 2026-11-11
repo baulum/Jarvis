@@ -63,6 +63,22 @@ export function describeCron(expr: string): string {
   return `nach Muster „${expr.trim()}“`;
 }
 
+/** The "HH:MM" of an expression with a fixed time (plain minute and hour), otherwise null. */
+export function timeOf(expr: string): string | null {
+  if (validateCron(expr)) return null;
+  const [min, hour] = expr.trim().split(/\s+/) as [string, string];
+  return isNum(min) && isNum(hour) ? `${pad(hour)}:${pad(min)}` : null;
+}
+
+/** Sets minute and hour of an expression with a fixed time; other expressions and bad times stay unchanged. */
+export function withTime(expr: string, time: string): string {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(time);
+  if (!match || timeOf(expr) === null) return expr;
+  const [, hh = "0", mm = "0"] = match;
+  const rest = expr.trim().split(/\s+/).slice(2);
+  return [String(Number(mm)), String(Number(hh)), ...rest].join(" ");
+}
+
 export const CRON_EXAMPLES: { expr: string; label: string }[] = [
   { expr: "0 8 * * 1-5", label: "werktags 08:00" },
   { expr: "30 7 * * *", label: "täglich 07:30" },

@@ -48,6 +48,19 @@ def check_min_interval(cron: str, tz: str = "Europe/Berlin") -> None:
         raise ValueError(f"Zeitpläne dürfen höchstens alle {MIN_INTERVAL_S // 60} Minuten laufen")
 
 
+MAX_NAME_LEN = 200  # Schedule.name is String(200)
+CRON_FORMAT_HINT = "Ungültiger Cron-Ausdruck (Format: Minute Stunde Tag Monat Wochentag)"
+
+
+def validate_cron(cron: str, tz: str = "Europe/Berlin") -> str:
+    """Returns the cron expression with single spaces; raises ValueError for anything that cannot be planned."""
+    expr = " ".join(cron.split())
+    if len(expr.split(" ")) != 5 or not croniter.is_valid(expr):
+        raise ValueError(CRON_FORMAT_HINT)
+    check_min_interval(expr, tz)
+    return expr
+
+
 class Scheduler:
     def __init__(self, state: AppState) -> None:
         self.state = state
@@ -64,9 +77,7 @@ class Scheduler:
     async def create(
         self, name: str, cron: str, action: dict[str, Any], actor: str, tz: str = "Europe/Berlin"
     ) -> Schedule:
-        if not croniter.is_valid(cron):
-            raise ValueError("Ungültiger Cron-Ausdruck")
-        check_min_interval(cron, tz)
+        cron = validate_cron(cron, tz)
         if action.get("type") not in ("prompt", "tool", "playbook"):
             raise ValueError("action.type muss prompt, tool oder playbook sein")
         async with session_scope() as s:
@@ -94,6 +105,51 @@ class Scheduler:
         await audit(actor, "schedule.enable" if enabled else "schedule.disable", target=str(sid))
         await bus.publish("schedule.updated", id=str(sid))
         return True
+
+    async def update(
+        self,
+        sid: uuid.UUID,
+        actor: str,
+        *,
+        name: str | None = None,
+        cron: str | None = None,
+        prompt: str | None = None,
+        enabled: bool | None = None,
+    ) -> Schedule | None:
+        """Changes the given fields (None = unchanged) and returns the schedule, or None if it does not exist.
+
+        A new cron expression or a re-enable plans the next run again. ``next_run_at`` is the only plan the loop
+        reads, so overwriting it replaces the old plan – the schedule cannot run twice. Invalid input raises
+        ValueError before anything is written."""
+        async with session_scope() as s:
+            sched = await s.get(Schedule, sid, with_for_update=True)
+            if sched is None:
+                return None
+            if name is not None:
+                clean_name = name.strip()
+                if not 1 <= len(clean_name) <= MAX_NAME_LEN:
+                    raise ValueError(f"Der Name muss 1 bis {MAX_NAME_LEN} Zeichen lang sein")
+                sched.name = clean_name
+            new_cron = validate_cron(cron, sched.timezone) if cron is not None else sched.cron
+            if prompt is not None:
+                if sched.action.get("type") != "prompt":
+                    raise ValueError("Die Anweisung lässt sich nur bei Prompt-Zeitplänen ändern")
+                clean_prompt = prompt.strip()
+                if not clean_prompt:
+                    raise ValueError("Die Anweisung darf nicht leer sein")
+                sched.action = {**sched.action, "prompt": clean_prompt}
+            was_enabled = sched.enabled
+            if enabled is not None:
+                sched.enabled = enabled
+            if not sched.enabled:
+                sched.next_run_at = None
+            elif new_cron != sched.cron or not was_enabled:
+                sched.next_run_at = next_run(new_cron, sched.timezone)
+            sched.cron = new_cron
+            details = {"name": sched.name, "cron": sched.cron, "enabled": sched.enabled}
+        await audit(actor, "schedule.update", target=str(sid), details=details)
+        await bus.publish("schedule.updated", id=str(sid))
+        return sched
 
     async def delete(self, sid: uuid.UUID, actor: str) -> bool:
         async with session_scope() as s:

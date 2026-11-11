@@ -1,9 +1,10 @@
-import { CalendarClock, Play, Plus, Trash2 } from "lucide-react";
+import { CalendarClock, Pencil, Play, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Button, Dialog, EmptyState, ErrorState, Field, Skeleton, Tag, Toggle } from "../components/ui";
 import { useAction, useQuery } from "../hooks/useQuery";
-import { CRON_EXAMPLES, describeCron, validateCron } from "../lib/cron";
+import { CRON_EXAMPLES, describeCron, timeOf, validateCron, withTime } from "../lib/cron";
 import { formatDateTime, formatRelative } from "../lib/format";
+import type { Schedule, ScheduleUpdate } from "../lib/types";
 import { api } from "../store/app";
 
 function CreateDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
@@ -32,9 +33,61 @@ function CreateDialog({ onClose, onCreated }: { onClose: () => void; onCreated: 
   );
 }
 
+function EditDialog({ schedule, onClose, onSaved }: { schedule: Schedule; onClose: () => void; onSaved: () => void }) {
+  const isPrompt = schedule.action.type === "prompt";
+  const [name, setName] = useState(schedule.name);
+  const [cron, setCron] = useState(schedule.cron);
+  const [prompt, setPrompt] = useState(String(schedule.action.prompt ?? ""));
+  const [enabled, setEnabled] = useState(schedule.enabled);
+  const act = useAction();
+  const cronError = validateCron(cron);
+  const time = timeOf(cron);
+  const valid = Boolean(name.trim()) && !cronError && (!isPrompt || Boolean(prompt.trim()));
+  const save = () => {
+    const body: ScheduleUpdate = { name: name.trim(), cron: cron.trim(), enabled };
+    if (isPrompt) body.prompt = prompt.trim();
+    return act.run("save", () => api.updateSchedule(schedule.id, body), "Zeitplan gespeichert").then((r) => {
+      if (r) {
+        onSaved();
+        onClose();
+      }
+    });
+  };
+  return (
+    <Dialog open onClose={onClose} title="Zeitplan bearbeiten"
+            footer={<><Button variant="ghost" onClick={onClose}>Abbrechen</Button>
+              <Button variant="primary" disabled={!valid} busy={act.busy === "save"} onClick={() => void save()}>Speichern</Button></>}>
+      <div className="flex flex-col gap-4 text-sm">
+        <Field label="Name">{(id) => <input id={id} className="field" value={name} onChange={(e) => setName(e.target.value)} />}</Field>
+        <div className="grid gap-4 sm:grid-cols-[10rem_1fr]">
+          <Field label="Uhrzeit (Berlin)" hint={time === null ? "Nur bei fester Uhrzeit – sonst den Cron-Ausdruck bearbeiten." : "Ändert Minute und Stunde im Cron-Ausdruck."}>
+            {(id) => <input id={id} type="time" className="field type-data" value={time ?? ""} disabled={time === null}
+                            onChange={(e) => { if (e.target.value) setCron(withTime(cron, e.target.value)); }} />}
+          </Field>
+          <Field label="Cron (Minute Stunde Tag Monat Wochentag)" hint={cronError ?? describeCron(cron)}>
+            {(id) => <input id={id} className="field type-data" value={cron} onChange={(e) => setCron(e.target.value)} />}
+          </Field>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {CRON_EXAMPLES.map((ex) => <button key={ex.expr} className="rounded border border-seam px-2 py-1 text-xs text-ink-dim hover:border-arc-dim hover:text-arc" onClick={() => setCron(ex.expr)}>{ex.label}</button>)}
+        </div>
+        {isPrompt ? (
+          <Field label="Anweisung an J.A.R.V.I.S.">{(id) => <textarea id={id} className="field min-h-24" value={prompt} onChange={(e) => setPrompt(e.target.value)} />}</Field>
+        ) : (
+          <p className="text-xs text-ink-dim">
+            Dieser Zeitplan führt „{String(schedule.action.type ?? "unbekannt")}“ aus. Die Anweisung lässt sich nur bei Prompt-Zeitplänen ändern.
+          </p>
+        )}
+        <Toggle label="Aktiv" checked={enabled} onChange={setEnabled} />
+      </div>
+    </Dialog>
+  );
+}
+
 export function SchedulerView() {
   const q = useQuery(() => api.schedules(), "schedules", { topics: ["schedule"] });
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Schedule | null>(null);
   const act = useAction();
   return (
     <div className="h-full overflow-y-auto">
@@ -60,12 +113,14 @@ export function SchedulerView() {
             </div>
             <div className="flex shrink-0 items-center gap-1">
               <Toggle label="Aktiv" checked={s.enabled} onChange={(v) => void act.run("toggle", () => api.setScheduleEnabled(s.id, v)).then(q.refetch)} />
+              <Button size="sm" variant="ghost" icon={<Pencil className="size-3.5" />} onClick={() => setEditing(s)}>Bearbeiten</Button>
               <Button size="sm" variant="ghost" icon={<Play className="size-3.5" />} onClick={() => void act.run("run", () => api.runSchedule(s.id), "Gestartet")}>Jetzt</Button>
               <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} onClick={() => void act.run("del", () => api.deleteSchedule(s.id), "Gelöscht").then(q.refetch)} aria-label="Löschen" />
             </div>
           </article>
         ))}
         {creating && <CreateDialog onClose={() => setCreating(false)} onCreated={() => void q.refetch()} />}
+        {editing && <EditDialog key={editing.id} schedule={editing} onClose={() => setEditing(null)} onSaved={() => void q.refetch()} />}
       </div>
     </div>
   );

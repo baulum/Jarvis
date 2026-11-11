@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildUrl, describeErrorBody } from "./api";
-import { describeCron, validateCron } from "./cron";
+import { describeCron, timeOf, validateCron, withTime } from "./cron";
 import { formatBytes, formatDuration, healthTone } from "./format";
 import { backoffDelay, buildWsUrl, parseFrame } from "./realtime";
 import { filterLogs, pushBounded } from "./reducers";
@@ -13,6 +13,13 @@ describe("cron helpers", () => {
     expect(validateCron("bad")).not.toBeNull();
     expect(describeCron("0 8 * * 1-5")).toContain("werktags");
     expect(describeCron("30 7 * * *")).toBe("täglich um 07:30 Uhr");
+  });
+  it("reads and sets the time of a fixed expression only", () => {
+    expect(timeOf("0 8 * * 1-5")).toBe("08:00");
+    expect(timeOf("*/15 * * * *")).toBeNull();
+    expect(withTime("0 8 * * 1-5", "07:30")).toBe("30 7 * * 1-5");
+    expect(withTime("*/15 * * * *", "07:30")).toBe("*/15 * * * *");
+    expect(withTime("0 8 * * 1-5", "")).toBe("0 8 * * 1-5");
   });
 });
 

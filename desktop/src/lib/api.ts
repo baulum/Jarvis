@@ -36,6 +36,7 @@ import type {
   Playbook,
   Schedule,
   ScheduleCreate,
+  ScheduleUpdate,
   SettingsResponse,
   SkillsResponse,
   SystemCapabilities,
@@ -287,6 +288,7 @@ export function createApi(opts: ApiOptions) {
     // scheduler
     schedules: () => get<Schedule[]>("/schedules"),
     createSchedule: (body: ScheduleCreate) => post<{ id: string }>("/schedules", body),
+    updateSchedule: (sid: string, body: ScheduleUpdate) => patch<Schedule>(`/schedules/${id(sid)}`, body),
     setScheduleEnabled: (sid: string, enabled: boolean) =>
       post<{ ok: boolean }>(`/schedules/${id(sid)}/enabled`, { approve: enabled }),
     runSchedule: (sid: string) => post<{ started: boolean }>(`/schedules/${id(sid)}/run`),

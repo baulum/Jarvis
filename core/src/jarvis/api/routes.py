@@ -26,7 +26,7 @@ from jarvis.commands import command_list
 from jarvis.config import REPO_ROOT, RISK_ORDER
 from jarvis.connectors.kie_creative import MEDIA_TYPES, resolve_media_file
 from jarvis.db import session_scope
-from jarvis.db.models import Approval, AuditEntry, Call, ChatSession, CodingJob, Task
+from jarvis.db.models import Approval, AuditEntry, Call, ChatSession, CodingJob, Schedule, Task
 from jarvis.desktop_build import desktop_build_status
 from jarvis.events import bus, spawn
 from jarvis.logging_setup import ring
@@ -940,22 +940,32 @@ class ScheduleBody(BaseModel):
     action: dict[str, Any]
 
 
+class ScheduleUpdateBody(BaseModel):
+    """Every field is optional; a missing field stays unchanged."""
+
+    name: str | None = Field(default=None, max_length=200)
+    cron: str | None = Field(default=None, max_length=120)
+    prompt: str | None = None
+    enabled: bool | None = None
+
+
+def _schedule_view(s: Schedule) -> dict[str, Any]:
+    return {
+        "id": str(s.id),
+        "name": s.name,
+        "cron": s.cron,
+        "timezone": s.timezone,
+        "action": s.action,
+        "enabled": s.enabled,
+        "last_run_at": s.last_run_at.isoformat() if s.last_run_at else None,
+        "next_run_at": s.next_run_at.isoformat() if s.next_run_at else None,
+        "last_status": s.last_status,
+    }
+
+
 @router.get("/schedules")
 async def schedules(st: AppState = StateDep, p: Principal = Reader) -> list[dict[str, Any]]:
-    return [
-        {
-            "id": str(s.id),
-            "name": s.name,
-            "cron": s.cron,
-            "timezone": s.timezone,
-            "action": s.action,
-            "enabled": s.enabled,
-            "last_run_at": s.last_run_at.isoformat() if s.last_run_at else None,
-            "next_run_at": s.next_run_at.isoformat() if s.next_run_at else None,
-            "last_status": s.last_status,
-        }
-        for s in await st.scheduler.list()
-    ]
+    return [_schedule_view(s) for s in await st.scheduler.list()]
 
 
 @router.post("/schedules")
@@ -965,6 +975,21 @@ async def schedule_create(body: ScheduleBody, st: AppState = StateDep, p: Princi
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     return {"id": str(s.id)}
+
+
+@router.patch("/schedules/{sid}")
+async def schedule_update(
+    sid: str, body: ScheduleUpdateBody, st: AppState = StateDep, p: Principal = Owner
+) -> dict[str, Any]:
+    try:
+        sched = await st.scheduler.update(
+            _uuid(sid), p.label, name=body.name, cron=body.cron, prompt=body.prompt, enabled=body.enabled
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    if sched is None:
+        raise HTTPException(404, "Zeitplan nicht gefunden")
+    return _schedule_view(sched)
 
 
 @router.post("/schedules/{sid}/enabled")

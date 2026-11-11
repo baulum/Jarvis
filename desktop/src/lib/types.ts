@@ -374,6 +374,14 @@ export interface ScheduleCreate {
   action: Record<string, unknown>;
 }
 
+/** Partial update of a schedule; a missing field stays unchanged. `prompt` only for prompt schedules. */
+export interface ScheduleUpdate {
+  name?: string;
+  cron?: string;
+  prompt?: string;
+  enabled?: boolean;
+}
+
 export interface NotificationRow {
   id: string;
   event: string;
