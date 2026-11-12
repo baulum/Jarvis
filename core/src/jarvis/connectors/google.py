@@ -229,11 +229,12 @@ class GoogleConnector(Connector):
         method: str,
         url: str,
         *,
-        timeout: httpx.Timeout | float = 30,
+        timeout: httpx.Timeout | float = 30,  # noqa: ASYNC109 – part of the call signature used across the connector
         retries: int = 0,
         **kw: Any,
     ) -> Any:
-        """``retries`` only repeats connect/write timeouts: the request never fully reached Google, so a retry cannot double-send."""
+        """``retries`` only repeats connect/write timeouts: the request never fully reached Google,
+        so a retry cannot double-send."""
         token = await self._token()
         attempt = 0
         while True:
@@ -244,7 +245,8 @@ class GoogleConnector(Connector):
             except (httpx.WriteTimeout, httpx.ConnectTimeout) as e:
                 if attempt >= retries:
                     raise ToolUserError(
-                        f"Google-API nicht erreichbar ({type(e).__name__}) – Anfrage wurde nicht vollständig übertragen."
+                        f"Google-API nicht erreichbar ({type(e).__name__}) – "
+                        "Anfrage wurde nicht vollständig übertragen."
                     ) from None
                 attempt += 1
                 await asyncio.sleep(2**attempt)

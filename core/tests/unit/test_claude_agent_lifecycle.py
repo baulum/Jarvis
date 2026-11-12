@@ -26,7 +26,7 @@ OWNER = Principal(id="desk", role="owner", channel="device", device_id=uuid.uuid
 
 # Behaviour per spawned process (in spawn order, the last one repeats), set in the file "modes".
 FAKE_CLI = r"""
-import json, os, sys, time
+import json, os, signal, sys, time
 from pathlib import Path
 
 state = Path(os.environ["FAKE_CLAUDE_DIR"])
@@ -54,6 +54,8 @@ def err(text):
 if mode == "noresume" and resume:
     err(f"No conversation found with session ID: {resume}")
     sys.exit(1)
+if mode == "stubborn":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)  # busy CLI that does not react to SIGTERM
 sid = resume or f"sess-{n}"
 while True:
     line = sys.stdin.readline()
@@ -76,7 +78,7 @@ while True:
         out({"type": "assistant", "message": {"content": [tool]}})
         out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}})
         sys.exit(2)
-    if mode == "hang":
+    if mode in ("hang", "stubborn"):
         time.sleep(60)
     if mode == "slow":
         time.sleep(0.5)
@@ -221,6 +223,30 @@ async def test_interrupt_ends_turn_as_cancelled_without_retry(make_agent: Any) -
     task = asyncio.create_task(run())
     await asyncio.wait_for(started.wait(), 10)
     await agent.interrupt(sid)  # Stopp button / voice barge-in
+    await asyncio.wait_for(task, 10)
+    assert _types(events) == ["run_started", "cancelled"]
+    assert len(fake.spawns) == 1
+
+
+async def test_interrupt_kills_a_process_that_ignores_sigterm(make_agent: Any) -> None:
+    """Barge-in on a CLI that ignores SIGTERM: the process used to survive ``interrupt`` (only a 5 s wait, no SIGKILL)
+    – its turn kept waiting for output and the next turn could resume the same session next to it."""
+    agent, fake = make_agent("stubborn", "ok")
+    sid = uuid.uuid4()
+    events: list[AgentEvent] = []
+    started = asyncio.Event()
+
+    async def run() -> None:
+        async for ev in agent.chat_stream(sid, None, "Erzähl was Langes", ""):
+            events.append(ev)
+            if ev.type == "run_started":
+                started.set()
+
+    task = asyncio.create_task(run())
+    await asyncio.wait_for(started.wait(), 10)
+    proc = agent._procs[sid].proc
+    await agent.interrupt(sid)
+    assert proc.returncode is not None  # really gone before anything else may resume the conversation
     await asyncio.wait_for(task, 10)
     assert _types(events) == ["run_started", "cancelled"]
     assert len(fake.spawns) == 1

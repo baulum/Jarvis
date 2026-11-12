@@ -349,9 +349,23 @@ class ClaudeCodeAgent:
                 terminate_group(p.proc.pid, signal.SIGTERM)
 
     async def _kill(self, p: _Proc, reason: str) -> None:
+        """SIGTERM, then SIGKILL if the CLI ignores it. Returns only once the process is gone: the next turn may
+        resume this conversation, and two processes on one session transcript corrupt it. The turn that was reading
+        the process' output ends with the EOF (cancelled) instead of waiting for a process that never stops."""
         self._terminate(p, reason)
+        if await self._exited(p, 3):
+            return
+        logger.warning("Claude Code (pid %s) ignored SIGTERM (%s) – killing it", p.proc.pid, reason)
+        if p.alive:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                terminate_group(p.proc.pid, getattr(signal, "SIGKILL", signal.SIGTERM))  # no SIGKILL on Windows
+        await self._exited(p, 2)
+
+    @staticmethod
+    async def _exited(p: _Proc, timeout_s: float) -> bool:
         with contextlib.suppress(Exception):
-            await asyncio.wait_for(p.proc.wait(), 5)
+            await asyncio.wait_for(p.proc.wait(), timeout_s)
+        return not p.alive
 
     async def _reap_idle(self) -> None:
         idle = self.cfg.idle_timeout_minutes * 60
