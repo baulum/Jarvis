@@ -87,6 +87,14 @@ MOBILE_ROUTES: list[tuple[frozenset[str], re.Pattern[str]]] = [
     (frozenset({"DELETE"}), re.compile(r"^/api/uptik/inbox/[0-9a-f-]{36}$")),
     (frozenset({"GET"}), re.compile(r"^/api/uptik/posts/[0-9a-f-]{36}$")),
     (frozenset({"POST"}), re.compile(r"^/api/uptik/posts/[0-9a-f-]{36}/(cancel|review)$")),
+    # Kundensuche (Lead-Tool): reading; redraft and new campaigns run through the ToolExecutor (approvals on the Core)
+    (
+        frozenset({"GET"}),
+        re.compile(r"^/api/sales/(status|statuses|campaigns|leads|review|outbox|analytics|industries)$"),
+    ),
+    (frozenset({"GET"}), re.compile(r"^/api/sales/(campaigns|leads)/[0-9a-f-]{36}$")),
+    (frozenset({"POST"}), re.compile(r"^/api/sales/campaigns$")),
+    (frozenset({"POST"}), re.compile(r"^/api/sales/leads/[0-9a-f-]{36}/redraft$")),
     (frozenset({"GET"}), re.compile(r"^/ws$")),
     (frozenset({"GET", "POST"}), re.compile(r"^/rtc(/.*)?$")),  # LiveKit signalling (proxied, see rtc_proxy)
     # Jarvis Device Agents: trade the pairing code for a token, then the command WebSocket

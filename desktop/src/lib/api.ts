@@ -72,6 +72,20 @@ import type {
   SocialVideoDetail,
 } from "./social";
 import type { UptikAccount, UptikInboxItem, UptikPlatform, UptikPost, UptikPostBody, UptikSettings, UptikStatus, UptikUpload } from "./uptik";
+import type {
+  CampaignInput,
+  SalesActionResult,
+  SalesAnalytics,
+  SalesCampaign,
+  SalesCampaignDetail,
+  SalesIndustries,
+  SalesLeadDetail,
+  SalesLeadPage,
+  SalesOutbox,
+  SalesReviewItem,
+  SalesStatus,
+  SalesStatusOption,
+} from "./sales";
 import type { DesktopBuild } from "./build";
 import type { SlashCommand } from "./slash";
 import type { TimelineEvent } from "./timeline";
@@ -452,6 +466,23 @@ export function createApi(opts: ApiOptions) {
       cancel: (pid: string) => post<{ status: string }>(`/uptik/posts/${id(pid)}/cancel`),
       review: (pid: string, outcome: "published" | "failed", url?: string) =>
         post<UptikPost>(`/uptik/posts/${id(pid)}/review`, url ? { outcome, url } : { outcome }),
+    },
+    // Kundensuche (Lead-Tool over its MCP server; redraft/new campaign end in the Core's approvals, no approve/send)
+    sales: {
+      status: () => get<SalesStatus>("/sales/status"),
+      statuses: () => get<SalesStatusOption[]>("/sales/statuses"),
+      campaigns: () => get<SalesCampaign[]>("/sales/campaigns"),
+      campaign: (cid: string) => get<SalesCampaignDetail>(`/sales/campaigns/${id(cid)}`),
+      leads: (q: { campaign_id?: string; status?: string; limit?: number; offset?: number } = {}) => get<SalesLeadPage>("/sales/leads", q),
+      lead: (lid: string) => get<SalesLeadDetail>(`/sales/leads/${id(lid)}`),
+      review: (limit = 50) => get<SalesReviewItem[]>("/sales/review", { limit }),
+      outbox: () => get<SalesOutbox>("/sales/outbox"),
+      analytics: () => get<SalesAnalytics>("/sales/analytics"),
+      industries: (q: string) => get<SalesIndustries>("/sales/industries", { q }),
+      redraft: (lid: string, note: string, requestId: string) =>
+        post<SalesActionResult>(`/sales/leads/${id(lid)}/redraft`, { note, request_id: requestId }),
+      createCampaign: (body: CampaignInput, requestId: string) =>
+        post<SalesActionResult>("/sales/campaigns", { ...body, request_id: requestId }),
     },
     // whatsapp (one central connection on the Core; every client sees the same chats)
     whatsapp: {

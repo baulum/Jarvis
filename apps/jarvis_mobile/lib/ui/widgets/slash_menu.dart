@@ -61,6 +61,7 @@ const _routes = {
   'tasks': '/activity',
   'approvals': '/activity',
   'memory': '/memory',
+  'sales': '/sales',
   'settings': '/settings',
 };
 

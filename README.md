@@ -23,6 +23,9 @@ Opus 5.5 nur auf Wunsch. Lokale LLMs werden nicht verwendet.
   mit GitHub verbinden, Umgebungsvariablen, Deploy, URL zurück; Risikostufe `high`, also mit Freigabe),
   `vercel_list_projects` und `vercel_deployment_status` lesen Projekte und Build-Status – siehe [Vercel](#vercel)
 - **Externe MCP-Server:** über `config/mcp_servers.yaml`, mit derselben Freigabe-Pipeline wie eigene Werkzeuge
+- **Kundensuche:** das PJE-Sales-AI-Lead-Tool als eigener Bereich in Desktop- und Android-App (Leads, Kampagnen,
+  Freigabe-Warteschlange mit Entwürfen, Postausgang) über `/api/sales`; Freigeben und Versenden bleiben im Lead-Tool –
+  siehe [ADR 0002](docs/adr/0002-kundensuche-lead-tool-in-jarvis.md)
 - **Gedächtnis:** eine Erinnerung = eine Markdown-Datei im Obsidian-Vault; Index in PostgreSQL mit pgvector
   (Qwen3-Embedding-0.6B als ONNX im Core), hybride Suche (Volltext + Vektor + Wissensgraph), automatische
   Wissensextraktion nach Gesprächen, Dedupe, Korrekturen als `superseded`, sensible Inhalte erst nach Bestätigung

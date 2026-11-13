@@ -6,7 +6,7 @@ The server only describes the commands; the apps execute them. ``action`` tells 
 * ``model``    – switch the Claude model for this conversation (``choices``; ``auto`` = automatic selection)
 * ``new``      – start a new conversation
 * ``stop``     – interrupt the running answer
-* ``navigate`` – open a screen (``target``: agents | tasks | approvals | memory | settings)
+* ``navigate`` – open a screen (``target``: agents | tasks | approvals | memory | sales | settings)
 * ``killswitch`` – engage the emergency stop (clients ask for confirmation first)
 """
 
@@ -46,6 +46,7 @@ COMMANDS: tuple[Command, ...] = (
     Command("aufgaben", "Mehrstufige Aufgaben anzeigen", "navigate", category="Ansicht", target="tasks"),
     Command("freigaben", "Offene Freigaben anzeigen", "navigate", category="Ansicht", target="approvals"),
     Command("gedaechtnis", "Gedächtnis durchsuchen", "navigate", category="Ansicht", target="memory"),
+    Command("kundensuche", "Kundensuche: Leads, Kampagnen, Freigaben", "navigate", category="Ansicht", target="sales"),
     Command("einstellungen", "Einstellungen öffnen", "navigate", category="Ansicht", target="settings"),
     Command(
         "status",

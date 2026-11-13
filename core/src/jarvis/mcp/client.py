@@ -114,6 +114,11 @@ class ExternalServer:
         return out
 
 
+def registry_name(server: str, tool: str) -> str:
+    """Name under which an external MCP tool is registered in Jarvis (e.g. ``ext_pje_sales_ai_status``)."""
+    return re.sub(r"[^a-z0-9_]", "_", f"ext_{server}_{tool}".lower())[:64]
+
+
 def _summary(server: str, tool: str) -> Callable[[dict[str, Any]], str]:
     def summarize(a: dict[str, Any]) -> str:
         return f"MCP {server}.{tool}({json.dumps(a)[:150]})"
@@ -155,7 +160,7 @@ class MCPClientHub:
             risk = overrides.get(t.name) or ("read" if ro else default_risk)
             if risk not in RISK_ORDER:
                 risk = "high"
-            name = re.sub(r"[^a-z0-9_]", "_", f"ext_{srv.name}_{t.name}".lower())[:64]
+            name = registry_name(srv.name, t.name)
 
             async def handler(
                 ctx: ToolContext, a: dict[str, Any], _srv: ExternalServer = srv, _tool: str = t.name

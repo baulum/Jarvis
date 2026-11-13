@@ -29,6 +29,9 @@ servers:
     env:
       PATH: /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
       HOME: /Users/paul
+    # Bereich „Kundensuche“ (jarvis.sales): Freigeben und Versenden passieren nur im Lead-Tool selbst – die Apps
+    # verlinken dorthin. Nur Adresse der Oberfläche, keine Zugangsdaten.
+    web_url: http://127.0.0.1:3100
     default_risk: medium
     risk_overrides:
       status: read

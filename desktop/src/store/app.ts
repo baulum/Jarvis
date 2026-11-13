@@ -39,6 +39,7 @@ export type ViewId =
   | "whatsapp"
   | "social"
   | "uptik"
+  | "sales"
   | "system";
 
 /** A view, optionally with the job/task to select in it. */

@@ -6,6 +6,7 @@ import { AgentsView } from "../views/AgentsView";
 import { ApprovalsView } from "../views/ApprovalsView";
 import { ChatView } from "../views/ChatView";
 import { ConnectorsView } from "../views/ConnectorsView";
+import { SalesView } from "../views/SalesView";
 import { DevicesView } from "../views/DevicesView";
 import { LogsView } from "../views/LogsView";
 import { MemoryView } from "../views/MemoryView";
@@ -26,6 +27,7 @@ import { useBrain } from "./store";
 export const SYSTEM_VIEWS: { id: string; label: string; keywords: string[]; view: ComponentType }[] = [
   { id: "social", label: "Social Media", keywords: ["video", "reels", "tiktok", "instagram", "youtube", "pje", "werbung", "captions"], view: SocialView },
   { id: "uptik", label: "UpTik Autopost", keywords: ["tiktok", "instagram", "reels", "shorts", "veröffentlichen", "autopost", "warteschlange"], view: UptikView },
+  { id: "sales", label: "Kundensuche", keywords: ["leads", "kampagnen", "akquise", "lead-tool", "pje sales", "entwürfe", "postausgang"], view: SalesView },
   { id: "tasks", label: "Aufgaben", keywords: ["tasks", "playbook", "ablauf"], view: TasksView },
   { id: "approvals", label: "Freigaben", keywords: ["approval", "freigeben"], view: ApprovalsView },
   { id: "chat", label: "Gespräche", keywords: ["chat", "verlauf", "sessions"], view: ChatView },

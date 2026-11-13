@@ -34,6 +34,7 @@ const VIEWS: Record<string, ViewId> = {
   tasks: "tasks",
   approvals: "approvals",
   memory: "memory",
+  sales: "sales",
   settings: "settings",
 };
 
