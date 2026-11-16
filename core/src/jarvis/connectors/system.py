@@ -174,9 +174,29 @@ class SystemConnector(Connector):
                     "cron": s.cron,
                     "enabled": s.enabled,
                     "next_run": s.next_run_at.isoformat() if s.next_run_at else None,
+                    # Prompt-Zeitpläne zeigen ihre Anweisung, damit sie sich gezielt ändern lässt (schedule_update).
+                    **({"prompt": s.action.get("prompt")} if (s.action or {}).get("type") == "prompt" else {}),
                 }
                 for s in await st.scheduler.list()
             ]
+
+        async def schedule_update(ctx: ToolContext, a: dict[str, Any]) -> Any:
+            changes = {k: a[k] for k in ("name", "cron", "prompt", "enabled") if a.get(k) is not None}
+            if not changes:
+                raise ToolUserError("Nichts zu ändern: name, cron, prompt oder enabled angeben")
+            try:
+                sched = await st.scheduler.update(_uuid(a["id"]), ctx.principal.label, **changes)
+            except ValueError as e:
+                raise ToolUserError(str(e)) from e
+            if sched is None:
+                raise ToolUserError("Zeitplan nicht gefunden")
+            return {
+                "id": str(sched.id),
+                "name": sched.name,
+                "cron": sched.cron,
+                "enabled": sched.enabled,
+                "next_run": sched.next_run_at.isoformat() if sched.next_run_at else None,
+            }
 
         async def notify(ctx: ToolContext, a: dict[str, Any]) -> Any:
             delivered = await st.notifier.notify(
@@ -363,7 +383,34 @@ class SystemConnector(Connector):
                 "system",
                 summarize=lambda a: f"Zeitplan '{a['name']}' ({a['cron']}) anlegen",
             ),
-            ToolSpec("schedule_list", "Listet geplante Aufgaben.", _obj({}, []), schedule_list, "read", "system"),
+            ToolSpec(
+                "schedule_list",
+                "Listet geplante Aufgaben (bei Prompt-Aufgaben samt Anweisung).",
+                _obj({}, []),
+                schedule_list,
+                "read",
+                "system",
+            ),
+            ToolSpec(
+                "schedule_update",
+                "Ändert eine bestehende geplante Aufgabe anhand ihrer ID: Name, Cron-Ausdruck, Anweisung (prompt) "
+                "und/oder aktiv/inaktiv. Nur die angegebenen Felder ändern sich; die ID bleibt. Die Anweisung vorher "
+                "mit schedule_list lesen und gezielt erweitern statt blind zu ersetzen.",
+                _obj(
+                    {
+                        "id": {"type": "string"},
+                        "name": {"type": "string"},
+                        "cron": {"type": "string"},
+                        "prompt": {"type": "string"},
+                        "enabled": {"type": "boolean"},
+                    },
+                    ["id"],
+                ),
+                schedule_update,
+                "medium",  # ändert eine persistente, selbstlaufende Anweisung wie schedule_create
+                "system",
+                summarize=_summarize_schedule_update,
+            ),
             ToolSpec(
                 "notify_owner",
                 "Benachrichtigt Sir (Desktop, Telegram oder Anruf je nach Regel).",
@@ -384,6 +431,11 @@ class SystemConnector(Connector):
                 "system",
             ),
         ]
+
+
+def _summarize_schedule_update(a: dict[str, Any]) -> str:
+    fields = ", ".join(k for k in ("name", "cron", "prompt", "enabled") if a.get(k) is not None)
+    return f"Zeitplan {a.get('id', '?')} ändern ({fields or 'nichts'})"
 
 
 def _uuid(value: str) -> uuid.UUID:

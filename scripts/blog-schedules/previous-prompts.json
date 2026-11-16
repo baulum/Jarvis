@@ -1,0 +1,22 @@
+{
+  "50ed06fd-2ffa-4103-879c-d4fe05156da6": {
+    "name": "Apo HR Blogpost Vormittag",
+    "cron": "0 8 * * *",
+    "prompt": "Erstelle einen neuen Blogbeitrag für Apo HR (apohr-portal.de) zur Verbesserung von SEO und GEO (Zitierbarkeit durch KI-Suche). Prüfe zuerst die bestehenden Beiträge im Repo, um keine Themen doppelt zu behandeln, und wähle ein neues, suchrelevantes Thema rund um Personalverwaltung und HR in Apotheken. Starte dazu mit coding_start_job einen Auftrag auf dem Projekt /Users/paul/Documents/Programmieren/hr_portal/Apo_HR_Tool (Repo baulum/Apo_HR_Tool) mit passendem test_command (z. B. npm run build). Beitrag: klare Struktur mit H2/H3, direkte Antworten in den ersten Sätzen, FAQ-Block, Meta-Title und Description, strukturierte Daten (Article/FAQ), interne Links, faktisch korrekte Aussagen ohne erfundene Zahlen. Berichte Sir kurz das Ergebnis."
+  },
+  "91191ba8-5d39-4f19-b5dc-91d614225677": {
+    "name": "Apo HR Blogpost Nachmittag",
+    "cron": "0 14 * * *",
+    "prompt": "Erstelle einen zweiten neuen Blogbeitrag des Tages für Apo HR (apohr-portal.de) zur Verbesserung von SEO und GEO (Zitierbarkeit durch KI-Suche). Prüfe zuerst die bestehenden Beiträge im Repo (auch den heutigen Vormittagsbeitrag), um keine Themen doppelt zu behandeln, und wähle ein neues, suchrelevantes Thema rund um Personalverwaltung und HR in Apotheken. Starte dazu mit coding_start_job einen Auftrag auf dem Projekt /Users/paul/Documents/Programmieren/hr_portal/Apo_HR_Tool (Repo baulum/Apo_HR_Tool) mit passendem test_command (z. B. npm run build). Beitrag: klare Struktur mit H2/H3, direkte Antworten in den ersten Sätzen, FAQ-Block, Meta-Title und Description, strukturierte Daten (Article/FAQ), interne Links, faktisch korrekte Aussagen ohne erfundene Zahlen. Berichte Sir kurz das Ergebnis."
+  },
+  "0b473f3b-714b-4236-8f85-eb2727b37b66": {
+    "name": "PJE Systems Blogpost Vormittag",
+    "cron": "0 9 * * *",
+    "prompt": "Erstelle einen neuen Blogbeitrag für PJE Systems (pje-systems.de) zur Verbesserung von SEO und GEO (Zitierbarkeit durch KI-Suche). Prüfe zuerst die bestehenden Beiträge im Repo, um keine Themen doppelt zu behandeln, und wähle ein neues, suchrelevantes Thema rund um Websites, Software und IT-Service für kleine und mittlere Unternehmen. Starte dazu mit coding_start_job einen Auftrag auf dem Projekt /Users/paul/Documents/PJE Systems/Website-Neu (Repo baulum/Website-Neu) mit passendem test_command (z. B. npm run build). Beitrag: klare Struktur mit H2/H3, direkte Antworten in den ersten Sätzen, FAQ-Block, Meta-Title und Description, strukturierte Daten (Article/FAQ), interne Links, faktisch korrekte Aussagen ohne erfundene Zahlen. Berichte Sir kurz das Ergebnis."
+  },
+  "c3492925-9c19-40a5-b1fd-bfa77045a41b": {
+    "name": "PJE Systems Blogpost Nachmittag",
+    "cron": "0 15 * * *",
+    "prompt": "Erstelle einen zweiten neuen Blogbeitrag des Tages für PJE Systems (pje-systems.de) zur Verbesserung von SEO und GEO (Zitierbarkeit durch KI-Suche). Prüfe zuerst die bestehenden Beiträge im Repo (auch den heutigen Vormittagsbeitrag), um keine Themen doppelt zu behandeln, und wähle ein neues, suchrelevantes Thema rund um Websites, Software und IT-Service für kleine und mittlere Unternehmen. Starte dazu mit coding_start_job einen Auftrag auf dem Projekt /Users/paul/Documents/PJE Systems/Website-Neu (Repo baulum/Website-Neu) mit passendem test_command (z. B. npm run build). Beitrag: klare Struktur mit H2/H3, direkte Antworten in den ersten Sätzen, FAQ-Block, Meta-Title und Description, strukturierte Daten (Article/FAQ), interne Links, faktisch korrekte Aussagen ohne erfundene Zahlen. Achte darauf, dass alle Setien indexierbar sind.Berichte Sir kurz das Ergebnis."
+  }
+}
