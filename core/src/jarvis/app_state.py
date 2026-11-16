@@ -39,6 +39,7 @@ from jarvis.connectors.lexware import LexwareConnector
 from jarvis.connectors.mac import BridgeClient, MacConnector
 from jarvis.connectors.memory_obsidian import ObsidianMemoryConnector
 from jarvis.connectors.routing import RoutingConnector
+from jarvis.connectors.search_console import SearchConsoleConnector
 from jarvis.connectors.system import SystemConnector
 from jarvis.connectors.telegram import TelegramConnector
 from jarvis.connectors.telephony import TelephonyConnector
@@ -203,6 +204,7 @@ class AppState:
             CodingConnector,
             LexwareConnector,
             GoogleConnector,
+            SearchConsoleConnector,
             TelegramConnector,
             GitHubConnector,
             VercelConnector,

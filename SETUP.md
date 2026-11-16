@@ -37,7 +37,7 @@ In der Desktop-App unter **Connectoren** oder per CLI (`cd core && uv run jarvis
 | Connector | Was wird benötigt | Wo |
 |---|---|---|
 | Lexware Office | Public-API-Schlüssel (`lexware-api-key`) | Lexware › Einstellungen › Erweiterungen › Public API |
-| Google | OAuth-Client JSON (Desktop-App, `google-oauth-client`), dann „Mit Google verbinden“ | Google Cloud Console; Gmail-, Calendar-, Drive-API aktivieren |
+| Google | OAuth-Client JSON (Desktop-App, `google-oauth-client`), dann „Mit Google verbinden“ | Google Cloud Console; Gmail-, Calendar-, Drive-API aktivieren (für die Search Console zusätzlich die Search Console API) |
 | Telegram | Bot-Token (`telegram-bot-token`), dann „Koppeln“ und `/pair <Code>` an den Bot | @BotFather |
 | GitHub | Fine-grained PAT (`github-token`) | github.com › Settings › Developer settings |
 | Vercel | Access Token (`vercel-token`), optional Team-ID (`vercel-team-id`); Vercel-GitHub-App für Deploys aus GitHub | vercel.com › Account Settings › Tokens |

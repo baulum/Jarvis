@@ -17,7 +17,7 @@ Opus 5.5 nur auf Wunsch. Lokale LLMs werden nicht verwendet.
   Kurzbefehle über die native JarvisBridge (AppleScript standardmäßig deaktiviert)
 - **Recherche:** Browser über Playwright (Microsoft Edge mit eigenem Profil oder verstecktes Chromium)
 - **Connectoren:** System, Gedächtnis (Obsidian), Mac, Browser, Shell (Allowlist), Coding, Lexware Office, Google (Gmail,
-  Kalender, Drive), Telegram, GitHub, Vercel (Deploys), HTTP-API, Webhooks, Fish Audio, KIE.ai (Bild- und
+  Kalender, Drive), Google Search Console (SEO-Überwachung), Telegram, GitHub, Vercel (Deploys), HTTP-API, Webhooks, Fish Audio, KIE.ai (Bild- und
   Videogenerierung), Telefonie, Routen (Nominatim + OSRM/Valhalla, Kartenanzeige im Chat)
 - **Veröffentlichen auf Vercel:** `vercel_deploy` bringt ein lokales Projekt oder ein GitHub-Repo live (Projekt anlegen,
   mit GitHub verbinden, Umgebungsvariablen, Deploy, URL zurück; Risikostufe `high`, also mit Freigabe),
@@ -191,6 +191,41 @@ E2E-Tests laufen nur lokal.
   `JARVIS_SECRET_<NAME>`-Umgebungsvariablen.
 - Laufzeitdaten: `~/Library/Application Support/Jarvis` (Tokens, Not-Aus-Flag `KILL`, Modelle, Freigabe-Modus),
   Logs unter `~/Library/Logs/Jarvis/`, Coding-Workspaces unter `~/Developer/Jarvis-Workspaces`.
+
+### Google Search Console
+
+Modul `search_console` (`core/src/jarvis/connectors/search_console.py`): beobachtet die SEO-Lage der eigenen Websites
+(z. B. `sc-domain:pje-systems.de`, `sc-domain:apohr-portal.de`). Die Search Console API ist kostenlos. Das Modul legt
+**keine zweite Anmeldung** an, sondern nutzt OAuth-Client und Token des Google-Connectors (Keychain:
+`google-oauth-client`, `google-oauth-token`).
+
+**Voraussetzung:** In der Google Cloud Console die „Google Search Console API“ aktivieren. Die Google-Autorisierung braucht
+die Scopes `webmasters.readonly` (Lesen) und `webmasters` (Sitemaps einreichen). Hat eine ältere Verbindung sie nicht,
+antworten die Werkzeuge mit einer deutschen Anleitung, und der Connector zeigt „eingeschränkt“: einmal **Connectoren ›
+Google › Mit Google verbinden** und der Search-Console-Berechtigung zustimmen.
+
+| Werkzeug | Risiko | Zweck |
+|---|---|---|
+| `gsc_list_sites()` | read | Properties des Kontos mit Typ (Domain / URL-Präfix) und Berechtigungsstufe |
+| `gsc_search_analytics(property, startDate?, endDate?, dimensions?, rowLimit?, filter?)` | read | Klicks, Impressionen, CTR, Position; Standard: letzte 28 Tage bis vorgestern, `dimensions` aus `query`, `page`, `country`, `device`, `date`, `rowLimit` bis 25000, `filter: {dimension: page\|query, operator?, expression}` |
+| `gsc_inspect_url(property, inspectionUrl)` | read | Indexierungsstatus, Coverage, letzter Crawl, Google-Canonical, robots-Status, Fehler |
+| `gsc_list_sitemaps(property)` | read | Sitemaps mit Status, Einreichung, Fehlern, Warnungen, indexierten URLs |
+| `gsc_submit_sitemap(property, sitemapUrl)` | high | Reicht eine Sitemap bei Google ein – läuft über die Freigabe |
+
+Beispiele (so ruft der Agent die Werkzeuge auf):
+
+```text
+gsc_list_sites()
+gsc_search_analytics(property="sc-domain:pje-systems.de")                                   # Top-Suchanfragen, 28 Tage
+gsc_search_analytics(property="sc-domain:apohr-portal.de", dimensions=["page"], rowLimit=50,
+                     filter={"dimension": "page", "expression": "/blog/"})                  # Blog-Seiten im Vergleich
+gsc_inspect_url(property="sc-domain:pje-systems.de", inspectionUrl="https://pje-systems.de/blog/beispiel")
+gsc_list_sitemaps(property="pje-systems.de")                                                # nackte Domain wird aufgelöst
+gsc_submit_sitemap(property="sc-domain:pje-systems.de", sitemapUrl="https://pje-systems.de/sitemap.xml")
+```
+
+An Google gehen nur Property, Zeitraum, Dimensionen, Filter, die geprüfte URL bzw. der Sitemap-Pfad. Bei 429 und 5xx
+wiederholt das Modul bis zu dreimal mit Wartezeit (1, 2, 4 s); Fehlermeldungen sind deutsch und nennen den nächsten Schritt.
 
 ### Vercel
 

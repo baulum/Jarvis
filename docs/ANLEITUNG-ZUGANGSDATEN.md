@@ -60,7 +60,14 @@ Falls Google „redirect_uri_mismatch“ meldet: In Schritt 4 stattdessen Typ **
 Weiterleitungs-URI exakt `http://127.0.0.1:8765/api/connectors/google/oauth/callback` eintragen, JSON erneut herunterladen
 und Schritt 5–6 wiederholen.
 
-Genutzte Berechtigungen (minimal): Gmail lesen, Entwürfe, Senden (nur nach Freigabe), Kalendertermine, Drive lesen.
+Genutzte Berechtigungen (minimal): Gmail lesen, Entwürfe, Senden (nur nach Freigabe), Kalendertermine, Drive lesen,
+Search Console lesen (`webmasters.readonly`) und Sitemaps einreichen (`webmasters`, nur nach Freigabe).
+
+**Search Console (optional, kostenlos):** Zusätzlich die „Google Search Console API“ aktivieren
+(<https://console.cloud.google.com/apis/library/searchconsole.googleapis.com>). Das Google-Konto muss in der Search Console
+Inhaber oder Nutzer der Property sein. War Google schon vor dieser Erweiterung verbunden, einmal **Mit Google verbinden**
+erneut klicken und die Search-Console-Berechtigung bestätigen. Werkzeuge: `gsc_list_sites`, `gsc_search_analytics`,
+`gsc_inspect_url`, `gsc_list_sitemaps`, `gsc_submit_sitemap` (Risikostufe *high*, also mit Freigabe).
 
 ---
 

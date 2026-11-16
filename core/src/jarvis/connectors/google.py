@@ -44,6 +44,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/drive.readonly",
+    # Search Console (Modul jarvis.connectors.search_console): Lesen bzw. Sitemaps einreichen
+    "https://www.googleapis.com/auth/webmasters.readonly",
+    "https://www.googleapis.com/auth/webmasters",
 ]
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105 - endpoint URL, not a secret
@@ -124,7 +127,8 @@ class GoogleConnector(Connector):
                 "google-oauth-client",
                 "OAuth-Client (JSON, Typ 'Desktop-App')",
                 help="Google Cloud Console › APIs & Dienste › Anmeldedaten › OAuth-Client-ID (Desktop-App). "
-                "Gmail-, Calendar- und Drive-API aktivieren. JSON-Inhalt hier einfügen.",
+                "Gmail-, Calendar- und Drive-API (für die Search Console zusätzlich die Google Search Console API) "
+                "aktivieren. JSON-Inhalt hier einfügen.",
             ),
             SecretField("google-oauth-token", "Autorisierung (wird durch 'Mit Google verbinden' gesetzt)"),
         ],
@@ -142,6 +146,8 @@ class GoogleConnector(Connector):
     def __init__(self, state: Any) -> None:
         super().__init__(state)
         self._access: tuple[str, float] | None = None
+        # Scopes laut letzter Token-Antwort von Google (None = unbekannt); nur im Speicher, nie persistiert.
+        self._scopes: frozenset[str] | None = None
         self._pending: dict[str, dict[str, str]] = {}
 
     # ------------------------------------------------------------------ OAuth
@@ -205,7 +211,24 @@ class GoogleConnector(Connector):
                 "Google hat kein Refresh-Token geliefert (Zugriff in Google-Konto entfernen und erneut verbinden)."
             )
         secret_store.set("google-oauth-token", json.dumps({"refresh_token": tok["refresh_token"]}))
+        self._remember_access(tok)
+
+    def _remember_access(self, tok: dict[str, Any]) -> None:
         self._access = (tok["access_token"], time.time() + int(tok.get("expires_in", 3600)) - 60)
+        scope = tok.get("scope")
+        self._scopes = frozenset(str(scope).split()) if scope else None
+
+    async def granted_scopes(self) -> frozenset[str] | None:
+        """Scopes, die Google für die aktuelle Autorisierung gemeldet hat (``None``, wenn Google keine nennt).
+
+        Stößt bei Bedarf eine Token-Erneuerung an; wirft ``ToolUserError``, wenn Google nicht verbunden ist.
+        """
+        await self._token()
+        return getattr(self, "_scopes", None)
+
+    async def access_token(self) -> str:
+        """Gültiges Access-Token für andere Module, die dieselbe Google-Anmeldung nutzen (kein zweiter Login)."""
+        return await self._token()
 
     async def _token(self) -> str:
         if self._access and self._access[1] > time.time():
@@ -221,8 +244,8 @@ class GoogleConnector(Connector):
         if r.status_code >= 400:
             raise ToolUserError("Google-Autorisierung abgelaufen oder widerrufen – bitte neu verbinden.")
         tok = r.json()
-        self._access = (tok["access_token"], time.time() + int(tok.get("expires_in", 3600)) - 60)
-        return self._access[0]
+        self._remember_access(tok)
+        return tok["access_token"]
 
     async def _api(
         self,
